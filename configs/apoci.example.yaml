@@ -1,0 +1,43 @@
+endpoint: "https://registry.example.com"
+
+# All fields below are optional — defaults shown
+
+# name: "registry.example.com"   # defaults to domain from endpoint
+# listen: ":5000"
+# dataDir: "/var/lib/apoci"
+# keyPath: "/var/lib/apoci/ap.key"
+# registryToken: ""              # auto-generated to {dataDir}/registry.token if empty
+# accountDomain: "example.com"  # vanity domain for @registry@example.com (defaults to endpoint domain)
+# region: "eu-west"
+
+# database:
+#   driver: sqlite     # sqlite (default) or postgres
+#   dsn: ""            # required for postgres, e.g. "postgres://user:pass@localhost:5432/apoci?sslmode=disable"
+
+# logLevel: info     # debug, info, warn, error
+# logFormat: json    # json, text
+
+# tls:
+#   cert: /etc/apoci/tls.crt
+#   key: /etc/apoci/tls.key
+
+# peering:
+#   healthCheckInterval: 30s
+#   fetchTimeout: 60s
+
+# federation:
+#   autoAcceptMutual: false    # auto-accept follows from peers you already follow
+#   autoAcceptDomains: []      # auto-accept follows from these domains
+#     # - "trusted-registry.example.com"
+#   blockedDomains: []         # silently drop all activities from these domains
+#     # - "spam.example.com"
+#   blockedActors: []          # silently drop all activities from these actor URLs
+#     # - "https://evil.example.com/ap/actor"
+
+# limits:
+#   maxManifestSize: 10485760     # 10 MB
+#   maxBlobSize: 536870912        # 512 MB
+
+# metrics:
+#   enabled: true
+#   listen: ":9090"

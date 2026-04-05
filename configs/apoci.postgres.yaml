@@ -1,0 +1,5 @@
+endpoint: "http://localhost:5000"
+logFormat: text
+database:
+  driver: postgres
+  dsn: "postgres://apoci:apoci@postgres:5432/apoci?sslmode=disable"

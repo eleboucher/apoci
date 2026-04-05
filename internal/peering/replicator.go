@@ -1,0 +1,115 @@
+package peering
+
+import (
+	"context"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/apoci/apoci/internal/blobstore"
+	"github.com/apoci/apoci/internal/database"
+	"github.com/apoci/apoci/internal/metrics"
+)
+
+const maxConcurrentReplications = 10
+
+// BlobReplicator eagerly fetches blobs from federation peers and stores them locally.
+type BlobReplicator struct {
+	db      *database.DB
+	blobs   *blobstore.Store
+	fetcher *Fetcher
+	logger  *slog.Logger
+	sem     chan struct{}
+	wg      sync.WaitGroup
+}
+
+func NewBlobReplicator(db *database.DB, blobs *blobstore.Store, fetcher *Fetcher, logger *slog.Logger) *BlobReplicator {
+	return &BlobReplicator{
+		db:      db,
+		blobs:   blobs,
+		fetcher: fetcher,
+		logger:  logger,
+		sem:     make(chan struct{}, maxConcurrentReplications),
+	}
+}
+
+// ReplicateBlob fetches a blob from a peer and stores it locally in the background.
+// The repo is derived from manifest layer references, but for eager replication we use
+// a synthetic repo path since the blob is content-addressable.
+func (r *BlobReplicator) ReplicateBlob(ctx context.Context, peerEndpoint, digest string, size int64) {
+	if r.blobs.Exists(digest) {
+		return
+	}
+
+	metrics.BlobReplicationsStarted.Add(1)
+	metrics.BlobReplicationsInFlight.Add(1)
+	r.wg.Go(func() {
+		defer metrics.BlobReplicationsInFlight.Add(-1)
+
+		r.sem <- struct{}{}
+		defer func() { <-r.sem }()
+
+		// Use a fresh context with a timeout since the HTTP request context will be cancelled.
+		bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+		defer cancel()
+		r.replicateBlob(bgCtx, peerEndpoint, digest)
+	})
+}
+
+// Wait blocks until all in-flight replications complete.
+func (r *BlobReplicator) Wait() {
+	r.wg.Wait()
+}
+
+func (r *BlobReplicator) replicateBlob(ctx context.Context, peerEndpoint, digest string) {
+	// Find a repo that references this blob so we can construct the OCI pull URL.
+	// Blobs are served under /v2/{repo}/blobs/{digest}, so we need a valid repo name.
+	repo, _ := r.db.FindRepoForBlob(ctx, digest)
+	if repo == "" {
+		// No repo references this blob yet. Try a direct fetch with a placeholder.
+		// Some registries support cross-repo blob mounts or don't validate the repo prefix.
+		repo = "library/unknown"
+	}
+
+	stream, err := r.fetcher.FetchBlobStream(ctx, peerEndpoint, repo, digest)
+	if err != nil {
+		metrics.BlobReplicationsFailed.Add(1)
+		r.logger.Warn("eager replication failed",
+			"digest", digest,
+			"peer", peerEndpoint,
+			"error", err,
+		)
+		return
+	}
+	defer func() {
+		if err := stream.Body.Close(); err != nil {
+			r.logger.Warn("failed to close blob stream", "digest", digest, "error", err)
+		}
+	}()
+
+	storedDigest, size, err := r.blobs.Put(stream.Body, digest)
+	if err != nil {
+		metrics.BlobReplicationsFailed.Add(1)
+		r.logger.Warn("failed to store replicated blob",
+			"digest", digest,
+			"error", err,
+		)
+		return
+	}
+
+	mt := "application/octet-stream"
+	if err := r.db.PutBlob(ctx, storedDigest, size, &mt, true); err != nil {
+		r.logger.Warn("failed to update blob metadata after replication",
+			"digest", digest,
+			"error", err,
+		)
+		return
+	}
+
+	metrics.BlobReplicationsSucceeded.Add(1)
+	r.logger.Info("eagerly replicated blob",
+		"digest", digest,
+		"peer", peerEndpoint,
+		"size", size,
+	)
+}

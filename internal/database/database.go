@@ -1,0 +1,162 @@
+package database
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
+	"github.com/uptrace/bun/dialect/sqlitedialect"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "github.com/mattn/go-sqlite3"
+)
+
+type DB struct {
+	bun    *bun.DB
+	logger *slog.Logger
+}
+
+// OpenSQLite opens a SQLite database in the given data directory.
+func OpenSQLite(dataDir string, logger *slog.Logger) (*DB, error) {
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return nil, fmt.Errorf("creating data directory: %w", err)
+	}
+
+	dbPath := filepath.Join(dataDir, "apoci.db")
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_foreign_keys=ON&_busy_timeout=5000&_synchronous=NORMAL", dbPath)
+
+	sqldb, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("opening sqlite database: %w", err)
+	}
+
+	sqldb.SetMaxOpenConns(4)
+	sqldb.SetMaxIdleConns(4)
+
+	if err := sqldb.Ping(); err != nil {
+		_ = sqldb.Close()
+		return nil, fmt.Errorf("pinging database: %w", err)
+	}
+
+	bunDB := bun.NewDB(sqldb, sqlitedialect.New())
+
+	db := &DB{bun: bunDB, logger: logger}
+	if err := db.migrate(context.Background()); err != nil {
+		_ = bunDB.Close()
+		return nil, fmt.Errorf("running migrations: %w", err)
+	}
+
+	logger.Info("database opened", "path", dbPath)
+	return db, nil
+}
+
+// OpenPostgres opens a PostgreSQL database with the given DSN.
+func OpenPostgres(dsn string, logger *slog.Logger) (*DB, error) {
+	sqldb, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("opening postgres database: %w", err)
+	}
+
+	sqldb.SetMaxOpenConns(25)
+	sqldb.SetMaxIdleConns(10)
+
+	if err := sqldb.Ping(); err != nil {
+		_ = sqldb.Close()
+		return nil, fmt.Errorf("pinging database: %w", err)
+	}
+
+	bunDB := bun.NewDB(sqldb, pgdialect.New())
+
+	db := &DB{bun: bunDB, logger: logger}
+	if err := db.migrate(context.Background()); err != nil {
+		_ = bunDB.Close()
+		return nil, fmt.Errorf("running migrations: %w", err)
+	}
+
+	logger.Info("database opened", "driver", "postgres")
+	return db, nil
+}
+
+func (db *DB) Ping() error {
+	return db.bun.Ping()
+}
+
+func (db *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return db.bun.QueryContext(ctx, query, args...)
+}
+
+func (db *DB) Close() error {
+	return db.bun.Close()
+}
+
+func (db *DB) migrate(ctx context.Context) error {
+	models := []any{
+		(*Repository)(nil),
+		(*Manifest)(nil),
+		(*Tag)(nil),
+		(*Blob)(nil),
+		(*RepositoryOwner)(nil),
+		(*ManifestLayer)(nil),
+		(*PeerBlob)(nil),
+		(*Peer)(nil),
+		(*Follow)(nil),
+		(*FollowRequest)(nil),
+		(*Activity)(nil),
+		(*UploadSession)(nil),
+		(*Delivery)(nil),
+		(*OutgoingFollow)(nil),
+	}
+
+	for _, model := range models {
+		if _, err := db.bun.NewCreateTable().Model(model).IfNotExists().Exec(ctx); err != nil {
+			return fmt.Errorf("creating table for %T: %w", model, err)
+		}
+	}
+
+	// Composite unique constraints (not expressible via struct tags alone).
+	compositeConstraints := []string{
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_manifests_repo_digest ON manifests (repository_id, digest)",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_repo_name ON tags (repository_id, name)",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_peer_blobs_actor_digest ON peer_blobs (peer_actor, blob_digest)",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_repo_owners_pk ON repository_owners (repository_id, owner_id)",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_manifest_layers_pk ON manifest_layers (manifest_id, blob_digest)",
+	}
+	for _, ddl := range compositeConstraints {
+		if _, err := db.bun.ExecContext(ctx, ddl); err != nil {
+			return fmt.Errorf("creating constraint: %w", err)
+		}
+	}
+
+	// Performance indexes.
+	indexes := []string{
+		"CREATE INDEX IF NOT EXISTS idx_manifests_digest ON manifests (digest)",
+		"CREATE INDEX IF NOT EXISTS idx_manifests_repo ON manifests (repository_id)",
+		"CREATE INDEX IF NOT EXISTS idx_blobs_stored ON blobs (stored_locally)",
+		"CREATE INDEX IF NOT EXISTS idx_peer_blobs_digest ON peer_blobs (blob_digest)",
+		"CREATE INDEX IF NOT EXISTS idx_peer_blobs_peer ON peer_blobs (peer_actor)",
+		"CREATE INDEX IF NOT EXISTS idx_peers_healthy ON peers (is_healthy)",
+		"CREATE INDEX IF NOT EXISTS idx_upload_sessions_expires ON upload_sessions (expires_at)",
+		"CREATE INDEX IF NOT EXISTS idx_repositories_owner ON repositories (owner_id)",
+		"CREATE INDEX IF NOT EXISTS idx_follows_actor ON follows (actor_url)",
+		"CREATE INDEX IF NOT EXISTS idx_follow_requests_actor ON follow_requests (actor_url)",
+		"CREATE INDEX IF NOT EXISTS idx_activities_type ON activities (type)",
+		"CREATE INDEX IF NOT EXISTS idx_activities_actor ON activities (actor_url)",
+		"CREATE INDEX IF NOT EXISTS idx_activities_published ON activities (published_at)",
+		"CREATE INDEX IF NOT EXISTS idx_delivery_queue_pending ON delivery_queue (status, next_attempt_at)",
+		"CREATE INDEX IF NOT EXISTS idx_delivery_queue_activity ON delivery_queue (activity_id)",
+		"CREATE INDEX IF NOT EXISTS idx_outgoing_follows_status ON outgoing_follows (status)",
+		"CREATE INDEX IF NOT EXISTS idx_tags_manifest_digest ON tags (manifest_digest)",
+	}
+	for _, ddl := range indexes {
+		if _, err := db.bun.ExecContext(ctx, ddl); err != nil {
+			return fmt.Errorf("creating index: %w", err)
+		}
+	}
+
+	return nil
+}
