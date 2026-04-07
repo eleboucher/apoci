@@ -532,6 +532,478 @@ func TestInboxCreateManifestWrongDomain(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, rec.Code, "pushing to another domain must be rejected")
 }
 
+func TestInboxAcceptWithoutPendingOutgoingFollow(t *testing.T) {
+	alice, _, inbox, db := setupInboxTest(t)
+	ctx := context.Background()
+
+	// No outgoing follow stored — alice sends Accept(Follow) out of the blue.
+	accept := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#accept-spurious",
+		"type":     "Accept",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type":   "Follow",
+			"actor":  "https://bob.test/ap/actor",
+			"object": alice.ActorURL,
+		},
+	}
+
+	req := signedInboxPost(t, alice, accept)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code, "spurious Accept should be silently accepted")
+
+	// No outgoing follow should exist.
+	of, err := db.GetOutgoingFollow(ctx, alice.ActorURL)
+	require.NoError(t, err)
+	require.Nil(t, of, "no outgoing follow should be created from a spurious Accept")
+}
+
+func TestInboxAcceptWithAlreadyAcceptedOutgoingFollow(t *testing.T) {
+	alice, _, inbox, db := setupInboxTest(t)
+	ctx := context.Background()
+
+	require.NoError(t, db.AddOutgoingFollow(ctx, alice.ActorURL))
+	require.NoError(t, db.AcceptOutgoingFollow(ctx, alice.ActorURL))
+
+	accept := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#accept-dup",
+		"type":     "Accept",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type":   "Follow",
+			"actor":  "https://bob.test/ap/actor",
+			"object": alice.ActorURL,
+		},
+	}
+
+	req := signedInboxPost(t, alice, accept)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	// Status should remain accepted (not reset or error).
+	of, err := db.GetOutgoingFollow(ctx, alice.ActorURL)
+	require.NoError(t, err)
+	require.NotNil(t, of)
+	require.Equal(t, "accepted", of.Status)
+}
+
+func TestInboxAcceptWithStringObject(t *testing.T) {
+	alice, _, inbox, db := setupInboxTest(t)
+	ctx := context.Background()
+
+	require.NoError(t, db.AddOutgoingFollow(ctx, alice.ActorURL))
+
+	accept := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#accept-str",
+		"type":     "Accept",
+		"actor":    alice.ActorURL,
+		"object":   alice.ActorURL + "#follow-1", // string form
+	}
+
+	req := signedInboxPost(t, alice, accept)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	of, err := db.GetOutgoingFollow(ctx, alice.ActorURL)
+	require.NoError(t, err)
+	require.NotNil(t, of)
+	require.Equal(t, "accepted", of.Status)
+}
+
+func TestInboxRejectMarksOutgoingFollowRejected(t *testing.T) {
+	alice, _, inbox, db := setupInboxTest(t)
+	ctx := context.Background()
+
+	require.NoError(t, db.AddOutgoingFollow(ctx, alice.ActorURL))
+
+	reject := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#reject-out",
+		"type":     "Reject",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type": "Follow",
+		},
+	}
+
+	req := signedInboxPost(t, alice, reject)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	of, err := db.GetOutgoingFollow(ctx, alice.ActorURL)
+	require.NoError(t, err)
+	require.NotNil(t, of)
+	require.Equal(t, "rejected", of.Status)
+}
+
+func TestInboxRejectCleansBothDirections(t *testing.T) {
+	alice, _, inbox, db := setupInboxTest(t)
+	ctx := context.Background()
+
+	alicePEM, _ := alice.PublicKeyPEM()
+	require.NoError(t, db.AddOutgoingFollow(ctx, alice.ActorURL))
+	require.NoError(t, db.AddFollowRequest(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+
+	reject := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#reject-both",
+		"type":     "Reject",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type": "Follow",
+		},
+	}
+
+	req := signedInboxPost(t, alice, reject)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	of, err := db.GetOutgoingFollow(ctx, alice.ActorURL)
+	require.NoError(t, err)
+	require.NotNil(t, of)
+	require.Equal(t, "rejected", of.Status)
+
+	fr, err := db.GetFollowRequest(ctx, alice.ActorURL)
+	require.NoError(t, err)
+	require.Nil(t, fr, "pending follow request should be cleaned up after Reject")
+}
+
+func TestInboxUndoForNonExistentFollow(t *testing.T) {
+	alice, _, inbox, _ := setupInboxTest(t)
+
+	undo := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#undo-ghost",
+		"type":     "Undo",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type": "Follow",
+		},
+	}
+
+	req := signedInboxPost(t, alice, undo)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code,
+		"Undo for non-existent follow should be silently accepted, not 500")
+}
+
+func TestInboxDuplicateActivityDedup(t *testing.T) {
+	alice, bob, inbox, db := setupInboxTest(t)
+	ctx := context.Background()
+
+	activityID := alice.ActorURL + "#follow-dedup"
+	follow := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       activityID,
+		"type":     "Follow",
+		"actor":    alice.ActorURL,
+		"object":   bob.ActorURL,
+	}
+
+	req := signedInboxPost(t, alice, follow)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	fr, err := db.GetFollowRequest(ctx, alice.ActorURL)
+	require.NoError(t, err)
+	require.NotNil(t, fr, "first follow should be stored")
+
+	// Verify the activity was stored for dedup.
+	existing, err := db.GetActivity(ctx, activityID)
+	require.NoError(t, err)
+	require.NotNil(t, existing, "activity should be stored for dedup")
+}
+
+func TestInboxFollowSelfRejected(t *testing.T) {
+	alice, _, inbox, _ := setupInboxTest(t)
+
+	follow := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#follow-self",
+		"type":     "Follow",
+		"actor":    alice.ActorURL,
+		"object":   alice.ActorURL, // not bob's actor URL
+	}
+
+	req := signedInboxPost(t, alice, follow)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestInboxBlockedActorSilentDrop(t *testing.T) {
+	alice, bob, _, db := setupInboxTest(t)
+
+	blockedInbox := NewInboxHandler(bob, db, InboxConfig{
+		MaxManifestSize: config.DefaultMaxManifestSize,
+		MaxBlobSize:     config.DefaultMaxBlobSize,
+		AutoAccept:      "none",
+		BlockedActors:   []string{alice.ActorURL},
+	}, discardLogger())
+
+	follow := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#follow-blocked",
+		"type":     "Follow",
+		"actor":    alice.ActorURL,
+		"object":   bob.ActorURL,
+	}
+
+	req := signedInboxPost(t, alice, follow)
+	rec := httptest.NewRecorder()
+	blockedInbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code, "blocked actor should get 202 (silent drop)")
+
+	// Verify nothing was stored.
+	ctx := context.Background()
+	fr, err := db.GetFollowRequest(ctx, alice.ActorURL)
+	require.NoError(t, err)
+	require.Nil(t, fr, "blocked actor's follow request should not be stored")
+}
+
+func TestInboxBlockedDomainSilentDrop(t *testing.T) {
+	alice, bob, _, db := setupInboxTest(t)
+
+	// Block the domain parsed from alice's actor URL
+	blockedInbox := NewInboxHandler(bob, db, InboxConfig{
+		MaxManifestSize: config.DefaultMaxManifestSize,
+		MaxBlobSize:     config.DefaultMaxBlobSize,
+		AutoAccept:      "none",
+		BlockedDomains:  []string{"127.0.0.1"},
+	}, discardLogger())
+
+	follow := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#follow-blocked-dom",
+		"type":     "Follow",
+		"actor":    alice.ActorURL,
+		"object":   bob.ActorURL,
+	}
+
+	req := signedInboxPost(t, alice, follow)
+	rec := httptest.NewRecorder()
+	blockedInbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code, "blocked domain should get 202 (silent drop)")
+}
+
+func setupMutualInboxTest(t *testing.T) (alice *Identity, bob *Identity, inbox *InboxHandler, db *database.DB) {
+	t.Helper()
+	alice, bob, inbox, db = setupInboxTest(t)
+
+	// Reconfigure inbox for mutual mode.
+	inbox.autoAccept = AutoAcceptMutual
+
+	// Pre-store outgoing follow to alice (we already sent a Follow to alice).
+	ctx := context.Background()
+	require.NoError(t, db.AddOutgoingFollow(ctx, alice.ActorURL))
+
+	return
+}
+
+func TestMutualAutoAcceptFollowFlow(t *testing.T) {
+	alice, bob, inbox, db := setupMutualInboxTest(t)
+	ctx := context.Background()
+
+	follow := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#follow-mutual",
+		"type":     "Follow",
+		"actor":    alice.ActorURL,
+		"object":   bob.ActorURL,
+	}
+
+	// Provide enqueue so SendAccept has a delivery path.
+	var enqueued bool
+	inbox.SetEnqueueFunc(func(_ context.Context, _, _ string, _ []byte) error {
+		enqueued = true
+		return nil
+	})
+
+	req := signedInboxPost(t, alice, follow)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	// Alice should now be an accepted follower (not just a pending request).
+	f, err := db.GetFollow(ctx, alice.ActorURL)
+	require.NoError(t, err)
+	require.NotNil(t, f, "mutual auto-accept should promote alice to follower")
+
+	// Follow request should be consumed.
+	fr, err := db.GetFollowRequest(ctx, alice.ActorURL)
+	require.NoError(t, err)
+	require.Nil(t, fr, "follow request should be consumed after auto-accept")
+
+	require.True(t, enqueued, "Accept should have been enqueued for delivery")
+}
+
+func TestMutualAutoAcceptDoesNotTriggerWithoutOutgoingFollow(t *testing.T) {
+	_, bob, inbox, db := setupInboxTest(t)
+	ctx := context.Background()
+
+	inbox.autoAccept = AutoAcceptMutual
+
+	// Create a different identity for a stranger.
+	stranger, err := LoadOrCreateIdentity("stranger.test", "", "", discardLogger())
+	require.NoError(t, err)
+
+	strangerPEM, _ := stranger.PublicKeyPEM()
+	strangerActor := Actor{
+		Context: []any{"https://www.w3.org/ns/activitystreams", "https://w3id.org/security/v1"},
+		Type:    "Person",
+		ID:      stranger.ActorURL,
+		Inbox:   "https://stranger.test/ap/inbox",
+		PublicKey: ActorPublicKey{
+			ID:           stranger.KeyID(),
+			Owner:        stranger.ActorURL,
+			PublicKeyPEM: strangerPEM,
+		},
+	}
+
+	actorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/activity+json")
+		_ = json.NewEncoder(w).Encode(strangerActor)
+	}))
+	defer actorSrv.Close()
+
+	stranger.ActorURL = actorSrv.URL + "/ap/actor"
+	strangerActor.ID = stranger.ActorURL
+	strangerActor.PublicKey.ID = stranger.ActorURL + "#main-key"
+	strangerActor.PublicKey.Owner = stranger.ActorURL
+
+	follow := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       stranger.ActorURL + "#follow-stranger",
+		"type":     "Follow",
+		"actor":    stranger.ActorURL,
+		"object":   bob.ActorURL,
+	}
+
+	req := signedInboxPost(t, stranger, follow)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	// Should be pending, NOT auto-accepted.
+	fr, err := db.GetFollowRequest(ctx, stranger.ActorURL)
+	require.NoError(t, err)
+	require.NotNil(t, fr, "follow from stranger should remain as pending request")
+
+	f, err := db.GetFollow(ctx, stranger.ActorURL)
+	require.NoError(t, err)
+	require.Nil(t, f, "stranger should not be auto-accepted without outgoing follow")
+}
+
+func TestInboxAutoAcceptAll(t *testing.T) {
+	alice, bob, inbox, db := setupInboxTest(t)
+	ctx := context.Background()
+
+	inbox.autoAccept = AutoAcceptAll
+
+	inbox.SetEnqueueFunc(func(_ context.Context, _, _ string, _ []byte) error {
+		return nil
+	})
+
+	follow := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#follow-autoall",
+		"type":     "Follow",
+		"actor":    alice.ActorURL,
+		"object":   bob.ActorURL,
+	}
+
+	req := signedInboxPost(t, alice, follow)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	f, err := db.GetFollow(ctx, alice.ActorURL)
+	require.NoError(t, err)
+	require.NotNil(t, f, "autoAccept=all should promote alice to follower immediately")
+}
+
+func TestInboxUpdateRejectsNonFollower(t *testing.T) {
+	alice, _, inbox, _ := setupInboxTest(t)
+
+	update := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#update-nofollow",
+		"type":     "Update",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type": "OCITag",
+		},
+	}
+
+	req := signedInboxPost(t, alice, update)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestInboxAnnounceRejectsNonFollower(t *testing.T) {
+	alice, _, inbox, _ := setupInboxTest(t)
+
+	announce := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#announce-nofollow",
+		"type":     "Announce",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type": "OCIBlob",
+		},
+	}
+
+	req := signedInboxPost(t, alice, announce)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestInboxDeleteRejectsNonFollower(t *testing.T) {
+	alice, _, inbox, _ := setupInboxTest(t)
+
+	del := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#delete-nofollow",
+		"type":     "Delete",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type": "OCIManifest",
+		},
+	}
+
+	req := signedInboxPost(t, alice, del)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusForbidden, rec.Code)
+}
+
 func TestInboxUpdateTagUnknownManifest(t *testing.T) {
 	alice, _, inbox, db := setupInboxTest(t)
 	ctx := context.Background()

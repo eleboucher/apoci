@@ -137,9 +137,8 @@ func (s *Server) adminAddFollow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	endpoint := activitypub.EndpointFromActorURL(actor.ID)
-	if err := s.db.AddFollowRequest(ctx, actor.ID, actor.PublicKey.PublicKeyPEM, endpoint); err != nil {
-		s.logger.Error("storing follow request", "error", err)
+	if err := s.db.AddOutgoingFollow(ctx, actor.ID); err != nil {
+		s.logger.Error("storing outgoing follow", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -167,7 +166,7 @@ func (s *Server) adminAddFollow(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.db.UpsertPeer(ctx, &database.Peer{
 		ActorURL:          actor.ID,
-		Endpoint:          endpoint,
+		Endpoint:          activitypub.EndpointFromActorURL(actor.ID),
 		ReplicationPolicy: "lazy",
 		IsHealthy:         true,
 	}); err != nil {
@@ -250,8 +249,13 @@ func (s *Server) adminRemoveFollow(w http.ResponseWriter, r *http.Request) {
 		s.logger.Warn("failed to send Undo to peer", "actor", actorURL, "error", err)
 	}
 
-	if err := s.db.RemoveFollow(ctx, actorURL); err != nil {
-		s.logger.Error("removing follow", "actor_url", actorURL, "error", err)
+	// Clean up both inbound follow (if they followed us back) and outgoing follow record.
+	errFollow := s.db.RemoveFollow(ctx, actorURL)
+	errOutgoing := s.db.RemoveOutgoingFollow(ctx, actorURL)
+
+	// If neither table had a record, report the error.
+	if errFollow != nil && errOutgoing != nil {
+		s.logger.Error("removing follow", "actor_url", actorURL, "error_follow", errFollow, "error_outgoing", errOutgoing)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

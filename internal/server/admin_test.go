@@ -356,9 +356,10 @@ func TestAdminAddFollowSuccess(t *testing.T) {
 	require.Equal(t, inboxURL, deliveredInbox)
 
 	ctx := context.Background()
-	fr, err := s.db.GetFollowRequest(ctx, actorURL)
+	of, err := s.db.GetOutgoingFollow(ctx, actorURL)
 	require.NoError(t, err)
-	require.NotNil(t, fr, "follow request should be persisted")
+	require.NotNil(t, of, "outgoing follow should be persisted")
+	require.Equal(t, "pending", of.Status)
 }
 
 func TestAdminAcceptFollowMissingTarget(t *testing.T) {
@@ -582,6 +583,105 @@ func TestAdminRemoveFollowSuccess(t *testing.T) {
 	f, err := s.db.GetFollow(ctx, actorURL)
 	require.NoError(t, err)
 	require.Nil(t, f, "follow should be removed from the DB")
+}
+
+func TestAdminRemoveFollowOnlyOutgoing(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	ctx := context.Background()
+
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
+	require.NoError(t, s.db.AddOutgoingFollow(ctx, actorURL))
+
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("DELETE", srv.URL+"/api/admin/follows", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	of, err := s.db.GetOutgoingFollow(ctx, actorURL)
+	require.NoError(t, err)
+	require.Nil(t, of, "outgoing follow should be removed")
+}
+
+func TestAdminRemoveFollowBothTables(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	ctx := context.Background()
+
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
+	require.NoError(t, s.db.AddFollow(ctx, actorURL, "pubkey-peer", "https://peer.example.com"))
+	require.NoError(t, s.db.AddOutgoingFollow(ctx, actorURL))
+
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("DELETE", srv.URL+"/api/admin/follows", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	f, err := s.db.GetFollow(ctx, actorURL)
+	require.NoError(t, err)
+	require.Nil(t, f, "inbound follow should be removed")
+
+	of, err := s.db.GetOutgoingFollow(ctx, actorURL)
+	require.NoError(t, err)
+	require.Nil(t, of, "outgoing follow should be removed")
+}
+
+func TestAdminAddFollowCreatesOutgoingNotInbound(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	const inboxURL = "https://peer.example.com/ap/inbox"
+
+	fed := &mockAPFederator{
+		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
+			return adminActor(actorURL, inboxURL), nil
+		},
+		deliverActivityFn: func(_ context.Context, _ string, _ []byte) error {
+			return nil
+		},
+	}
+	s := testServerWithMock(t, fed)
+	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	ctx := context.Background()
+
+	// Must be in outgoing_follows.
+	of, err := s.db.GetOutgoingFollow(ctx, actorURL)
+	require.NoError(t, err)
+	require.NotNil(t, of, "outgoing follow should be persisted")
+
+	// Must NOT be in follow_requests (that's for inbound requests).
+	fr, err := s.db.GetFollowRequest(ctx, actorURL)
+	require.NoError(t, err)
+	require.Nil(t, fr, "follow_requests should not have outgoing follow")
 }
 
 func TestAdminAllEndpointsRequireAuth(t *testing.T) {

@@ -131,6 +131,10 @@ const (
 	ActivityUpdate   = "Update"
 	ActivityAnnounce = "Announce"
 	ActivityDelete   = "Delete"
+
+	AutoAcceptNone   = "none"
+	AutoAcceptAll    = "all"
+	AutoAcceptMutual = "mutual"
 )
 
 type RawActivity struct {
@@ -405,9 +409,9 @@ func (h *InboxHandler) handleUndo(ctx context.Context, w http.ResponseWriter, ac
 	}
 
 	if err := h.db.RemoveFollow(ctx, activity.Actor); err != nil {
-		h.logger.Error("inbox: failed to remove follow", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		// Not-found is expected when the follow was never accepted or already undone.
+		// AP convention: acknowledge the Undo regardless.
+		h.logger.Debug("inbox: Undo(Follow) no-op", "actor", activity.Actor, "error", err)
 	}
 
 	activityJSON, err := json.Marshal(activity)
@@ -1000,14 +1004,14 @@ func (h *InboxHandler) checkLimiter(cache *ttlcache.Cache[string, *rate.Limiter]
 }
 
 func (h *InboxHandler) shouldAutoAccept(ctx context.Context, actorURL string) bool {
-	if h.autoAccept == "all" {
+	if h.autoAccept == AutoAcceptAll {
 		return true
 	}
 
 	// "mutual" triggers when we have an outgoing follow in any non-rejected state
 	// (pending or accepted). This covers the simultaneous-follow case where both
 	// sides send Follow at the same time and neither has accepted yet.
-	if h.autoAccept == "mutual" {
+	if h.autoAccept == AutoAcceptMutual {
 		of, err := h.db.GetOutgoingFollow(ctx, actorURL)
 		if err == nil && of != nil && (of.Status == "pending" || of.Status == "accepted") {
 			return true

@@ -189,7 +189,7 @@ func TestShouldAutoAcceptMutualPending(t *testing.T) {
 	handler := NewInboxHandler(id, db, InboxConfig{
 		MaxManifestSize: 1 << 20,
 		MaxBlobSize:     1 << 20,
-		AutoAccept:      "mutual",
+		AutoAccept:      AutoAcceptMutual,
 	}, discardLogger())
 
 	// Should auto-accept even though our outgoing follow is only pending.
@@ -215,7 +215,7 @@ func TestShouldAutoAcceptMutualAccepted(t *testing.T) {
 	handler := NewInboxHandler(id, db, InboxConfig{
 		MaxManifestSize: 1 << 20,
 		MaxBlobSize:     1 << 20,
-		AutoAccept:      "mutual",
+		AutoAccept:      AutoAcceptMutual,
 	}, discardLogger())
 
 	require.True(t, handler.shouldAutoAccept(ctx, peerActor),
@@ -236,7 +236,7 @@ func TestShouldAutoAcceptMutualNone(t *testing.T) {
 	handler := NewInboxHandler(id, db, InboxConfig{
 		MaxManifestSize: 1 << 20,
 		MaxBlobSize:     1 << 20,
-		AutoAccept:      "mutual",
+		AutoAccept:      AutoAcceptMutual,
 	}, discardLogger())
 
 	require.False(t, handler.shouldAutoAccept(ctx, "https://stranger.example.com/ap/actor"),

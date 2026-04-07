@@ -97,7 +97,6 @@ type Follow struct {
 	ActorURL     string    `bun:"actor_url,notnull,unique"`
 	PublicKeyPEM string    `bun:"public_key_pem,notnull"`
 	Endpoint     string    `bun:"endpoint,notnull"`
-	Alias        *string   `bun:"alias"`
 	ApprovedAt   time.Time `bun:"approved_at,notnull,default:current_timestamp"`
 }
 
@@ -108,7 +107,6 @@ type FollowRequest struct {
 	ActorURL     string    `bun:"actor_url,notnull,unique"`
 	PublicKeyPEM string    `bun:"public_key_pem,notnull"`
 	Endpoint     string    `bun:"endpoint,notnull"`
-	Alias        *string   `bun:"alias"`
 	RequestedAt  time.Time `bun:"requested_at,notnull,default:current_timestamp"`
 }
 

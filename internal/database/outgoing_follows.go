@@ -11,7 +11,7 @@ func (db *DB) AddOutgoingFollow(ctx context.Context, actorURL string) error {
 	_, err := db.bun.NewRaw(
 		`INSERT INTO outgoing_follows (actor_url, status)
 		 VALUES (?, 'pending')
-		 ON CONFLICT(actor_url) DO UPDATE SET status = 'pending'`,
+		 ON CONFLICT(actor_url) DO NOTHING`,
 		actorURL).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("adding outgoing follow: %w", err)
@@ -47,10 +47,14 @@ func (db *DB) RejectOutgoingFollow(ctx context.Context, actorURL string) error {
 }
 
 func (db *DB) RemoveOutgoingFollow(ctx context.Context, actorURL string) error {
-	_, err := db.bun.NewRaw(
+	res, err := db.bun.NewRaw(
 		"DELETE FROM outgoing_follows WHERE actor_url = ?", actorURL).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("removing outgoing follow: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("no outgoing follow found for %q", actorURL)
 	}
 	return nil
 }

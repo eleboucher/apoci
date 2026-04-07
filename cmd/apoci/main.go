@@ -268,12 +268,10 @@ func runFollowAdd(ctx context.Context, configPath, input string) error {
 	}
 	fmt.Printf("Follow sent to %s.\n", actor.ID)
 
-	// Deliver before storing so the peer can process our Follow first.
-	// If AddFollowRequest fails here the peer already received the activity
-	// and will think we're following; the user must retry to resync local state.
-	endpoint := activitypub.EndpointFromActorURL(actor.ID)
-	if err := db.AddFollowRequest(ctx, actor.ID, actor.PublicKey.PublicKeyPEM, endpoint); err != nil {
-		return fmt.Errorf("storing follow request: %w", err)
+	// Record the outgoing follow so handleAccept can match the Accept(Follow)
+	// back to this request when the peer responds.
+	if err := db.AddOutgoingFollow(ctx, actor.ID); err != nil {
+		return fmt.Errorf("storing outgoing follow: %w", err)
 	}
 
 	if err := db.UpsertPeer(ctx, &database.Peer{
@@ -303,9 +301,9 @@ func runFollowRemove(ctx context.Context, configPath, arg string) error {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 
-	if err := db.RemoveFollow(ctx, actorURL); err != nil {
-		return err
-	}
+	// Clean up both inbound follow (if they followed us back) and outgoing follow record.
+	_ = db.RemoveFollow(ctx, actorURL)
+	_ = db.RemoveOutgoingFollow(ctx, actorURL)
 	fmt.Printf("Unfollowed %s\n", actorURL)
 	return nil
 }

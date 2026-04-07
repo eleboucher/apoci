@@ -97,3 +97,29 @@ func TestOutgoingFollowDuplicateAdd(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
 }
+
+func TestOutgoingFollowDuplicateAddPreservesAccepted(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	url := "https://accepted-dup.example.com/ap/actor"
+
+	require.NoError(t, db.AddOutgoingFollow(ctx, url))
+	require.NoError(t, db.AcceptOutgoingFollow(ctx, url))
+
+	// Adding again after acceptance must NOT reset status to pending.
+	require.NoError(t, db.AddOutgoingFollow(ctx, url))
+
+	f, err := db.GetOutgoingFollow(ctx, url)
+	require.NoError(t, err)
+	require.NotNil(t, f)
+	require.Equal(t, "accepted", f.Status,
+		"AddOutgoingFollow must not reset an already-accepted follow back to pending")
+}
+
+func TestRemoveOutgoingFollowNotFound(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	err := db.RemoveOutgoingFollow(ctx, "https://nonexistent.example.com/ap/actor")
+	require.Error(t, err, "removing a non-existent outgoing follow should return an error")
+}
