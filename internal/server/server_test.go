@@ -52,7 +52,9 @@ func testServer(t *testing.T) *Server {
 		},
 	}
 
-	return New(cfg, db, blobs, identity, "test", nopLog())
+	s, err := New(cfg, db, blobs, identity, "test", nopLog())
+	require.NoError(t, err)
+	return s
 }
 
 func TestHealthz(t *testing.T) {
@@ -289,6 +291,7 @@ func TestAdminIdentityRequiresAuth(t *testing.T) {
 func TestAdminIdentityWithToken(t *testing.T) {
 	s := testServer(t)
 	s.cfg.RegistryToken = testRegistryToken
+	s.cfg.AdminToken = testRegistryToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -309,6 +312,7 @@ func TestAdminIdentityWithToken(t *testing.T) {
 func TestAdminFollowsListEmpty(t *testing.T) {
 	s := testServer(t)
 	s.cfg.RegistryToken = testRegistryToken
+	s.cfg.AdminToken = testRegistryToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 

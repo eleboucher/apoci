@@ -22,6 +22,7 @@ type apFederator interface {
 	DeliverActivity(ctx context.Context, inboxURL string, activityJSON []byte) error
 	SendAccept(ctx context.Context, followerActorURL string) error
 	SendReject(ctx context.Context, followerActorURL string) error
+	SendUndo(ctx context.Context, peerActorURL string) error
 }
 
 type realAPFederator struct {
@@ -50,9 +51,13 @@ func (f *realAPFederator) SendReject(ctx context.Context, followerActorURL strin
 	return activitypub.SendReject(ctx, f.identity, f.db, followerActorURL, f.enqueue)
 }
 
+func (f *realAPFederator) SendUndo(ctx context.Context, peerActorURL string) error {
+	return activitypub.SendUndo(ctx, f.identity, peerActorURL, f.enqueue)
+}
+
 func (s *Server) adminRouter() http.Handler {
 	r := chi.NewRouter()
-	r.Use(bearerAuthMiddleware(s.cfg.RegistryToken))
+	r.Use(bearerAuthMiddleware(s.cfg.AdminToken))
 
 	r.Get("/identity", s.adminGetIdentity)
 	r.Get("/follows", s.adminListFollows)
@@ -238,6 +243,10 @@ func (s *Server) adminRemoveFollow(w http.ResponseWriter, r *http.Request) {
 		s.logger.Error("resolving follow target", "target", req.Target, "error", err)
 		http.Error(w, "could not resolve target", http.StatusBadGateway)
 		return
+	}
+
+	if err := s.apFed.SendUndo(ctx, actorURL); err != nil {
+		s.logger.Warn("failed to send Undo to peer", "actor", actorURL, "error", err)
 	}
 
 	if err := s.db.RemoveFollow(ctx, actorURL); err != nil {

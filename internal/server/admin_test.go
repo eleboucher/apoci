@@ -59,6 +59,10 @@ func (m *mockAPFederator) SendReject(ctx context.Context, followerActorURL strin
 	return errors.New("sendReject not configured")
 }
 
+func (m *mockAPFederator) SendUndo(_ context.Context, _ string) error {
+	return nil
+}
+
 func testServerWithMock(t *testing.T, fed apFederator) *Server {
 	t.Helper()
 	s := testServer(t)
@@ -81,6 +85,7 @@ func adminActor(actorURL, inboxURL string) *activitypub.Actor {
 func TestAdminGetIdentityFields(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -107,6 +112,7 @@ func TestAdminGetIdentityFields(t *testing.T) {
 func TestAdminListFollowsEmpty(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -126,6 +132,7 @@ func TestAdminListFollowsEmpty(t *testing.T) {
 func TestAdminListFollowsWithData(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	ctx := context.Background()
 
 	require.NoError(t, s.db.AddFollow(ctx, "https://alice.example.com/ap/actor", "pubkey-alice", "https://alice.example.com"))
@@ -159,6 +166,7 @@ func TestAdminListFollowsWithData(t *testing.T) {
 func TestAdminListFollowsInternalError(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -176,6 +184,7 @@ func TestAdminListFollowsInternalError(t *testing.T) {
 func TestAdminListPendingEmpty(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -195,6 +204,7 @@ func TestAdminListPendingEmpty(t *testing.T) {
 func TestAdminListPendingWithData(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	ctx := context.Background()
 
 	require.NoError(t, s.db.AddFollowRequest(ctx, "https://carol.example.com/ap/actor", "pubkey-carol", "https://carol.example.com"))
@@ -221,6 +231,7 @@ func TestAdminListPendingWithData(t *testing.T) {
 func TestAdminAddFollowMissingTarget(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -243,6 +254,7 @@ func TestAdminAddFollowResolveError(t *testing.T) {
 	}
 	s := testServerWithMock(t, fed)
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -265,6 +277,7 @@ func TestAdminAddFollowFetchActorError(t *testing.T) {
 	}
 	s := testServerWithMock(t, fed)
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -292,6 +305,7 @@ func TestAdminAddFollowDeliveryError(t *testing.T) {
 	}
 	s := testServerWithMock(t, fed)
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -322,6 +336,7 @@ func TestAdminAddFollowSuccess(t *testing.T) {
 	}
 	s := testServerWithMock(t, fed)
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -349,6 +364,7 @@ func TestAdminAddFollowSuccess(t *testing.T) {
 func TestAdminAcceptFollowMissingTarget(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -371,6 +387,7 @@ func TestAdminAcceptFollowSendAcceptError(t *testing.T) {
 	}
 	s := testServerWithMock(t, fed)
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -400,6 +417,7 @@ func TestAdminAcceptFollowSuccess(t *testing.T) {
 	}
 	s := testServerWithMock(t, fed)
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL))
 
 	srv := httptest.NewServer(s.routes())
@@ -424,6 +442,7 @@ func TestAdminAcceptFollowSuccess(t *testing.T) {
 func TestAdminRejectFollowMissingTarget(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -446,6 +465,7 @@ func TestAdminRejectFollowSendRejectError(t *testing.T) {
 	}
 	s := testServerWithMock(t, fed)
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -475,6 +495,7 @@ func TestAdminRejectFollowSuccess(t *testing.T) {
 	}
 	s := testServerWithMock(t, fed)
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL))
 
 	srv := httptest.NewServer(s.routes())
@@ -499,6 +520,7 @@ func TestAdminRejectFollowSuccess(t *testing.T) {
 func TestAdminRemoveFollowMissingTarget(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -516,6 +538,7 @@ func TestAdminRemoveFollowNotFound(t *testing.T) {
 	const actorURL = "https://peer.example.com/ap/actor"
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -536,6 +559,7 @@ func TestAdminRemoveFollowSuccess(t *testing.T) {
 
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	require.NoError(t, s.db.AddFollow(ctx, actorURL, "pubkey-peer", "https://peer.example.com"))
 
 	srv := httptest.NewServer(s.routes())
@@ -563,6 +587,7 @@ func TestAdminRemoveFollowSuccess(t *testing.T) {
 func TestAdminAllEndpointsRequireAuth(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -597,6 +622,7 @@ func TestAdminAllEndpointsRequireAuth(t *testing.T) {
 func TestAdminAllEndpointsRejectWrongToken(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = "correct-token"
+	s.cfg.AdminToken = "correct-token"
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 

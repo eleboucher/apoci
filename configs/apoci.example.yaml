@@ -7,6 +7,7 @@ endpoint: "https://registry.example.com"
 # dataDir: "/apoci/storage"
 # keyPath: "/apoci/storage/ap.key"
 # registryToken: ""              # auto-generated to {dataDir}/registry.token if empty
+# adminToken: ""                 # auto-generated to {dataDir}/admin.token if empty (separate from registryToken)
 # accountDomain: "example.com"  # vanity domain for @registry@example.com (defaults to endpoint domain)
 
 # database:
@@ -39,3 +40,4 @@ endpoint: "https://registry.example.com"
 # metrics:
 #   enabled: true
 #   listen: ":9090"
+#   token: ""                     # bearer token for /debug/vars (optional, unauthenticated if empty)

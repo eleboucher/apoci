@@ -24,6 +24,7 @@ type Config struct {
 	LogFormat     string `yaml:"logFormat"`
 	ImmutableTags string `yaml:"immutableTags"`
 	RegistryToken string `yaml:"registryToken"`
+	AdminToken    string `yaml:"adminToken"`
 	AccountDomain string `yaml:"accountDomain"`
 
 	Database Database `yaml:"database"`
@@ -158,6 +159,13 @@ func applyDefaults(cfg *Config) error {
 			return fmt.Errorf("setting up registry token: %w", err)
 		}
 		cfg.RegistryToken = token
+	}
+	if cfg.AdminToken == "" {
+		token, err := loadOrGenerateToken(filepath.Join(cfg.DataDir, "admin.token"))
+		if err != nil {
+			return fmt.Errorf("setting up admin token: %w", err)
+		}
+		cfg.AdminToken = token
 	}
 	return nil
 }
