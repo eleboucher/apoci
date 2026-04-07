@@ -23,6 +23,7 @@ type Server struct {
 	db               *database.DB
 	blobs            *blobstore.Store
 	identity         *activitypub.Identity
+	apFed            apFederator
 	registry         *oci.Registry
 	publisher        *activitypub.APPublisher
 	deliveryQueue    *activitypub.DeliveryQueue
@@ -59,13 +60,14 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 	registry.SetPublisher(apPublisher)
 	registry.SetFederation(apResolver, fetcher)
 
-	inboxHandler := activitypub.NewInboxHandler(
-		identity, db,
-		cfg.Limits.MaxManifestSize, cfg.Limits.MaxBlobSize,
-		cfg.Federation.AutoAcceptMutual, cfg.Federation.AutoAcceptDomains,
-		cfg.Federation.BlockedDomains, cfg.Federation.BlockedActors,
-		logger,
-	)
+	inboxHandler := activitypub.NewInboxHandler(identity, db, activitypub.InboxConfig{
+		MaxManifestSize: cfg.Limits.MaxManifestSize,
+		MaxBlobSize:     cfg.Limits.MaxBlobSize,
+		AutoAccept:      cfg.Federation.AutoAccept,
+		AllowedDomains:  cfg.Federation.AllowedDomains,
+		BlockedDomains:  cfg.Federation.BlockedDomains,
+		BlockedActors:   cfg.Federation.BlockedActors,
+	}, logger)
 	inboxHandler.SetBlobReplicator(blobReplicator)
 
 	s := &Server{
@@ -73,6 +75,7 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 		db:               db,
 		blobs:            blobs,
 		identity:         identity,
+		apFed:            &realAPFederator{identity: identity, db: db},
 		registry:         registry,
 		publisher:        apPublisher,
 		deliveryQueue:    deliveryQueue,

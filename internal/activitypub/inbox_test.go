@@ -25,7 +25,11 @@ func testInboxSetup(t *testing.T) *InboxHandler {
 	id, err := LoadOrCreateIdentity("bob.example.com", "", "", discardLogger())
 	require.NoError(t, err)
 
-	handler := NewInboxHandler(id, db, config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, false, nil, nil, nil, discardLogger())
+	handler := NewInboxHandler(id, db, InboxConfig{
+		MaxManifestSize: config.DefaultMaxManifestSize,
+		MaxBlobSize:     config.DefaultMaxBlobSize,
+		AutoAccept:      "none",
+	}, discardLogger())
 	return handler
 }
 

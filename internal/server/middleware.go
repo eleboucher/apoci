@@ -142,10 +142,13 @@ func rateLimitMiddleware(rl *ipRateLimiter) func(http.Handler) http.Handler {
 	}
 }
 
-// bearerAuthMiddleware requires a Bearer token on ALL requests (including GET).
 func bearerAuthMiddleware(token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if token == "" {
+				http.Error(w, "admin API requires a configured token", http.StatusUnauthorized)
+				return
+			}
 			auth := r.Header.Get("Authorization")
 			provided, ok := strings.CutPrefix(auth, "Bearer ")
 			if !ok || subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {

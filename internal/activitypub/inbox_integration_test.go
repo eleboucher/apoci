@@ -42,7 +42,11 @@ func setupInboxTest(t *testing.T) (alice *Identity, bob *Identity, inbox *InboxH
 	bob, err = LoadOrCreateIdentity("bob.test", "", "", discardLogger())
 	require.NoError(t, err)
 
-	inbox = NewInboxHandler(bob, db, config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, false, nil, nil, nil, discardLogger())
+	inbox = NewInboxHandler(bob, db, InboxConfig{
+		MaxManifestSize: config.DefaultMaxManifestSize,
+		MaxBlobSize:     config.DefaultMaxBlobSize,
+		AutoAccept:      "none",
+	}, discardLogger())
 
 	// Start an HTTP server that serves alice's actor document
 	alicePEM, _ := alice.PublicKeyPEM()

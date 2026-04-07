@@ -23,27 +23,39 @@ type BlobReplicator interface {
 }
 
 type InboxHandler struct {
-	identity          *Identity
-	db                *database.DB
-	blobReplicator    BlobReplicator
-	maxManifestSize   int64
-	maxBlobSize       int64
-	autoAcceptMutual  bool
-	autoAcceptDomains []string
-	blockedDomains    map[string]struct{}
-	blockedActors     map[string]struct{}
-	actorLimiters     *ttlcache.Cache[string, *rate.Limiter]
-	logger            *slog.Logger
+	identity       *Identity
+	db             *database.DB
+	blobReplicator BlobReplicator
+
+	maxManifestSize int64
+	maxBlobSize     int64
+
+	autoAccept     string
+	allowedDomains []string
+	blockedDomains map[string]struct{}
+	blockedActors  map[string]struct{}
+	actorLimiters  *ttlcache.Cache[string, *rate.Limiter]
+
+	logger *slog.Logger
 }
 
-func NewInboxHandler(identity *Identity, db *database.DB, maxManifestSize, maxBlobSize int64, autoAcceptMutual bool, autoAcceptDomains, blockedDomains, blockedActors []string, logger *slog.Logger) *InboxHandler {
-	domainSet := make(map[string]struct{}, len(blockedDomains))
-	for _, d := range blockedDomains {
-		domainSet[d] = struct{}{}
+type InboxConfig struct {
+	MaxManifestSize int64
+	MaxBlobSize     int64
+	AutoAccept      string
+	AllowedDomains  []string
+	BlockedDomains  []string
+	BlockedActors   []string
+}
+
+func NewInboxHandler(identity *Identity, db *database.DB, cfg InboxConfig, logger *slog.Logger) *InboxHandler {
+	blockedDomainSet := make(map[string]struct{}, len(cfg.BlockedDomains))
+	for _, d := range cfg.BlockedDomains {
+		blockedDomainSet[d] = struct{}{}
 	}
-	actorSet := make(map[string]struct{}, len(blockedActors))
-	for _, a := range blockedActors {
-		actorSet[a] = struct{}{}
+	blockedActorSet := make(map[string]struct{}, len(cfg.BlockedActors))
+	for _, a := range cfg.BlockedActors {
+		blockedActorSet[a] = struct{}{}
 	}
 
 	limiters := ttlcache.New[string, *rate.Limiter](
@@ -52,15 +64,15 @@ func NewInboxHandler(identity *Identity, db *database.DB, maxManifestSize, maxBl
 	go limiters.Start()
 
 	return &InboxHandler{
-		identity:          identity,
-		db:                db,
-		maxManifestSize:   maxManifestSize,
-		autoAcceptMutual:  autoAcceptMutual,
-		autoAcceptDomains: autoAcceptDomains,
-		blockedDomains:    domainSet,
-		blockedActors:     actorSet,
-		actorLimiters:     limiters,
-		maxBlobSize:     maxBlobSize,
+		identity:        identity,
+		db:              db,
+		maxManifestSize: cfg.MaxManifestSize,
+		maxBlobSize:     cfg.MaxBlobSize,
+		autoAccept:      cfg.AutoAccept,
+		allowedDomains:  cfg.AllowedDomains,
+		blockedDomains:  blockedDomainSet,
+		blockedActors:   blockedActorSet,
+		actorLimiters:   limiters,
 		logger:          logger,
 	}
 }
@@ -746,18 +758,22 @@ func (h *InboxHandler) actorAllowed(actorURL string) bool {
 }
 
 func (h *InboxHandler) shouldAutoAccept(ctx context.Context, actorURL string) bool {
-	if h.autoAcceptMutual {
+	if h.autoAccept == "all" {
+		return true
+	}
+
+	if h.autoAccept == "mutual" {
 		of, err := h.db.GetOutgoingFollow(ctx, actorURL)
 		if err == nil && of != nil && of.Status == "accepted" {
 			return true
 		}
 	}
 
-	if len(h.autoAcceptDomains) > 0 {
+	if len(h.allowedDomains) > 0 {
 		u, err := url.Parse(actorURL)
 		if err == nil {
 			host := u.Hostname()
-			for _, allowed := range h.autoAcceptDomains {
+			for _, allowed := range h.allowedDomains {
 				if host == allowed || strings.HasSuffix(host, "."+allowed) {
 					return true
 				}

@@ -273,6 +273,52 @@ func TestRegistryAuthMiddlewareRejectsInvalidToken(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, rec.Code, "POST with wrong token should be 401")
 }
 
+func TestAdminIdentityRequiresAuth(t *testing.T) {
+	s := testServer(t)
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/admin/identity")
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+func TestAdminIdentityWithToken(t *testing.T) {
+	s := testServer(t)
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/admin/identity", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var info map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&info))
+	require.Equal(t, "test-node", info["name"])
+	require.Equal(t, "test.example.com", info["domain"])
+}
+
+func TestAdminFollowsListEmpty(t *testing.T) {
+	s := testServer(t)
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/admin/follows", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
 func TestRegistryAuthMiddlewareEmptyTokenAllowsAll(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

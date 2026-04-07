@@ -22,6 +22,8 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /ap/followers", s.followersHandler)
 	mux.Handle("GET /ap/following", s.followingHandler)
 
+	mux.Handle("/api/admin/", http.StripPrefix("/api/admin", s.adminRouter()))
+
 	var handler http.Handler = mux
 	handler = loggingMiddleware(s.logger)(handler)
 	handler = requestIDMiddleware(handler)

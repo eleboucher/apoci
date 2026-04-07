@@ -23,6 +23,10 @@ type WebFingerLink struct {
 
 // LookupWebFinger resolves a resource via WebFinger and returns the AP actor URL.
 func LookupWebFinger(ctx context.Context, domain, resource string) (string, error) {
+	if strings.ContainsAny(domain, "/:@") {
+		return "", fmt.Errorf("invalid domain %q: must be a bare hostname", domain)
+	}
+
 	wfURL := fmt.Sprintf("https://%s/.well-known/webfinger?resource=%s", domain, url.QueryEscape(resource))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wfURL, nil)
@@ -35,7 +39,7 @@ func LookupWebFinger(ctx context.Context, domain, resource string) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("webfinger request to %s: %w", domain, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("webfinger on %s returned %d", domain, resp.StatusCode)
@@ -56,9 +60,11 @@ func LookupWebFinger(ctx context.Context, domain, resource string) (string, erro
 }
 
 // ResolveFollowTarget resolves a domain, handle, or actor URL to an actor URL.
-// Accepts: "bar.com", "@registry@bar.com", "registry@bar.com", or "https://bar.com/ap/actor".
 func ResolveFollowTarget(ctx context.Context, input string) (string, error) {
 	if strings.HasPrefix(input, "https://") || strings.HasPrefix(input, "http://") {
+		if err := validateFederationURL(input); err != nil {
+			return "", fmt.Errorf("unsafe target URL: %w", err)
+		}
 		return input, nil
 	}
 

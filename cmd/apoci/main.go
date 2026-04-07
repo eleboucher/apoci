@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/apoci/apoci/internal/activitypub"
+	"github.com/apoci/apoci/internal/admin"
 	"github.com/apoci/apoci/internal/blobstore"
 	"github.com/apoci/apoci/internal/config"
 	"github.com/apoci/apoci/internal/database"
@@ -90,9 +91,21 @@ func serveCmd(configPath *string) *cobra.Command {
 }
 
 func followCmd(configPath *string) *cobra.Command {
+	var remote, token string
+
 	cmd := &cobra.Command{
 		Use:   "follow",
 		Short: "Manage followed peers",
+	}
+
+	cmd.PersistentFlags().StringVar(&remote, "remote", "", "remote instance URL (e.g. https://registry.example.com)")
+	cmd.PersistentFlags().StringVar(&token, "token", "", "registry token for remote auth")
+
+	getClient := func() *admin.Client {
+		if remote == "" {
+			return nil
+		}
+		return admin.NewClient(remote, token)
 	}
 
 	cmd.AddCommand(&cobra.Command{
@@ -100,6 +113,15 @@ func followCmd(configPath *string) *cobra.Command {
 		Short: "Follow a peer (accepts domain, @user@domain, or full actor URL)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if c := getClient(); c != nil {
+				res, err := c.AddFollow(cmd.Context(), args[0])
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Follow sent to %s\n", res["followed"])
+				return nil
+			}
+
 			db, identity, err := openAll(*configPath)
 			if err != nil {
 				return err
@@ -149,16 +171,13 @@ func followCmd(configPath *string) *cobra.Command {
 			}
 
 			fmt.Printf("Follow sent to %s.\n", actor.ID)
-			fmt.Println("The peer will auto-accept and send an Accept activity back.")
 
-			if err := db.UpsertPeer(cmd.Context(), &database.Peer{
+			_ = db.UpsertPeer(cmd.Context(), &database.Peer{
 				ActorURL:          actor.ID,
 				Endpoint:          activitypub.EndpointFromActorURL(actor.ID),
 				ReplicationPolicy: "lazy",
 				IsHealthy:         true,
-			}); err != nil {
-				return fmt.Errorf("recording peer: %w", err)
-			}
+			})
 
 			return nil
 		},
@@ -169,6 +188,15 @@ func followCmd(configPath *string) *cobra.Command {
 		Short: "Unfollow a peer",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if c := getClient(); c != nil {
+				res, err := c.RemoveFollow(cmd.Context(), args[0])
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Unfollowed %s\n", res["removed"])
+				return nil
+			}
+
 			db, _, err := openAll(*configPath)
 			if err != nil {
 				return err
@@ -192,6 +220,29 @@ func followCmd(configPath *string) *cobra.Command {
 		Use:   "list",
 		Short: "List followed peers",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if c := getClient(); c != nil {
+				data, err := c.ListFollows(cmd.Context())
+				if err != nil {
+					return err
+				}
+				var follows []database.Follow
+				if err := json.Unmarshal(data, &follows); err != nil {
+					fmt.Println(string(data))
+					return nil
+				}
+				if len(follows) == 0 {
+					fmt.Println("Not following anyone.")
+					return nil
+				}
+				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+				_, _ = fmt.Fprintln(w, "ACTOR\tENDPOINT\tSINCE")
+				for _, f := range follows {
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", f.ActorURL, f.Endpoint, f.ApprovedAt.Format("2006-01-02"))
+				}
+				_ = w.Flush()
+				return nil
+			}
+
 			db, _, err := openAll(*configPath)
 			if err != nil {
 				return err
@@ -222,6 +273,29 @@ func followCmd(configPath *string) *cobra.Command {
 		Use:   "pending",
 		Short: "List pending follow requests",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if c := getClient(); c != nil {
+				data, err := c.ListPending(cmd.Context())
+				if err != nil {
+					return err
+				}
+				var requests []database.FollowRequest
+				if err := json.Unmarshal(data, &requests); err != nil {
+					fmt.Println(string(data))
+					return nil
+				}
+				if len(requests) == 0 {
+					fmt.Println("No pending follow requests.")
+					return nil
+				}
+				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+				_, _ = fmt.Fprintln(w, "ACTOR\tENDPOINT\tREQUESTED")
+				for _, r := range requests {
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", r.ActorURL, r.Endpoint, r.RequestedAt.Format("2006-01-02 15:04"))
+				}
+				_ = w.Flush()
+				return nil
+			}
+
 			db, _, err := openAll(*configPath)
 			if err != nil {
 				return err
@@ -250,9 +324,18 @@ func followCmd(configPath *string) *cobra.Command {
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "accept <domain|handle|actor-url>",
-		Short: "Accept a pending follow request and send Accept activity",
+		Short: "Accept a pending follow request",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if c := getClient(); c != nil {
+				res, err := c.AcceptFollow(cmd.Context(), args[0])
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Accepted follow from %s\n", res["accepted"])
+				return nil
+			}
+
 			db, identity, err := openAll(*configPath)
 			if err != nil {
 				return err
@@ -275,9 +358,18 @@ func followCmd(configPath *string) *cobra.Command {
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "reject <domain|handle|actor-url>",
-		Short: "Reject a pending follow request and send Reject activity",
+		Short: "Reject a pending follow request",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if c := getClient(); c != nil {
+				res, err := c.RejectFollow(cmd.Context(), args[0])
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Rejected follow from %s\n", res["rejected"])
+				return nil
+			}
+
 			db, identity, err := openAll(*configPath)
 			if err != nil {
 				return err
@@ -301,15 +393,39 @@ func followCmd(configPath *string) *cobra.Command {
 }
 
 func identityCmd(configPath *string) *cobra.Command {
+	var remote, token string
+
 	cmd := &cobra.Command{
 		Use:   "identity",
 		Short: "Manage this node's identity",
 	}
 
+	cmd.PersistentFlags().StringVar(&remote, "remote", "", "remote instance URL")
+	cmd.PersistentFlags().StringVar(&token, "token", "", "registry token for remote auth")
+
 	cmd.AddCommand(&cobra.Command{
 		Use:   "show",
 		Short: "Show this node's actor URL and public key",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if remote != "" {
+				c := admin.NewClient(remote, token)
+				info, err := c.GetIdentity(cmd.Context())
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Node:      %s\n", info["name"])
+				fmt.Printf("Actor URL: %s\n", info["actorURL"])
+				fmt.Printf("Key ID:    %s\n", info["keyID"])
+				fmt.Printf("Domain:    %s\n", info["domain"])
+				if info["accountDomain"] != info["domain"] {
+					fmt.Printf("Account:   %s\n", info["accountDomain"])
+				}
+				fmt.Printf("Handle:    @registry@%s\n", info["accountDomain"])
+				fmt.Printf("Endpoint:  %s\n", info["endpoint"])
+				fmt.Printf("Public Key:\n%s", info["publicKey"])
+				return nil
+			}
+
 			cfg, err := config.Load(*configPath)
 			if err != nil {
 				return err

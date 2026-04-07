@@ -1,0 +1,632 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/apoci/apoci/internal/activitypub"
+)
+
+// mockAPFederator is a test double for apFederator.
+// Each function field defaults to nil; set only what a given test needs.
+type mockAPFederator struct {
+	resolveFollowTargetFn func(ctx context.Context, input string) (string, error)
+	fetchActorFn          func(ctx context.Context, actorURL string) (*activitypub.Actor, error)
+	deliverActivityFn     func(ctx context.Context, inboxURL string, activityJSON []byte) error
+	sendAcceptFn          func(ctx context.Context, followerActorURL string) error
+	sendRejectFn          func(ctx context.Context, followerActorURL string) error
+}
+
+func (m *mockAPFederator) ResolveFollowTarget(ctx context.Context, input string) (string, error) {
+	if m.resolveFollowTargetFn != nil {
+		return m.resolveFollowTargetFn(ctx, input)
+	}
+	// Default: pass https:// URLs through unchanged (mirrors the real implementation).
+	return input, nil
+}
+
+func (m *mockAPFederator) FetchActor(ctx context.Context, actorURL string) (*activitypub.Actor, error) {
+	if m.fetchActorFn != nil {
+		return m.fetchActorFn(ctx, actorURL)
+	}
+	return nil, errors.New("fetchActor not configured")
+}
+
+func (m *mockAPFederator) DeliverActivity(ctx context.Context, inboxURL string, activityJSON []byte) error {
+	if m.deliverActivityFn != nil {
+		return m.deliverActivityFn(ctx, inboxURL, activityJSON)
+	}
+	return nil
+}
+
+func (m *mockAPFederator) SendAccept(ctx context.Context, followerActorURL string) error {
+	if m.sendAcceptFn != nil {
+		return m.sendAcceptFn(ctx, followerActorURL)
+	}
+	return errors.New("sendAccept not configured")
+}
+
+func (m *mockAPFederator) SendReject(ctx context.Context, followerActorURL string) error {
+	if m.sendRejectFn != nil {
+		return m.sendRejectFn(ctx, followerActorURL)
+	}
+	return errors.New("sendReject not configured")
+}
+
+// testServerWithMock creates a test Server with the given mock federator.
+func testServerWithMock(t *testing.T, fed apFederator) *Server {
+	t.Helper()
+	s := testServer(t)
+	s.apFed = fed
+	return s
+}
+
+// adminActor returns a minimal Actor used throughout admin tests.
+func adminActor(actorURL, inboxURL string) *activitypub.Actor {
+	return &activitypub.Actor{
+		ID:    actorURL,
+		Inbox: inboxURL,
+		PublicKey: activitypub.ActorPublicKey{
+			ID:           actorURL + "#main-key",
+			Owner:        actorURL,
+			PublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----",
+		},
+	}
+}
+
+// --- GET /api/admin/identity ---
+
+func TestAdminGetIdentityFields(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/admin/identity", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+
+	var info map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&info))
+	require.Equal(t, "test-node", info["name"])
+	require.Equal(t, "test.example.com", info["domain"])
+	require.Equal(t, "test.example.com", info["accountDomain"])
+	require.Equal(t, "https://test.example.com", info["endpoint"])
+	require.NotEmpty(t, info["actorURL"])
+	require.NotEmpty(t, info["keyID"])
+	require.Contains(t, info["publicKey"], "-----BEGIN PUBLIC KEY-----")
+}
+
+// --- GET /api/admin/follows ---
+
+func TestAdminListFollowsEmpty(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/admin/follows", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var follows []any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&follows))
+	require.Empty(t, follows)
+}
+
+func TestAdminListFollowsWithData(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = "test-token"
+	ctx := context.Background()
+
+	require.NoError(t, s.db.AddFollow(ctx, "https://alice.example.com/ap/actor", "pubkey-alice", "https://alice.example.com"))
+	require.NoError(t, s.db.AddFollow(ctx, "https://bob.example.com/ap/actor", "pubkey-bob", "https://bob.example.com"))
+
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/admin/follows", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// database.Follow has no json tags → fields are serialised with their Go names.
+	var follows []struct {
+		ActorURL string `json:"ActorURL"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&follows))
+	require.Len(t, follows, 2)
+
+	seen := make(map[string]bool)
+	for _, f := range follows {
+		seen[f.ActorURL] = true
+	}
+	require.True(t, seen["https://alice.example.com/ap/actor"])
+	require.True(t, seen["https://bob.example.com/ap/actor"])
+}
+
+func TestAdminListFollowsInternalError(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	_ = s.db.Close() // force DB error
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/admin/follows", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+}
+
+// --- GET /api/admin/follows/pending ---
+
+func TestAdminListPendingEmpty(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/admin/follows/pending", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var requests []any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&requests))
+	require.Empty(t, requests)
+}
+
+func TestAdminListPendingWithData(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = "test-token"
+	ctx := context.Background()
+
+	require.NoError(t, s.db.AddFollowRequest(ctx, "https://carol.example.com/ap/actor", "pubkey-carol", "https://carol.example.com"))
+
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/admin/follows/pending", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// database.FollowRequest has no json tags → Go field names.
+	var requests []struct {
+		ActorURL string `json:"ActorURL"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&requests))
+	require.Len(t, requests, 1)
+	require.Equal(t, "https://carol.example.com/ap/actor", requests[0].ActorURL)
+}
+
+// --- POST /api/admin/follows ---
+
+func TestAdminAddFollowMissingTarget(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	for _, body := range []string{`{}`, `{"target":""}`, `not-json`} {
+		req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		require.Equal(t, http.StatusBadRequest, resp.StatusCode, "body: %s", body)
+	}
+}
+
+func TestAdminAddFollowResolveError(t *testing.T) {
+	fed := &mockAPFederator{
+		resolveFollowTargetFn: func(_ context.Context, _ string) (string, error) {
+			return "", errors.New("resolve failed")
+		},
+	}
+	s := testServerWithMock(t, fed)
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows", strings.NewReader(`{"target":"bad-target"}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
+}
+
+func TestAdminAddFollowFetchActorError(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	fed := &mockAPFederator{
+		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
+			return nil, errors.New("unreachable")
+		},
+	}
+	s := testServerWithMock(t, fed)
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
+}
+
+func TestAdminAddFollowDeliveryError(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	const inboxURL = "https://peer.example.com/ap/inbox"
+	fed := &mockAPFederator{
+		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
+			return adminActor(actorURL, inboxURL), nil
+		},
+		deliverActivityFn: func(_ context.Context, _ string, _ []byte) error {
+			return errors.New("delivery failed")
+		},
+	}
+	s := testServerWithMock(t, fed)
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
+}
+
+func TestAdminAddFollowSuccess(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	const inboxURL = "https://peer.example.com/ap/inbox"
+
+	var deliveredInbox string
+	fed := &mockAPFederator{
+		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
+			return adminActor(actorURL, inboxURL), nil
+		},
+		deliverActivityFn: func(_ context.Context, inbox string, _ []byte) error {
+			deliveredInbox = inbox
+			return nil
+		},
+	}
+	s := testServerWithMock(t, fed)
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.Equal(t, actorURL, result["followed"])
+	require.Equal(t, inboxURL, deliveredInbox)
+
+	ctx := context.Background()
+	fr, err := s.db.GetFollowRequest(ctx, actorURL)
+	require.NoError(t, err)
+	require.NotNil(t, fr, "follow request should be persisted")
+}
+
+// --- POST /api/admin/follows/accept ---
+
+func TestAdminAcceptFollowMissingTarget(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows/accept", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestAdminAcceptFollowSendAcceptError(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	fed := &mockAPFederator{
+		sendAcceptFn: func(_ context.Context, _ string) error {
+			return errors.New("no pending request")
+		},
+	}
+	s := testServerWithMock(t, fed)
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows/accept", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+}
+
+func TestAdminAcceptFollowSuccess(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	const inboxURL = "https://peer.example.com/ap/inbox"
+
+	ctx := context.Background()
+
+	var acceptedURL string
+	fed := &mockAPFederator{
+		sendAcceptFn: func(_ context.Context, followerActorURL string) error {
+			acceptedURL = followerActorURL
+			// Replicate what the real SendAccept does to the DB.
+			return nil
+		},
+	}
+	s := testServerWithMock(t, fed)
+	s.cfg.RegistryToken = "test-token"
+	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL))
+
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows/accept", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.Equal(t, actorURL, result["accepted"])
+	require.Equal(t, actorURL, acceptedURL)
+}
+
+// --- POST /api/admin/follows/reject ---
+
+func TestAdminRejectFollowMissingTarget(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows/reject", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestAdminRejectFollowSendRejectError(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	fed := &mockAPFederator{
+		sendRejectFn: func(_ context.Context, _ string) error {
+			return errors.New("no pending request")
+		},
+	}
+	s := testServerWithMock(t, fed)
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows/reject", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+}
+
+func TestAdminRejectFollowSuccess(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	const inboxURL = "https://peer.example.com/ap/inbox"
+
+	ctx := context.Background()
+
+	var rejectedURL string
+	fed := &mockAPFederator{
+		sendRejectFn: func(_ context.Context, followerActorURL string) error {
+			rejectedURL = followerActorURL
+			return nil
+		},
+	}
+	s := testServerWithMock(t, fed)
+	s.cfg.RegistryToken = "test-token"
+	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL))
+
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows/reject", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.Equal(t, actorURL, result["rejected"])
+	require.Equal(t, actorURL, rejectedURL)
+}
+
+// --- DELETE /api/admin/follows ---
+
+func TestAdminRemoveFollowMissingTarget(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("DELETE", srv.URL+"/api/admin/follows", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestAdminRemoveFollowNotFound(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("DELETE", srv.URL+"/api/admin/follows", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+}
+
+func TestAdminRemoveFollowSuccess(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	ctx := context.Background()
+
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = "test-token"
+	require.NoError(t, s.db.AddFollow(ctx, actorURL, "pubkey-peer", "https://peer.example.com"))
+
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("DELETE", srv.URL+"/api/admin/follows", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.Equal(t, actorURL, result["removed"])
+
+	f, err := s.db.GetFollow(ctx, actorURL)
+	require.NoError(t, err)
+	require.Nil(t, f, "follow should be removed from the DB")
+}
+
+// --- Auth enforcement ---
+
+func TestAdminAllEndpointsRequireAuth(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = "test-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	type endpoint struct {
+		method string
+		path   string
+		body   string
+	}
+	endpoints := []endpoint{
+		{http.MethodGet, "/api/admin/identity", ""},
+		{http.MethodGet, "/api/admin/follows", ""},
+		{http.MethodGet, "/api/admin/follows/pending", ""},
+		{http.MethodPost, "/api/admin/follows", `{"target":"https://x.example.com/ap/actor"}`},
+		{http.MethodPost, "/api/admin/follows/accept", `{"target":"https://x.example.com/ap/actor"}`},
+		{http.MethodPost, "/api/admin/follows/reject", `{"target":"https://x.example.com/ap/actor"}`},
+		{http.MethodDelete, "/api/admin/follows", `{"target":"https://x.example.com/ap/actor"}`},
+	}
+
+	for _, ep := range endpoints {
+		req, _ := http.NewRequest(ep.method, srv.URL+ep.path, strings.NewReader(ep.body))
+		if ep.body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		require.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+			"%s %s without auth should return 401", ep.method, ep.path)
+	}
+}
+
+func TestAdminAllEndpointsRejectWrongToken(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = "correct-token"
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/admin/follows", nil)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
