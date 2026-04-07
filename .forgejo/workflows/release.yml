@@ -1,10 +1,8 @@
 ---
-name: Build and push container images
+name: Release
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*"
 
@@ -13,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-images:
+  container:
     runs-on: docker
     steps:
       - uses: https://data.forgejo.org/actions/checkout@v5
@@ -34,8 +32,6 @@ jobs:
           images: |
             git.erwanleboucher.dev/${{ vars.USERNAME }}/apoci
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=long
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
@@ -47,3 +43,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
