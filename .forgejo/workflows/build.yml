@@ -27,7 +27,7 @@ jobs:
         uses: https://data.forgejo.org/docker/metadata-action@v5
         with:
           images: |
-            git.erwanleboucher.dev/${{ vars.USERNAME }}/atoci
+            git.erwanleboucher.dev/${{ vars.USERNAME }}/apoci
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=long
