@@ -33,5 +33,8 @@ COPY --chown=1000:1000 --from=builder /apoci /apoci/apoci
 VOLUME "/apoci/storage"
 EXPOSE 5000
 
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD wget -q --spider http://localhost:5000/healthz || exit 1
+
 ENTRYPOINT ["/apoci/apoci"]
 CMD ["serve", "-c", "/apoci/config/apoci.yaml"]
