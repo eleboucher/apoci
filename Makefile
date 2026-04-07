@@ -19,9 +19,6 @@ lint-fix:
 fmt:
 	golangci-lint fmt ./...
 
-fmt:
-	go fmt ./...
-
 tidy:
 	go mod tidy
 
