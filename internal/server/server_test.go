@@ -41,6 +41,7 @@ func testServer(t *testing.T) *Server {
 		Domain:        "test.example.com",
 		AccountDomain: "test.example.com",
 		Listen:        ":0",
+		RegistryToken: testRegistryToken,
 		ImmutableTags: `^v[0-9]`,
 		Peering: config.Peering{
 			HealthCheckInterval: 30 * time.Second,
@@ -325,16 +326,22 @@ func TestAdminFollowsListEmpty(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestRegistryAuthMiddlewareEmptyTokenAllowsAll(t *testing.T) {
+func TestRegistryAuthMiddlewareEmptyTokenBlocksWrites(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
 	handler := registryAuthMiddleware("")(inner)
 
+	// Writes should be blocked when no token is configured
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/v2/test/manifests/latest", nil)
 	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusForbidden, rec.Code, "empty token config should block writes")
 
-	require.Equal(t, http.StatusOK, rec.Code, "empty token config should allow all")
+	// Reads should still be allowed
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/v2/test/manifests/latest", nil)
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, "empty token config should allow reads")
 }

@@ -22,6 +22,12 @@ func mustNewRequest(t *testing.T, method, url string, body io.Reader) *http.Requ
 	return req
 }
 
+// authReq adds the registry Bearer token to a request for write operations.
+func authReq(req *http.Request) *http.Request {
+	req.Header.Set("Authorization", "Bearer "+testRegistryToken)
+	return req
+}
+
 func TestE2EFullBlobAndManifestFlow(t *testing.T) {
 	s := testServer(t)
 	srv := httptest.NewServer(s.routes())
@@ -32,7 +38,7 @@ func TestE2EFullBlobAndManifestFlow(t *testing.T) {
 	blobHash := sha256.Sum256(blobData)
 	blobDigest := "sha256:" + hex.EncodeToString(blobHash[:])
 
-	req := mustNewRequest(t, "POST", srv.URL+"/v2/test.example.com/e2e/blobs/uploads/?digest="+blobDigest, bytes.NewReader(blobData))
+	req := authReq(mustNewRequest(t, "POST", srv.URL+"/v2/test.example.com/e2e/blobs/uploads/?digest="+blobDigest, bytes.NewReader(blobData)))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -48,7 +54,7 @@ func TestE2EFullBlobAndManifestFlow(t *testing.T) {
 
 	// 3. Push manifest referencing the blob
 	manifest := fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"%s","size":%d,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`, blobDigest, len(blobData))
-	req = mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/e2e/manifests/v1.0", strings.NewReader(manifest))
+	req = authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/e2e/manifests/v1.0", strings.NewReader(manifest)))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -89,7 +95,7 @@ func TestE2ECosignReferrersViaHTTP(t *testing.T) {
 
 	// Push an image manifest
 	imageManifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:abc","size":0,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`
-	req := mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/cosign/manifests/v1", strings.NewReader(imageManifest))
+	req := authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/cosign/manifests/v1", strings.NewReader(imageManifest)))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -99,7 +105,7 @@ func TestE2ECosignReferrersViaHTTP(t *testing.T) {
 
 	// Push a cosign signature manifest with subject pointing to image
 	sigManifest := fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","artifactType":"application/vnd.dev.cosign.simplesigning.v1+json","config":{"digest":"sha256:def","size":0,"mediaType":"application/vnd.oci.empty.v1+json"},"layers":[],"subject":{"digest":"%s","mediaType":"application/vnd.oci.image.manifest.v1+json","size":%d}}`, imageDigest, imageSize)
-	req = mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/cosign/manifests/sha256-sig.sig", strings.NewReader(sigManifest))
+	req = authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/cosign/manifests/sha256-sig.sig", strings.NewReader(sigManifest)))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -134,7 +140,7 @@ func TestE2ETagImmutabilityViaHTTP(t *testing.T) {
 	manifest2 := `{"schemaVersion":2,"new":true}`
 
 	// First push to v1.0 succeeds
-	req := mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/immutable/manifests/v1.0", strings.NewReader(manifest1))
+	req := authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/immutable/manifests/v1.0", strings.NewReader(manifest1)))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -142,7 +148,7 @@ func TestE2ETagImmutabilityViaHTTP(t *testing.T) {
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "first push")
 
 	// Second push to v1.0 is rejected
-	req = mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/immutable/manifests/v1.0", strings.NewReader(manifest2))
+	req = authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/immutable/manifests/v1.0", strings.NewReader(manifest2)))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -152,7 +158,7 @@ func TestE2ETagImmutabilityViaHTTP(t *testing.T) {
 	// Push to 'latest' succeeds twice (not semver)
 	for i := range 2 {
 		body := fmt.Sprintf(`{"schemaVersion":2,"iteration":%d}`, i)
-		req = mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/immutable/manifests/latest", strings.NewReader(body))
+		req = authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/immutable/manifests/latest", strings.NewReader(body)))
 		req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 		resp, err = http.DefaultClient.Do(req)
 		require.NoError(t, err)
@@ -169,7 +175,7 @@ func TestE2ENamespaceEnforcementViaHTTP(t *testing.T) {
 	manifest := `{"schemaVersion":2}`
 
 	// Push to correct namespace succeeds
-	req := mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/myapp/manifests/v1", strings.NewReader(manifest))
+	req := authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/myapp/manifests/v1", strings.NewReader(manifest)))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -177,7 +183,7 @@ func TestE2ENamespaceEnforcementViaHTTP(t *testing.T) {
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "namespaced push")
 
 	// Push to wrong namespace is rejected
-	req = mustNewRequest(t, "PUT", srv.URL+"/v2/someone-else/myapp/manifests/v1", strings.NewReader(manifest))
+	req = authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/someone-else/myapp/manifests/v1", strings.NewReader(manifest)))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -195,7 +201,7 @@ func TestE2EDeleteFlowViaHTTP(t *testing.T) {
 	blobHash := sha256.Sum256(blobData)
 	blobDigest := "sha256:" + hex.EncodeToString(blobHash[:])
 
-	req := mustNewRequest(t, "POST", srv.URL+"/v2/test.example.com/deltest/blobs/uploads/?digest="+blobDigest, bytes.NewReader(blobData))
+	req := authReq(mustNewRequest(t, "POST", srv.URL+"/v2/test.example.com/deltest/blobs/uploads/?digest="+blobDigest, bytes.NewReader(blobData)))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -203,7 +209,7 @@ func TestE2EDeleteFlowViaHTTP(t *testing.T) {
 
 	// Push manifest
 	manifest := fmt.Sprintf(`{"schemaVersion":2,"config":{"digest":"%s","size":%d},"layers":[]}`, blobDigest, len(blobData))
-	req = mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/deltest/manifests/v1", strings.NewReader(manifest))
+	req = authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/deltest/manifests/v1", strings.NewReader(manifest)))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -211,7 +217,7 @@ func TestE2EDeleteFlowViaHTTP(t *testing.T) {
 	_ = resp.Body.Close()
 
 	// Delete manifest
-	req = mustNewRequest(t, "DELETE", srv.URL+"/v2/test.example.com/deltest/manifests/"+manifestDigest, nil)
+	req = authReq(mustNewRequest(t, "DELETE", srv.URL+"/v2/test.example.com/deltest/manifests/"+manifestDigest, nil))
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
@@ -301,7 +307,7 @@ func TestE2EPushCreatesActivityInOutbox(t *testing.T) {
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
-	req := mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/activity/manifests/v1", strings.NewReader(`{"schemaVersion":2}`))
+	req := authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/activity/manifests/v1", strings.NewReader(`{"schemaVersion":2}`)))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)

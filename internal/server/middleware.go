@@ -78,8 +78,12 @@ func loggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 func registryAuthMiddleware(token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if token == "" || r.Method == http.MethodGet || r.Method == http.MethodHead {
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
 				next.ServeHTTP(w, r)
+				return
+			}
+			if token == "" {
+				http.Error(w, "registry write access requires a configured token", http.StatusForbidden)
 				return
 			}
 

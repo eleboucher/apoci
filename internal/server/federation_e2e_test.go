@@ -93,6 +93,7 @@ func TestTwoNodeFederation(t *testing.T) {
 			Domain:        host,
 			AccountDomain: host,
 			Listen:        ":0",
+			RegistryToken: testRegistryToken,
 			ImmutableTags: `^v[0-9]`,
 			Federation:    config.Federation{AutoAccept: "all"},
 			Peering: config.Peering{
@@ -177,9 +178,9 @@ func TestTwoNodeFederation(t *testing.T) {
 	blobHash := sha256.Sum256(blobData)
 	blobDigest := "sha256:" + hex.EncodeToString(blobHash[:])
 
-	pushBlobReq := mustNewRequest(t, "POST",
+	pushBlobReq := authReq(mustNewRequest(t, "POST",
 		aliceHTTP.URL+"/v2/"+repoName+"/blobs/uploads/?digest="+blobDigest,
-		bytes.NewReader(blobData))
+		bytes.NewReader(blobData)))
 	pushBlobReq.Header.Set("Content-Type", "application/octet-stream")
 	resp, err = http.DefaultClient.Do(pushBlobReq)
 	require.NoError(t, err)
@@ -190,9 +191,9 @@ func TestTwoNodeFederation(t *testing.T) {
 	manifest := fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"%s","size":%d,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`,
 		blobDigest, len(blobData))
 
-	pushManifestReq := mustNewRequest(t, "PUT",
+	pushManifestReq := authReq(mustNewRequest(t, "PUT",
 		aliceHTTP.URL+"/v2/"+repoName+"/manifests/latest",
-		bytes.NewReader([]byte(manifest)))
+		bytes.NewReader([]byte(manifest))))
 	pushManifestReq.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err = http.DefaultClient.Do(pushManifestReq)
 	require.NoError(t, err)
