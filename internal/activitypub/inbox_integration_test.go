@@ -3,6 +3,9 @@ package activitypub
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,6 +31,7 @@ func signedInboxPost(t *testing.T, sender *Identity, activity any) *http.Request
 
 // setupInboxTest creates two identities (alice and bob), an inbox handler for bob,
 // and an HTTP server that serves alice's actor document (so bob can fetch the public key).
+// It returns the sender domain (hostname of alice's resolved actor URL) for use in repo names.
 func setupInboxTest(t *testing.T) (alice *Identity, bob *Identity, inbox *InboxHandler, db *database.DB) {
 	t.Helper()
 	dir := t.TempDir()
@@ -48,7 +52,6 @@ func setupInboxTest(t *testing.T) (alice *Identity, bob *Identity, inbox *InboxH
 		AutoAccept:      "none",
 	}, discardLogger())
 
-	// Start an HTTP server that serves alice's actor document
 	alicePEM, _ := alice.PublicKeyPEM()
 	aliceActor := Actor{
 		Context: []any{"https://www.w3.org/ns/activitystreams", "https://w3id.org/security/v1"},
@@ -69,7 +72,6 @@ func setupInboxTest(t *testing.T) (alice *Identity, bob *Identity, inbox *InboxH
 	}))
 	t.Cleanup(actorSrv.Close)
 
-	// Override alice's actor URL to point to the test server
 	alice.ActorURL = actorSrv.URL + "/ap/actor"
 	alice.Domain = "alice.test"
 	aliceActor.ID = alice.ActorURL
@@ -77,6 +79,14 @@ func setupInboxTest(t *testing.T) (alice *Identity, bob *Identity, inbox *InboxH
 	aliceActor.PublicKey.Owner = alice.ActorURL
 
 	return alice, bob, inbox, db
+}
+
+func aliceRepoName(alice *Identity, suffix string) string {
+	domain, _ := senderDomainFromActorURL(alice.ActorURL)
+	if suffix == "" {
+		return domain + "/app"
+	}
+	return domain + "/" + suffix
 }
 
 func TestInboxFollowAcceptFlow(t *testing.T) {
@@ -219,10 +229,10 @@ func TestInboxCreateManifest(t *testing.T) {
 	alice, _, inbox, db := setupInboxTest(t)
 	ctx := context.Background()
 
-	// Alice must be a follower for content activities to be accepted
 	alicePEM, _ := alice.PublicKeyPEM()
 	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
 
+	repo := aliceRepoName(alice, "app")
 	create := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
 		"id":       alice.ActorURL + "#create-1",
@@ -230,7 +240,7 @@ func TestInboxCreateManifest(t *testing.T) {
 		"actor":    alice.ActorURL,
 		"object": map[string]any{
 			"type":          "OCIManifest",
-			"ociRepository": "test/app",
+			"ociRepository": repo,
 			"ociDigest":     "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 			"ociMediaType":  "application/vnd.oci.image.manifest.v1+json",
 			"ociSize":       float64(256),
@@ -243,11 +253,10 @@ func TestInboxCreateManifest(t *testing.T) {
 
 	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
 
-	// Verify repository was created with alice as owner
-	repo, err := db.GetRepository(ctx, "test/app")
+	repoObj, err := db.GetRepository(ctx, repo)
 	require.NoError(t, err)
-	require.NotNil(t, repo, "expected repository to be created")
-	require.Equal(t, alice.ActorURL, repo.OwnerID)
+	require.NotNil(t, repoObj)
+	require.Equal(t, alice.ActorURL, repoObj.OwnerID)
 }
 
 func TestInboxCreateManifestRejectsNonFollower(t *testing.T) {
@@ -281,13 +290,13 @@ func TestInboxUpdateTag(t *testing.T) {
 	alicePEM, _ := alice.PublicKeyPEM()
 	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
 
-	// Create the repo and a manifest first
+	repoName := aliceRepoName(alice, "app")
 	digest := "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd"
-	_, err := db.GetOrCreateRepository(ctx, "test/app", alice.ActorURL)
+	_, err := db.GetOrCreateRepository(ctx, repoName, alice.ActorURL)
 	require.NoError(t, err)
-	repo, _ := db.GetRepository(ctx, "test/app")
+	repoObj, _ := db.GetRepository(ctx, repoName)
 	require.NoError(t, db.PutManifest(ctx, &database.Manifest{
-		RepositoryID: repo.ID,
+		RepositoryID: repoObj.ID,
 		Digest:       digest,
 		MediaType:    "application/vnd.oci.image.manifest.v1+json",
 		SizeBytes:    100,
@@ -301,7 +310,7 @@ func TestInboxUpdateTag(t *testing.T) {
 		"actor":    alice.ActorURL,
 		"object": map[string]any{
 			"type":          "OCITag",
-			"ociRepository": "test/app",
+			"ociRepository": repoName,
 			"ociTag":        "latest",
 			"ociDigest":     digest,
 		},
@@ -313,9 +322,9 @@ func TestInboxUpdateTag(t *testing.T) {
 
 	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
 
-	m, err := db.GetManifestByTag(ctx, repo.ID, "latest")
+	m, err := db.GetManifestByTag(ctx, repoObj.ID, "latest")
 	require.NoError(t, err)
-	require.NotNil(t, m, "expected tag to resolve to manifest")
+	require.NotNil(t, m)
 	require.Equal(t, digest, m.Digest)
 }
 
@@ -386,11 +395,11 @@ func TestInboxOwnershipEnforcement(t *testing.T) {
 	alicePEM, _ := alice.PublicKeyPEM()
 	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
 
-	// Create repo owned by someone else
-	_, err := db.GetOrCreateRepository(ctx, "bobs/repo", "https://bob.test/ap/actor")
+	repoName := aliceRepoName(alice, "repo")
+	otherActor := "https://" + aliceRepoName(alice, "ap/other-actor")
+	_, err := db.GetOrCreateRepository(ctx, repoName, otherActor)
 	require.NoError(t, err)
 
-	// Alice tries to push a manifest to bob's repo
 	create := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
 		"id":       alice.ActorURL + "#create-steal",
@@ -398,7 +407,7 @@ func TestInboxOwnershipEnforcement(t *testing.T) {
 		"actor":    alice.ActorURL,
 		"object": map[string]any{
 			"type":          "OCIManifest",
-			"ociRepository": "bobs/repo",
+			"ociRepository": repoName,
 			"ociDigest":     "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 			"ociMediaType":  "application/vnd.oci.image.manifest.v1+json",
 			"ociSize":       float64(256),
@@ -410,4 +419,146 @@ func TestInboxOwnershipEnforcement(t *testing.T) {
 	inbox.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+}
+
+// manifestDigestAndContent returns content bytes and their sha256 digest string.
+func manifestDigestAndContent(content []byte) (digest string, encoded string) {
+	h := sha256.Sum256(content)
+	digest = "sha256:" + hex.EncodeToString(h[:])
+	encoded = base64.StdEncoding.EncodeToString(content)
+	return
+}
+
+func TestInboxCreateManifestWithContent_DigestMatch(t *testing.T) {
+	alice, _, inbox, db := setupInboxTest(t)
+	ctx := context.Background()
+
+	alicePEM, _ := alice.PublicKeyPEM()
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+
+	content := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`)
+	digest, encoded := manifestDigestAndContent(content)
+	repoName := aliceRepoName(alice, "app")
+
+	create := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#create-content",
+		"type":     "Create",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type":          "OCIManifest",
+			"ociRepository": repoName,
+			"ociDigest":     digest,
+			"ociMediaType":  "application/vnd.oci.image.manifest.v1+json",
+			"ociSize":       float64(len(content)),
+			"ociContent":    encoded,
+		},
+	}
+
+	req := signedInboxPost(t, alice, create)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+
+	repoObj, err := db.GetRepository(ctx, repoName)
+	require.NoError(t, err)
+	require.NotNil(t, repoObj)
+	m, err := db.GetManifestByDigest(ctx, repoObj.ID, digest)
+	require.NoError(t, err)
+	require.NotNil(t, m)
+	require.Equal(t, content, m.Content)
+}
+
+func TestInboxCreateManifestWithContent_DigestMismatch(t *testing.T) {
+	alice, _, inbox, db := setupInboxTest(t)
+	ctx := context.Background()
+
+	alicePEM, _ := alice.PublicKeyPEM()
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+
+	legitimateContent := []byte(`{"schemaVersion":2}`)
+	digest, _ := manifestDigestAndContent(legitimateContent)
+	malwareContent := []byte(`<malware>not what you asked for</malware>`)
+	tamperedEncoded := base64.StdEncoding.EncodeToString(malwareContent)
+
+	create := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#create-tampered",
+		"type":     "Create",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type":          "OCIManifest",
+			"ociRepository": aliceRepoName(alice, "app"),
+			"ociDigest":     digest,
+			"ociMediaType":  "application/vnd.oci.image.manifest.v1+json",
+			"ociSize":       float64(len(legitimateContent)),
+			"ociContent":    tamperedEncoded,
+		},
+	}
+
+	req := signedInboxPost(t, alice, create)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code, "tampered content must be rejected")
+}
+
+func TestInboxCreateManifestWrongDomain(t *testing.T) {
+	alice, _, inbox, db := setupInboxTest(t)
+	ctx := context.Background()
+
+	alicePEM, _ := alice.PublicKeyPEM()
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+
+	create := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#create-squatter",
+		"type":     "Create",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type":          "OCIManifest",
+			"ociRepository": "someotherdomain.example/app",
+			"ociDigest":     "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
+			"ociMediaType":  "application/vnd.oci.image.manifest.v1+json",
+			"ociSize":       float64(256),
+		},
+	}
+
+	req := signedInboxPost(t, alice, create)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusForbidden, rec.Code, "pushing to another domain must be rejected")
+}
+
+func TestInboxUpdateTagUnknownManifest(t *testing.T) {
+	alice, _, inbox, db := setupInboxTest(t)
+	ctx := context.Background()
+
+	alicePEM, _ := alice.PublicKeyPEM()
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+
+	repoName := aliceRepoName(alice, "app")
+	_, err := db.GetOrCreateRepository(ctx, repoName, alice.ActorURL)
+	require.NoError(t, err)
+
+	update := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#update-ghost",
+		"type":     "Update",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type":          "OCITag",
+			"ociRepository": repoName,
+			"ociTag":        "latest",
+			"ociDigest":     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+	}
+
+	req := signedInboxPost(t, alice, update)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code, "tag pointing to non-existent manifest must be rejected")
 }

@@ -107,9 +107,11 @@ apoci identity show
 
 1. **Follow gate** -- only approved peers can send activities
 2. **HTTP Signatures** -- RSA-SHA256 on every request, replay-protected (5min window + seen-signature cache)
-3. **Origin ownership** -- a followed peer can only write to repos it created
-4. **Content addressing** -- SHA-256 verified on every blob fetch
-5. **SSRF protection** -- private IPs blocked after DNS resolution (prevents rebinding)
+3. **Namespace enforcement** -- writes are always scoped to the node's domain; the namespace is derived from `endpoint` automatically, so a node at `foo.com` can only push to `foo.com/*`
+4. **Origin ownership** -- a followed peer can only write to repos it created
+5. **Content addressing** -- SHA-256 verified on every blob fetch
+6. **SSRF protection** -- private IPs blocked after DNS resolution (prevents rebinding)
+7. **Rate limiting** -- mutating OCI requests (push blob, push manifest, start upload) are rate-limited per IP (5 req/s, burst 20)
 
 ## ActivityPub
 

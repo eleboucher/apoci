@@ -137,6 +137,7 @@ func (db *DB) migrate(ctx context.Context) error {
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_peer_blobs_actor_digest ON peer_blobs (peer_actor, blob_digest)",
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_repo_owners_pk ON repository_owners (repository_id, owner_id)",
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_manifest_layers_pk ON manifest_layers (manifest_id, blob_digest)",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_queue_activity_inbox ON delivery_queue (activity_id, inbox_url)",
 	}
 	for _, ddl := range compositeConstraints {
 		if _, err := db.bun.ExecContext(ctx, ddl); err != nil {

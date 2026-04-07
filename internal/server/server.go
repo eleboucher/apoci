@@ -79,6 +79,7 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 	}, logger)
 	inboxHandler.SetBlobReplicator(blobReplicator)
 	inboxHandler.SetEnqueueFunc(enqueueFunc)
+	inboxHandler.SetActorCache(apPublisher.ActorCache())
 
 	s := &Server{
 		cfg:                 cfg,

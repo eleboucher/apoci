@@ -26,7 +26,7 @@ func TestSpecManifestPushReturnsDigestHeader(t *testing.T) {
 
 	manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:abc","size":0,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`
 
-	req, _ := http.NewRequest("PUT", srv.URL+"/v2/test/spec/manifests/v1", strings.NewReader(manifest))
+	req, _ := http.NewRequest("PUT", srv.URL+"/v2/test.example.com/test/spec/manifests/v1", strings.NewReader(manifest))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -45,7 +45,7 @@ func TestSpecManifestPushReturnsDigestHeader(t *testing.T) {
 func TestSpecBlobUploadReturnsLocationHeader(t *testing.T) {
 	_, srv := testRegistry(t)
 
-	req, _ := http.NewRequest("POST", srv.URL+"/v2/test/spec/blobs/uploads/", nil)
+	req, _ := http.NewRequest("POST", srv.URL+"/v2/test.example.com/test/spec/blobs/uploads/", nil)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
@@ -99,14 +99,14 @@ func TestSpecManifestDeleteReturns202(t *testing.T) {
 
 	// Push a manifest first
 	manifest := `{"schemaVersion":2}`
-	req, _ := http.NewRequest("PUT", srv.URL+"/v2/test/del/manifests/v1", strings.NewReader(manifest))
+	req, _ := http.NewRequest("PUT", srv.URL+"/v2/test.example.com/test/del/manifests/v1", strings.NewReader(manifest))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, _ := http.DefaultClient.Do(req)
 	_ = resp.Body.Close()
 	digest := resp.Header.Get("Docker-Content-Digest")
 
 	// Delete by digest
-	req, _ = http.NewRequest("DELETE", srv.URL+"/v2/test/del/manifests/"+digest, nil)
+	req, _ = http.NewRequest("DELETE", srv.URL+"/v2/test.example.com/test/del/manifests/"+digest, nil)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
@@ -118,13 +118,13 @@ func TestSpecManifestHeadReturnsDescriptor(t *testing.T) {
 	_, srv := testRegistry(t)
 
 	manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:abc","size":0},"layers":[]}`
-	req, _ := http.NewRequest("PUT", srv.URL+"/v2/test/head/manifests/v1", strings.NewReader(manifest))
+	req, _ := http.NewRequest("PUT", srv.URL+"/v2/test.example.com/test/head/manifests/v1", strings.NewReader(manifest))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, _ := http.DefaultClient.Do(req)
 	_ = resp.Body.Close()
 
 	// HEAD request
-	req, _ = http.NewRequest("HEAD", srv.URL+"/v2/test/head/manifests/v1", nil)
+	req, _ = http.NewRequest("HEAD", srv.URL+"/v2/test.example.com/test/head/manifests/v1", nil)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
@@ -141,7 +141,7 @@ func TestSpecCosignTagFormatAccepted(t *testing.T) {
 	manifest := `{"schemaVersion":2}`
 	cosignTag := "sha256-abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890.sig"
 
-	req, _ := http.NewRequest("PUT", srv.URL+"/v2/test/cosign/manifests/"+cosignTag, strings.NewReader(manifest))
+	req, _ := http.NewRequest("PUT", srv.URL+"/v2/test.example.com/test/cosign/manifests/"+cosignTag, strings.NewReader(manifest))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -157,12 +157,12 @@ func TestSpecTagsListPagination(t *testing.T) {
 	// Push 3 tags
 	manifest := []byte(`{"schemaVersion":2}`)
 	for _, tag := range []string{"a", "b", "c"} {
-		_, err := reg.PushManifest(ctx, "test/pagination", tag, manifest, "application/vnd.oci.image.manifest.v1+json")
+		_, err := reg.PushManifest(ctx, "test.example.com/test/pagination", tag, manifest, "application/vnd.oci.image.manifest.v1+json")
 		require.NoError(t, err)
 	}
 
 	// List with limit
-	resp, err := http.Get(srv.URL + "/v2/test/pagination/tags/list?n=2")
+	resp, err := http.Get(srv.URL + "/v2/test.example.com/test/pagination/tags/list?n=2")
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 

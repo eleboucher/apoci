@@ -335,4 +335,31 @@ func TestFollowRequests(t *testing.T) {
 	require.Error(t, err, "expected error")
 }
 
+func TestBlobPutDoesNotOverwriteSizeFromPeerAnnouncement(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	mt := "application/octet-stream"
+	require.NoError(t, db.PutBlob(ctx, "sha256:sizetest", 1024, &mt, true))
+
+	// Peer announces the same digest with a wrong size — should not overwrite.
+	require.NoError(t, db.PutBlob(ctx, "sha256:sizetest", 9999, nil, false))
+
+	blob, err := db.GetBlob(ctx, "sha256:sizetest")
+	require.NoError(t, err)
+	require.Equal(t, int64(1024), blob.SizeBytes, "size must not be overwritten by peer announcement")
+}
+
+func TestEnqueueDeliveryIdempotent(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, db.EnqueueDelivery(ctx, "activity-1", "https://inbox.example.com", []byte(`{}`)))
+	require.NoError(t, db.EnqueueDelivery(ctx, "activity-1", "https://inbox.example.com", []byte(`{}`)))
+
+	pending, err := db.PendingDeliveries(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "duplicate enqueue must be deduplicated")
+}
+
 func nopLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }

@@ -83,18 +83,18 @@ func TestFederatedBlobPull(t *testing.T) {
 	ctx := context.Background()
 
 	// Create repo so the blob push path works
-	_, err = db.GetOrCreateRepository(ctx, "test/fedrepo", "https://local.test/ap/actor")
+	_, err = db.GetOrCreateRepository(ctx, "local.test/test/fedrepo", "https://local.test/ap/actor")
 	require.NoError(t, err)
 
 	// First, push a real blob locally to get its digest
-	desc, err := reg.PushBlob(ctx, "test/fedrepo", testDescriptor(blobData, "application/octet-stream"), bytes.NewReader(blobData))
+	desc, err := reg.PushBlob(ctx, "local.test/test/fedrepo", testDescriptor(blobData, "application/octet-stream"), bytes.NewReader(blobData))
 	require.NoError(t, err)
 
 	// Delete the local blob file to force federation path
 	require.NoError(t, blobs.Delete(string(desc.Digest)))
 
 	// GetBlob should now go through the federation path
-	reader, err := reg.GetBlob(ctx, "test/fedrepo", desc.Digest)
+	reader, err := reg.GetBlob(ctx, "local.test/test/fedrepo", desc.Digest)
 	require.NoError(t, err, "federated GetBlob failed")
 	defer func() { _ = reader.Close() }()
 
@@ -118,10 +118,10 @@ func TestBlobPullLocalFirst(t *testing.T) {
 	ctx := context.Background()
 	blobData := []byte("local blob content")
 
-	desc, err := reg.PushBlob(ctx, "test/local", testDescriptor(blobData, "application/octet-stream"), bytes.NewReader(blobData))
+	desc, err := reg.PushBlob(ctx, "local.test/test/local", testDescriptor(blobData, "application/octet-stream"), bytes.NewReader(blobData))
 	require.NoError(t, err)
 
-	reader, err := reg.GetBlob(ctx, "test/local", desc.Digest)
+	reader, err := reg.GetBlob(ctx, "local.test/test/local", desc.Digest)
 	require.NoError(t, err)
 	defer func() { _ = reader.Close() }()
 

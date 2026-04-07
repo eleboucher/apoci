@@ -56,12 +56,12 @@ func TestPushAndPullBlob(t *testing.T) {
 	blobData := []byte("hello blob content")
 
 	// Push blob
-	desc, err := reg.PushBlob(ctx, "test/repo", descriptorFor(blobData), strings.NewReader(string(blobData)))
+	desc, err := reg.PushBlob(ctx, "test.example.com/test/repo", descriptorFor(blobData), strings.NewReader(string(blobData)))
 	require.NoError(t, err)
 	require.Equal(t, int64(len(blobData)), desc.Size)
 
 	// Pull blob
-	reader, err := reg.GetBlob(ctx, "test/repo", desc.Digest)
+	reader, err := reg.GetBlob(ctx, "test.example.com/test/repo", desc.Digest)
 	require.NoError(t, err)
 	defer func() { _ = reader.Close() }()
 
@@ -78,12 +78,12 @@ func TestPushAndPullManifest(t *testing.T) {
 	mediaType := testManifestMediaType
 
 	// Push manifest with tag
-	desc, err := reg.PushManifest(ctx, "test/myapp", "v1.0", manifest, mediaType)
+	desc, err := reg.PushManifest(ctx, "test.example.com/test/myapp", "v1.0", manifest, mediaType)
 	require.NoError(t, err)
 	require.Equal(t, int64(len(manifest)), desc.Size)
 
 	// Pull by digest
-	reader, err := reg.GetManifest(ctx, "test/myapp", desc.Digest)
+	reader, err := reg.GetManifest(ctx, "test.example.com/test/myapp", desc.Digest)
 	require.NoError(t, err)
 	defer func() { _ = reader.Close() }()
 
@@ -91,7 +91,7 @@ func TestPushAndPullManifest(t *testing.T) {
 	require.Equal(t, string(manifest), string(got))
 
 	// Pull by tag
-	reader2, err := reg.GetTag(ctx, "test/myapp", "v1.0")
+	reader2, err := reg.GetTag(ctx, "test.example.com/test/myapp", "v1.0")
 	require.NoError(t, err)
 	defer func() { _ = reader2.Close() }()
 
@@ -106,9 +106,9 @@ func TestListRepositoriesAndTags(t *testing.T) {
 	manifest := []byte(`{"schemaVersion":2}`)
 	mediaType := testManifestMediaType
 
-	_, err := reg.PushManifest(ctx, "alpha/app", "v1", manifest, mediaType)
+	_, err := reg.PushManifest(ctx, "test.example.com/alpha/app", "v1", manifest, mediaType)
 	require.NoError(t, err)
-	_, err = reg.PushManifest(ctx, "beta/app", "v2", manifest, mediaType)
+	_, err = reg.PushManifest(ctx, "test.example.com/beta/app", "v2", manifest, mediaType)
 	require.NoError(t, err)
 
 	// List repos
@@ -121,7 +121,7 @@ func TestListRepositoriesAndTags(t *testing.T) {
 
 	// List tags
 	var tags []string
-	for tag, err := range reg.Tags(ctx, "alpha/app", "") {
+	for tag, err := range reg.Tags(ctx, "test.example.com/alpha/app", "") {
 		require.NoError(t, err)
 		tags = append(tags, tag)
 	}
@@ -140,12 +140,12 @@ func TestOwnershipEnforcement(t *testing.T) {
 	ctx := context.Background()
 
 	manifest := []byte(`{"schemaVersion":2}`)
-	_, err := alice.PushManifest(ctx, "shared/repo", "v1", manifest, "application/vnd.oci.image.manifest.v1+json")
+	_, err := alice.PushManifest(ctx, "alice.example.com/shared/repo", "v1", manifest, "application/vnd.oci.image.manifest.v1+json")
 	require.NoError(t, err)
 
 	// Bob tries to push to Alice's repo -- should fail
 	bob := NewRegistry(db, blobs, "https://bob.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
-	_, err = bob.PushManifest(ctx, "shared/repo", "v2", manifest, "application/vnd.oci.image.manifest.v1+json")
+	_, err = bob.PushManifest(ctx, "alice.example.com/shared/repo", "v2", manifest, "application/vnd.oci.image.manifest.v1+json")
 	require.Error(t, err, "expected ownership error when bob pushes to alice's repo")
 }
 
@@ -154,21 +154,21 @@ func TestDeleteManifestAndTag(t *testing.T) {
 	ctx := context.Background()
 
 	manifest := []byte(`{"schemaVersion":2}`)
-	desc, _ := reg.PushManifest(ctx, "test/delete", "v1", manifest, "application/vnd.oci.image.manifest.v1+json")
+	desc, _ := reg.PushManifest(ctx, "test.example.com/test/delete", "v1", manifest, "application/vnd.oci.image.manifest.v1+json")
 
 	// Delete tag
-	require.NoError(t, reg.DeleteTag(ctx, "test/delete", "v1"))
-	_, err := reg.GetTag(ctx, "test/delete", "v1")
+	require.NoError(t, reg.DeleteTag(ctx, "test.example.com/test/delete", "v1"))
+	_, err := reg.GetTag(ctx, "test.example.com/test/delete", "v1")
 	require.Error(t, err, "expected error after tag delete")
 
 	// Manifest still exists by digest
-	reader, err := reg.GetManifest(ctx, "test/delete", desc.Digest)
+	reader, err := reg.GetManifest(ctx, "test.example.com/test/delete", desc.Digest)
 	require.NoError(t, err, "manifest should still exist by digest after tag delete")
 	_ = reader.Close()
 
 	// Delete manifest
-	require.NoError(t, reg.DeleteManifest(ctx, "test/delete", desc.Digest))
-	_, err = reg.GetManifest(ctx, "test/delete", desc.Digest)
+	require.NoError(t, reg.DeleteManifest(ctx, "test.example.com/test/delete", desc.Digest))
+	_, err = reg.GetManifest(ctx, "test.example.com/test/delete", desc.Digest)
 	require.Error(t, err, "expected error after manifest delete")
 }
 
@@ -181,7 +181,7 @@ func TestHTTPPushPullFlow(t *testing.T) {
 	_ = resp.Body.Close()
 
 	// 2. Start a chunked upload session
-	req, _ := http.NewRequest("POST", srv.URL+"/v2/test/httpflow/blobs/uploads/", nil)
+	req, _ := http.NewRequest("POST", srv.URL+"/v2/test.example.com/test/httpflow/blobs/uploads/", nil)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
@@ -200,7 +200,7 @@ func TestHTTPPushPullFlow(t *testing.T) {
 	}
 	manifestBytes, _ := json.Marshal(manifest)
 
-	req, _ = http.NewRequest("PUT", srv.URL+"/v2/test/httpflow/manifests/latest", strings.NewReader(string(manifestBytes)))
+	req, _ = http.NewRequest("PUT", srv.URL+"/v2/test.example.com/test/httpflow/manifests/latest", strings.NewReader(string(manifestBytes)))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -209,7 +209,7 @@ func TestHTTPPushPullFlow(t *testing.T) {
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 	// 4. Pull manifest by tag
-	req, _ = http.NewRequest("GET", srv.URL+"/v2/test/httpflow/manifests/latest", nil)
+	req, _ = http.NewRequest("GET", srv.URL+"/v2/test.example.com/test/httpflow/manifests/latest", nil)
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	body, _ := io.ReadAll(resp.Body)
@@ -239,17 +239,17 @@ func TestReferrersAPI(t *testing.T) {
 
 	// Push an image manifest
 	imageManifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:abc","size":0},"layers":[]}`)
-	imageDesc, err := reg.PushManifest(ctx, "test/cosign", "v1", imageManifest, "application/vnd.oci.image.manifest.v1+json")
+	imageDesc, err := reg.PushManifest(ctx, "test.example.com/test/cosign", "v1", imageManifest, "application/vnd.oci.image.manifest.v1+json")
 	require.NoError(t, err)
 
 	// Push a signature manifest referencing the image via subject
 	sigManifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","artifactType":"application/vnd.dev.cosign.simplesigning.v1+json","config":{"digest":"sha256:def","size":0,"mediaType":"application/vnd.oci.empty.v1+json"},"layers":[],"subject":{"digest":"` + string(imageDesc.Digest) + `","mediaType":"application/vnd.oci.image.manifest.v1+json","size":` + fmt.Sprintf("%d", imageDesc.Size) + `}}`)
-	sigDesc, err := reg.PushManifest(ctx, "test/cosign", "", sigManifest, "application/vnd.oci.image.manifest.v1+json")
+	sigDesc, err := reg.PushManifest(ctx, "test.example.com/test/cosign", "", sigManifest, "application/vnd.oci.image.manifest.v1+json")
 	require.NoError(t, err)
 
 	// Query referrers for the image
 	var referrers []ociregistry.Descriptor
-	for desc, err := range reg.Referrers(ctx, "test/cosign", imageDesc.Digest, "") {
+	for desc, err := range reg.Referrers(ctx, "test.example.com/test/cosign", imageDesc.Digest, "") {
 		require.NoError(t, err)
 		referrers = append(referrers, desc)
 	}
@@ -264,20 +264,20 @@ func TestReferrersFilterByArtifactType(t *testing.T) {
 	ctx := context.Background()
 
 	imageManifest := []byte(`{"schemaVersion":2,"config":{"digest":"sha256:abc","size":0},"layers":[]}`)
-	imageDesc, _ := reg.PushManifest(ctx, "test/filter", "v1", imageManifest, "application/vnd.oci.image.manifest.v1+json")
+	imageDesc, _ := reg.PushManifest(ctx, "test.example.com/test/filter", "v1", imageManifest, "application/vnd.oci.image.manifest.v1+json")
 
 	// Push two referrers with different artifact types
 	sig1 := []byte(`{"schemaVersion":2,"artifactType":"type-a","config":{"digest":"sha256:s1","size":0,"mediaType":"application/vnd.oci.empty.v1+json"},"layers":[],"subject":{"digest":"` + string(imageDesc.Digest) + `","mediaType":"x","size":1}}`)
-	_, err := reg.PushManifest(ctx, "test/filter", "", sig1, "application/vnd.oci.image.manifest.v1+json")
+	_, err := reg.PushManifest(ctx, "test.example.com/test/filter", "", sig1, "application/vnd.oci.image.manifest.v1+json")
 	require.NoError(t, err)
 
 	sig2 := []byte(`{"schemaVersion":2,"artifactType":"type-b","config":{"digest":"sha256:s2","size":0,"mediaType":"application/vnd.oci.empty.v1+json"},"layers":[],"subject":{"digest":"` + string(imageDesc.Digest) + `","mediaType":"x","size":1}}`)
-	_, err = reg.PushManifest(ctx, "test/filter", "", sig2, testManifestMediaType)
+	_, err = reg.PushManifest(ctx, "test.example.com/test/filter", "", sig2, testManifestMediaType)
 	require.NoError(t, err)
 
 	// Filter by type-a
 	var count int
-	for _, err := range reg.Referrers(ctx, "test/filter", imageDesc.Digest, "type-a") {
+	for _, err := range reg.Referrers(ctx, "test.example.com/test/filter", imageDesc.Digest, "type-a") {
 		require.NoError(t, err)
 		count++
 	}
@@ -296,17 +296,17 @@ func TestTagImmutability(t *testing.T) {
 	manifest := []byte(`{"schemaVersion":2}`)
 
 	// First push to v1.0 succeeds
-	_, err := reg.PushManifest(ctx, "test/immutable", "v1.0", manifest, "application/vnd.oci.image.manifest.v1+json")
+	_, err := reg.PushManifest(ctx, "test.example.com/test/immutable", "v1.0", manifest, "application/vnd.oci.image.manifest.v1+json")
 	require.NoError(t, err, "first push to v1.0 should succeed")
 
 	// Second push to v1.0 is rejected
-	_, err = reg.PushManifest(ctx, "test/immutable", "v1.0", []byte(`{"schemaVersion":2,"new":true}`), "application/vnd.oci.image.manifest.v1+json")
+	_, err = reg.PushManifest(ctx, "test.example.com/test/immutable", "v1.0", []byte(`{"schemaVersion":2,"new":true}`), "application/vnd.oci.image.manifest.v1+json")
 	require.Error(t, err, "second push to v1.0 should be rejected (immutable)")
 
 	// Push to 'latest' succeeds twice (not matching ^v[0-9])
-	_, err = reg.PushManifest(ctx, "test/immutable", "latest", manifest, "application/vnd.oci.image.manifest.v1+json")
+	_, err = reg.PushManifest(ctx, "test.example.com/test/immutable", "latest", manifest, "application/vnd.oci.image.manifest.v1+json")
 	require.NoError(t, err, "first push to latest should succeed")
-	_, err = reg.PushManifest(ctx, "test/immutable", "latest", []byte(`{"schemaVersion":2,"new":true}`), "application/vnd.oci.image.manifest.v1+json")
+	_, err = reg.PushManifest(ctx, "test.example.com/test/immutable", "latest", []byte(`{"schemaVersion":2,"new":true}`), "application/vnd.oci.image.manifest.v1+json")
 	require.NoError(t, err, "second push to latest should succeed")
 }
 
@@ -342,11 +342,11 @@ func TestBlobRangeRequest(t *testing.T) {
 	blobData := []byte("0123456789abcdef")
 
 	// Push blob
-	desc, err := reg.PushBlob(ctx, "test/range", descriptorFor(blobData), strings.NewReader(string(blobData)))
+	desc, err := reg.PushBlob(ctx, "test.example.com/test/range", descriptorFor(blobData), strings.NewReader(string(blobData)))
 	require.NoError(t, err)
 
 	// Read a range: bytes 4..10 (offset0=4, offset1=10)
-	reader, err := reg.GetBlobRange(ctx, "test/range", desc.Digest, 4, 10)
+	reader, err := reg.GetBlobRange(ctx, "test.example.com/test/range", desc.Digest, 4, 10)
 	require.NoError(t, err)
 	defer func() { _ = reader.Close() }()
 
@@ -364,11 +364,11 @@ func TestBlobRangeOutOfBounds(t *testing.T) {
 	ctx := context.Background()
 
 	blobData := []byte("short")
-	desc, err := reg.PushBlob(ctx, "test/rangebounds", descriptorFor(blobData), strings.NewReader(string(blobData)))
+	desc, err := reg.PushBlob(ctx, "test.example.com/test/rangebounds", descriptorFor(blobData), strings.NewReader(string(blobData)))
 	require.NoError(t, err)
 
 	// offset0 >= totalSize should return ErrRangeInvalid
-	_, err = reg.GetBlobRange(ctx, "test/rangebounds", desc.Digest, int64(len(blobData)), -1)
+	_, err = reg.GetBlobRange(ctx, "test.example.com/test/rangebounds", desc.Digest, int64(len(blobData)), -1)
 	require.Error(t, err, "expected error for out-of-bounds range")
 }
 
@@ -378,34 +378,34 @@ func TestResolveBlobAndManifest(t *testing.T) {
 
 	// Push a blob
 	blobData := []byte("resolve me")
-	blobDesc, err := reg.PushBlob(ctx, "test/resolve", descriptorFor(blobData), strings.NewReader(string(blobData)))
+	blobDesc, err := reg.PushBlob(ctx, "test.example.com/test/resolve", descriptorFor(blobData), strings.NewReader(string(blobData)))
 	require.NoError(t, err)
 
 	// Resolve the blob
-	resolved, err := reg.ResolveBlob(ctx, "test/resolve", blobDesc.Digest)
+	resolved, err := reg.ResolveBlob(ctx, "test.example.com/test/resolve", blobDesc.Digest)
 	require.NoError(t, err)
 	require.Equal(t, blobDesc.Digest, resolved.Digest)
 	require.Equal(t, int64(len(blobData)), resolved.Size)
 
 	// Resolve nonexistent blob
-	_, err = reg.ResolveBlob(ctx, "test/resolve", "sha256:0000000000000000000000000000000000000000000000000000000000000000")
+	_, err = reg.ResolveBlob(ctx, "test.example.com/test/resolve", "sha256:0000000000000000000000000000000000000000000000000000000000000000")
 	require.Error(t, err, "expected error for nonexistent blob")
 
 	// Push a manifest
 	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:abc"},"layers":[]}`)
 	mediaType := testManifestMediaType
-	mDesc, err := reg.PushManifest(ctx, "test/resolve", "v1", manifest, mediaType)
+	mDesc, err := reg.PushManifest(ctx, "test.example.com/test/resolve", "v1", manifest, mediaType)
 	require.NoError(t, err)
 
 	// Resolve the manifest
-	resolvedM, err := reg.ResolveManifest(ctx, "test/resolve", mDesc.Digest)
+	resolvedM, err := reg.ResolveManifest(ctx, "test.example.com/test/resolve", mDesc.Digest)
 	require.NoError(t, err)
 	require.Equal(t, mDesc.Digest, resolvedM.Digest)
 	require.Equal(t, int64(len(manifest)), resolvedM.Size)
 	require.Equal(t, mediaType, resolvedM.MediaType)
 
 	// Resolve nonexistent manifest
-	_, err = reg.ResolveManifest(ctx, "test/resolve", "sha256:0000000000000000000000000000000000000000000000000000000000000000")
+	_, err = reg.ResolveManifest(ctx, "test.example.com/test/resolve", "sha256:0000000000000000000000000000000000000000000000000000000000000000")
 	require.Error(t, err, "expected error for nonexistent manifest")
 }
 
@@ -421,12 +421,12 @@ func TestBlobSizeLimitEnforced(t *testing.T) {
 
 	// Blob under limit succeeds.
 	small := make([]byte, 50)
-	_, err := reg.PushBlob(ctx, "test/sizelimit", descriptorFor(small), strings.NewReader(string(small)))
+	_, err := reg.PushBlob(ctx, "test.example.com/test/sizelimit", descriptorFor(small), strings.NewReader(string(small)))
 	require.NoError(t, err, "small blob should succeed")
 
 	// Blob over limit is rejected.
 	big := make([]byte, 200)
-	_, err = reg.PushBlob(ctx, "test/sizelimit", descriptorFor(big), strings.NewReader(string(big)))
+	_, err = reg.PushBlob(ctx, "test.example.com/test/sizelimit", descriptorFor(big), strings.NewReader(string(big)))
 	require.Error(t, err, "oversized blob should be rejected")
 }
 
@@ -442,12 +442,12 @@ func TestBlobSizeLimitBoundary(t *testing.T) {
 
 	// Exactly at limit succeeds.
 	atLimit := make([]byte, limit)
-	_, err := reg.PushBlob(ctx, "test/boundary", descriptorFor(atLimit), strings.NewReader(string(atLimit)))
+	_, err := reg.PushBlob(ctx, "test.example.com/test/boundary", descriptorFor(atLimit), strings.NewReader(string(atLimit)))
 	require.NoError(t, err, "blob at exact limit should succeed")
 
 	// One byte over is rejected.
 	overLimit := make([]byte, limit+1)
-	_, err = reg.PushBlob(ctx, "test/boundary", descriptorFor(overLimit), strings.NewReader(string(overLimit)))
+	_, err = reg.PushBlob(ctx, "test.example.com/test/boundary", descriptorFor(overLimit), strings.NewReader(string(overLimit)))
 	require.Error(t, err, "blob 1 byte over limit should be rejected")
 }
 
@@ -462,13 +462,13 @@ func TestManifestSizeLimitEnforced(t *testing.T) {
 	ctx := context.Background()
 
 	small := []byte(`{"schemaVersion":2}`)
-	_, err := reg.PushManifest(ctx, "test/manlimit", "v1", small, testManifestMediaType)
+	_, err := reg.PushManifest(ctx, "test.example.com/test/manlimit", "v1", small, testManifestMediaType)
 	require.NoError(t, err, "small manifest should succeed")
 
 	// Create a manifest over the limit.
 	big := append([]byte(`{"schemaVersion":2,"data":"`), make([]byte, 300)...)
 	big = append(big, '"', '}')
-	_, err = reg.PushManifest(ctx, "test/manlimit", "v2", big, testManifestMediaType)
+	_, err = reg.PushManifest(ctx, "test.example.com/test/manlimit", "v2", big, testManifestMediaType)
 	require.Error(t, err, "oversized manifest should be rejected")
 }
 

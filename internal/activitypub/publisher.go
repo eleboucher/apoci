@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 
@@ -108,6 +110,10 @@ func (p *APPublisher) Stop() {
 	p.actorCache.Stop()
 }
 
+func (p *APPublisher) ActorCache() *ActorCache {
+	return p.actorCache
+}
+
 func (p *APPublisher) createAndDeliver(ctx context.Context, activityType string, object any) error {
 	metrics.OutboundActivities.Add(activityType, 1)
 	activityID := p.activityURL()
@@ -139,8 +145,11 @@ func (p *APPublisher) createAndDeliver(ctx context.Context, activityType string,
 // and enqueues deliveries to the persistent delivery queue.
 // Followers are loaded in batches to avoid unbounded memory usage.
 func (p *APPublisher) enqueueToFollowers(ctx context.Context, activityID string, activityJSON []byte) error {
-	// Deduplicate by shared inbox to reduce deliveries.
-	inboxes := make(map[string]struct{})
+	var (
+		mu      sync.Mutex
+		inboxes = make(map[string]struct{})
+	)
+
 	var afterID int64
 	for {
 		batch, err := p.db.ListFollowsBatch(ctx, afterID, followerBatchSize)
@@ -150,14 +159,26 @@ func (p *APPublisher) enqueueToFollowers(ctx context.Context, activityID string,
 		if len(batch) == 0 {
 			break
 		}
+
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(20)
 		for _, f := range batch {
-			inbox, err := p.resolveInbox(ctx, f.ActorURL)
-			if err != nil {
-				p.logger.Warn("failed to resolve inbox for follower", "actor", f.ActorURL, "error", err)
-				continue
-			}
-			inboxes[inbox] = struct{}{}
+			g.Go(func() error {
+				inbox, err := p.resolveInbox(gctx, f.ActorURL)
+				if err != nil {
+					p.logger.Warn("failed to resolve inbox for follower", "actor", f.ActorURL, "error", err)
+					return nil
+				}
+				mu.Lock()
+				inboxes[inbox] = struct{}{}
+				mu.Unlock()
+				return nil
+			})
 		}
+		if err := g.Wait(); err != nil {
+			return err
+		}
+
 		afterID = batch[len(batch)-1].ID
 		if len(batch) < followerBatchSize {
 			break

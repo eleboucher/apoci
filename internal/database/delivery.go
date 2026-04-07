@@ -10,7 +10,8 @@ import (
 func (db *DB) EnqueueDelivery(ctx context.Context, activityID, inboxURL string, activityJSON []byte) error {
 	_, err := db.bun.NewRaw(
 		`INSERT INTO delivery_queue (activity_id, inbox_url, activity_json)
-		 VALUES (?, ?, ?)`,
+		 VALUES (?, ?, ?)
+		 ON CONFLICT (activity_id, inbox_url) DO NOTHING`,
 		activityID, inboxURL, activityJSON).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("enqueuing delivery: %w", err)

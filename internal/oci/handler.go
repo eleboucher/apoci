@@ -10,6 +10,7 @@ import (
 	"iter"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -67,6 +68,14 @@ func NewRegistry(db *database.DB, blobs *blobstore.Store, localID, namespace, im
 	var immutableRe *regexp.Regexp
 	if immutableTagPattern != "" {
 		immutableRe = regexp.MustCompile(immutableTagPattern)
+	}
+
+	// When no explicit namespace is given, derive it from the localID (actor URL)
+	// so that writes are always namespace-enforced.
+	if namespace == "" && localID != "" {
+		if u, err := url.Parse(localID); err == nil && u.Host != "" {
+			namespace = u.Hostname()
+		}
 	}
 
 	r := &Registry{

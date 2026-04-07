@@ -2,6 +2,8 @@ package activitypub
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,10 +25,15 @@ type BlobReplicator interface {
 	ReplicateBlob(ctx context.Context, peerEndpoint, digest string, size int64)
 }
 
+type ActorInvalidator interface {
+	Invalidate(actorURL string)
+}
+
 type InboxHandler struct {
 	identity       *Identity
 	db             *database.DB
 	blobReplicator BlobReplicator
+	actorCache     ActorInvalidator
 	enqueue        EnqueueFunc
 
 	maxManifestSize int64
@@ -83,6 +90,10 @@ func NewInboxHandler(identity *Identity, db *database.DB, cfg InboxConfig, logge
 
 func (h *InboxHandler) SetBlobReplicator(r BlobReplicator) {
 	h.blobReplicator = r
+}
+
+func (h *InboxHandler) SetActorCache(c ActorInvalidator) {
+	h.actorCache = c
 }
 
 func (h *InboxHandler) SetEnqueueFunc(fn EnqueueFunc) {
@@ -468,6 +479,11 @@ func (h *InboxHandler) handleUpdate(ctx context.Context, w http.ResponseWriter, 
 	switch objType {
 	case "OCITag":
 		h.ingestTag(ctx, rw, objectMap, activity.Actor)
+	case "Actor", "Person", "Service", "Application":
+		if h.actorCache != nil {
+			h.actorCache.Invalidate(activity.Actor)
+		}
+		rw.WriteHeader(http.StatusAccepted)
 	default:
 		h.logger.Debug("inbox: unhandled Update object type", "type", objType)
 		rw.WriteHeader(http.StatusAccepted)
@@ -632,6 +648,22 @@ func (h *InboxHandler) ingestManifest(ctx context.Context, w http.ResponseWriter
 		return
 	}
 
+	// Enforce that the repository name is scoped to the sender's domain.
+	// e.g. actor "https://registry.example.com/ap/actor" may only push repos
+	// whose first path component equals "registry.example.com".
+	senderDomain, err := senderDomainFromActorURL(actorURL)
+	if err != nil {
+		h.logger.Warn("inbox: cannot derive domain from actor URL", "actor", actorURL, "error", err)
+		http.Error(w, "invalid actor URL", http.StatusBadRequest)
+		return
+	}
+	if !repoOwnedBySender(repo, senderDomain) {
+		h.logger.Warn("inbox: repo name does not match sender domain",
+			"repo", repo, "sender_domain", senderDomain, "actor", actorURL)
+		http.Error(w, "repository name must be scoped to sender's domain", http.StatusForbidden)
+		return
+	}
+
 	repoObj, err := h.db.GetRepository(ctx, repo)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -669,8 +701,19 @@ func (h *InboxHandler) ingestManifest(ctx context.Context, w http.ResponseWriter
 		decoded, err := DecodeContent(encoded)
 		if err != nil {
 			h.logger.Warn("inbox: invalid manifest content encoding", "error", err)
-			// Continue with empty content; manifest pull-through will fetch it on demand.
 		} else {
+			if int64(len(decoded)) > h.maxManifestSize {
+				http.Error(w, "manifest content exceeds size limit", http.StatusBadRequest)
+				return
+			}
+			h256 := sha256.Sum256(decoded)
+			computed := "sha256:" + hex.EncodeToString(h256[:])
+			if computed != digest {
+				h.logger.Warn("inbox: manifest content digest mismatch",
+					"claimed", digest, "computed", computed, "actor", actorURL)
+				http.Error(w, "manifest content digest mismatch", http.StatusBadRequest)
+				return
+			}
 			content = decoded
 		}
 	}
@@ -693,6 +736,23 @@ func (h *InboxHandler) ingestManifest(ctx context.Context, w http.ResponseWriter
 
 	h.logger.Info("inbox: ingested manifest", "repo", repo, "digest", digest, "from", actorURL)
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func senderDomainFromActorURL(actorURL string) (string, error) {
+	u, err := url.Parse(actorURL)
+	if err != nil {
+		return "", fmt.Errorf("parsing actor URL: %w", err)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("actor URL has no host")
+	}
+	return strings.ToLower(host), nil
+}
+
+func repoOwnedBySender(repo, senderDomain string) bool {
+	parts := strings.SplitN(repo, "/", 2)
+	return strings.ToLower(parts[0]) == senderDomain
 }
 
 func (h *InboxHandler) ingestTag(ctx context.Context, w http.ResponseWriter, obj map[string]any, actorURL string) {
@@ -720,6 +780,17 @@ func (h *InboxHandler) ingestTag(ctx context.Context, w http.ResponseWriter, obj
 	if err != nil || !isOwner {
 		h.logger.Warn("inbox: rejected tag from non-owner", "repo", repo, "actor", actorURL)
 		http.Error(w, "not authorized for repository", http.StatusForbidden)
+		return
+	}
+
+	manifest, err := h.db.GetManifestByDigest(ctx, repoObj.ID, digest)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if manifest == nil {
+		h.logger.Warn("inbox: rejected tag pointing to unknown manifest", "repo", repo, "digest", digest, "actor", actorURL)
+		http.Error(w, "manifest not found", http.StatusBadRequest)
 		return
 	}
 

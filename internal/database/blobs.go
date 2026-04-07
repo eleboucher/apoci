@@ -24,7 +24,7 @@ func (db *DB) PutBlob(ctx context.Context, digest string, sizeBytes int64, media
 		`INSERT INTO blobs (digest, size_bytes, media_type, stored_locally)
 		 VALUES (?, ?, ?, ?)
 		 ON CONFLICT(digest) DO UPDATE SET
-		   size_bytes = excluded.size_bytes,
+		   size_bytes = CASE WHEN excluded.stored_locally THEN excluded.size_bytes ELSE blobs.size_bytes END,
 		   media_type = COALESCE(excluded.media_type, blobs.media_type),
 		   stored_locally = blobs.stored_locally OR excluded.stored_locally`,
 		digest, sizeBytes, mediaType, storedLocally).Exec(ctx)

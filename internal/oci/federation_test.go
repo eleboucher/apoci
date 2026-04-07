@@ -46,7 +46,7 @@ func TestPushManifestCreatesAPActivity(t *testing.T) {
 	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:cfg"},"layers":[]}`)
 	mediaType := "application/vnd.oci.image.manifest.v1+json"
 
-	_, err := reg.PushManifest(ctx, "test/federated", "v1.0", manifest, mediaType)
+	_, err := reg.PushManifest(ctx, "test.example.com/test/federated", "v1.0", manifest, mediaType)
 	require.NoError(t, err)
 
 	activities, err := db.ListActivitiesPage(ctx, "https://test.example.com/ap/actor", 0, 10)
@@ -60,7 +60,7 @@ func TestPushManifestCreatesAPActivity(t *testing.T) {
 			var activity map[string]any
 			require.NoError(t, json.Unmarshal(a.ObjectJSON, &activity))
 			obj, _ := activity["object"].(map[string]any)
-			require.Equal(t, "test/federated", obj["ociRepository"])
+			require.Equal(t, "test.example.com/test/federated", obj["ociRepository"])
 		case "Update":
 			updateCount++
 			var activity map[string]any
@@ -79,7 +79,7 @@ func TestPushWithoutTagDoesNotCreateUpdateActivity(t *testing.T) {
 	ctx := context.Background()
 
 	manifest := []byte(`{"schemaVersion":2}`)
-	_, err := reg.PushManifest(ctx, "test/notag", "", manifest, "application/vnd.oci.image.manifest.v1+json")
+	_, err := reg.PushManifest(ctx, "test.example.com/test/notag", "", manifest, "application/vnd.oci.image.manifest.v1+json")
 	require.NoError(t, err)
 
 	activities, err := db.ListActivitiesPage(ctx, "https://test.example.com/ap/actor", 0, 10)
