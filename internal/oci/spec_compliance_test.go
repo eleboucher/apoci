@@ -3,11 +3,13 @@ package oci
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/opencontainers/go-digest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,6 +56,56 @@ func TestSpecBlobUploadReturnsLocationHeader(t *testing.T) {
 
 	location := resp.Header.Get("Location")
 	require.NotEmpty(t, location, "missing Location header on blob upload start")
+}
+
+func TestSpecChunkedBlobUpload(t *testing.T) {
+	_, srv := testRegistry(t)
+
+	// Step 1: POST to initiate chunked upload
+	req, _ := http.NewRequest("POST", srv.URL+"/v2/test.example.com/test/chunked/blobs/uploads/", nil)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+	location := resp.Header.Get("Location")
+	require.NotEmpty(t, location, "POST should return Location header")
+
+	uploadURL := srv.URL + location
+
+	// Step 2: PATCH to upload chunk data
+	chunk := []byte("hello chunked blob")
+	req, _ = http.NewRequest("PATCH", uploadURL, strings.NewReader(string(chunk)))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(chunk)))
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusAccepted, resp.StatusCode, "PATCH should return 202 Accepted")
+	patchLocation := resp.Header.Get("Location")
+	require.NotEmpty(t, patchLocation, "PATCH should return Location header")
+
+	// Step 3: PUT to finalize upload with digest
+	dig := digest.FromBytes(chunk)
+	finalURL := srv.URL + patchLocation + "?digest=" + dig.String()
+	req, _ = http.NewRequest("PUT", finalURL, nil)
+	req.ContentLength = 0
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusCreated, resp.StatusCode, "PUT should return 201 Created")
+	require.NotEmpty(t, resp.Header.Get("Location"), "PUT should return Location header")
+
+	// Step 4: Verify blob is retrievable
+	resp, err = http.Get(srv.URL + "/v2/test.example.com/test/chunked/blobs/" + dig.String())
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	require.Equal(t, chunk, body)
 }
 
 func TestSpecManifestGetNotFoundFormat(t *testing.T) {

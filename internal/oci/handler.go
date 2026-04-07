@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	godigest "github.com/opencontainers/go-digest"
@@ -62,6 +63,9 @@ type Registry struct {
 	fetcher         BlobFetcher
 	maxManifestSize int64
 	maxBlobSize     int64
+
+	uploadsMu sync.Mutex
+	uploads   map[string]*ocimem.Buffer
 }
 
 func NewRegistry(db *database.DB, blobs *blobstore.Store, localID, namespace, immutableTagPattern string, maxManifestSize, maxBlobSize int64, logger *slog.Logger) (*Registry, error) {
@@ -91,6 +95,7 @@ func NewRegistry(db *database.DB, blobs *blobstore.Store, localID, namespace, im
 		immutableTagRe:  immutableRe,
 		maxManifestSize: maxManifestSize,
 		maxBlobSize:     maxBlobSize,
+		uploads:         make(map[string]*ocimem.Buffer),
 	}
 	r.Funcs = &ociregistry.Funcs{
 		GetBlob_:               r.getBlob,
@@ -537,11 +542,44 @@ func (r *Registry) pushBlobChunked(ctx context.Context, repo string, chunkSize i
 		return nil, fmt.Errorf("getting repository: %w", err)
 	}
 
-	// The commit callback fires after the HTTP handler returns, so use a non-cancellable
-	// context with a timeout to prevent indefinite blocking on shutdown.
-	commitCtx, commitCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+	buf := r.newUploadBuffer(repo, "")
+	return &limitedBlobWriter{BlobWriter: buf, maxSize: r.maxBlobSize}, nil
+}
+
+type limitedBlobWriter struct {
+	ociregistry.BlobWriter
+	maxSize int64
+}
+
+func (l *limitedBlobWriter) Write(p []byte) (int, error) {
+	if l.Size()+int64(len(p)) > l.maxSize {
+		return 0, fmt.Errorf("%w: blob exceeds maximum size (%d bytes)", ociregistry.ErrBlobUploadInvalid, l.maxSize)
+	}
+	return l.BlobWriter.Write(p)
+}
+
+func (r *Registry) pushBlobChunkedResume(ctx context.Context, repo, id string, offset int64, chunkSize int) (ociregistry.BlobWriter, error) {
+	if err := r.checkNamespace(repo); err != nil {
+		return nil, err
+	}
+
+	r.uploadsMu.Lock()
+	buf, ok := r.uploads[id]
+	r.uploadsMu.Unlock()
+
+	if !ok {
+		return nil, fmt.Errorf("%w: upload %q not found", ociregistry.ErrBlobUploadUnknown, id)
+	}
+
+	return &limitedBlobWriter{BlobWriter: buf, maxSize: r.maxBlobSize}, nil
+}
+
+func (r *Registry) newUploadBuffer(repo, uuid string) *ocimem.Buffer {
 	buf := ocimem.NewBuffer(func(b *ocimem.Buffer) error {
-		defer commitCancel()
+		r.uploadsMu.Lock()
+		delete(r.uploads, b.ID())
+		r.uploadsMu.Unlock()
+
 		desc, data, err := b.GetBlob()
 		if err != nil {
 			return fmt.Errorf("getting blob from buffer: %w", err)
@@ -553,6 +591,10 @@ func (r *Registry) pushBlobChunked(ctx context.Context, repo string, chunkSize i
 		if err != nil {
 			return fmt.Errorf("storing chunked blob: %w", err)
 		}
+
+		commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer commitCancel()
+
 		mt := desc.MediaType
 		if err := r.db.PutBlob(commitCtx, string(desc.Digest), desc.Size, &mt, true); err != nil {
 			return fmt.Errorf("recording chunked blob: %w", err)
@@ -571,27 +613,13 @@ func (r *Registry) pushBlobChunked(ctx context.Context, repo string, chunkSize i
 		}
 
 		return nil
-	}, "")
+	}, uuid)
 
-	return &limitedBlobWriter{BlobWriter: buf, maxSize: r.maxBlobSize}, nil
-}
+	r.uploadsMu.Lock()
+	r.uploads[buf.ID()] = buf
+	r.uploadsMu.Unlock()
 
-// limitedBlobWriter wraps a BlobWriter and rejects writes that would exceed maxSize,
-// preventing unbounded memory accumulation during chunked uploads.
-type limitedBlobWriter struct {
-	ociregistry.BlobWriter
-	maxSize int64
-}
-
-func (l *limitedBlobWriter) Write(p []byte) (int, error) {
-	if l.Size()+int64(len(p)) > l.maxSize {
-		return 0, fmt.Errorf("%w: blob exceeds maximum size (%d bytes)", ociregistry.ErrBlobUploadInvalid, l.maxSize)
-	}
-	return l.BlobWriter.Write(p)
-}
-
-func (r *Registry) pushBlobChunkedResume(ctx context.Context, repo, id string, offset int64, chunkSize int) (ociregistry.BlobWriter, error) {
-	return nil, ociregistry.ErrUnsupported
+	return buf
 }
 
 func (r *Registry) pushManifest(ctx context.Context, repo string, tag string, contents []byte, mediaType string) (ociregistry.Descriptor, error) {
