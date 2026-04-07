@@ -573,7 +573,21 @@ func (r *Registry) pushBlobChunked(ctx context.Context, repo string, chunkSize i
 		return nil
 	}, "")
 
-	return buf, nil
+	return &limitedBlobWriter{BlobWriter: buf, maxSize: r.maxBlobSize}, nil
+}
+
+// limitedBlobWriter wraps a BlobWriter and rejects writes that would exceed maxSize,
+// preventing unbounded memory accumulation during chunked uploads.
+type limitedBlobWriter struct {
+	ociregistry.BlobWriter
+	maxSize int64
+}
+
+func (l *limitedBlobWriter) Write(p []byte) (int, error) {
+	if l.BlobWriter.Size()+int64(len(p)) > l.maxSize {
+		return 0, fmt.Errorf("%w: blob exceeds maximum size (%d bytes)", ociregistry.ErrBlobUploadInvalid, l.maxSize)
+	}
+	return l.BlobWriter.Write(p)
 }
 
 func (r *Registry) pushBlobChunkedResume(ctx context.Context, repo, id string, offset int64, chunkSize int) (ociregistry.BlobWriter, error) {
