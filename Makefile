@@ -1,4 +1,4 @@
-.PHONY: build test lint clean docker
+.PHONY: build test lint clean docker lint-fix fmt tidy up down
 
 BINARY := apoci
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
