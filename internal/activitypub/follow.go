@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
+
+	"github.com/google/uuid"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
@@ -25,7 +26,7 @@ func SendAccept(ctx context.Context, identity *Identity, db *database.DB, follow
 		return fmt.Errorf("fetching actor %s: %w", followerActorURL, err)
 	}
 
-	activityID := fmt.Sprintf("%s#accept-%d", identity.ActorURL, time.Now().UnixNano())
+	activityID := identity.ActorURL + "#accept-" + uuid.New().String()
 	accept := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
 		"id":       activityID,
@@ -80,7 +81,7 @@ func SendReject(ctx context.Context, identity *Identity, db *database.DB, follow
 		return fmt.Errorf("fetching actor %s (rejected locally): %w", followerActorURL, err)
 	}
 
-	activityID := fmt.Sprintf("%s#reject-%d", identity.ActorURL, time.Now().UnixNano())
+	activityID := identity.ActorURL + "#reject-" + uuid.New().String()
 	reject := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
 		"id":       activityID,
@@ -116,5 +117,44 @@ func SendReject(ctx context.Context, identity *Identity, db *database.DB, follow
 	// Fallback: best-effort direct delivery (used by CLI).
 	_ = DeliverActivity(ctx, actor.Inbox, rejectJSON, identity)
 
+	return nil
+}
+
+// SendUndo delivers an Undo(Follow) to the peer. Best-effort: returns an error
+// but the caller should still proceed with the local unfollow.
+func SendUndo(ctx context.Context, identity *Identity, peerActorURL string, enqueue EnqueueFunc) error {
+	actor, err := FetchActor(ctx, peerActorURL)
+	if err != nil {
+		return fmt.Errorf("fetching actor %s: %w", peerActorURL, err)
+	}
+
+	activityID := identity.ActorURL + "#undo-" + uuid.New().String()
+	undo := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       activityID,
+		"type":     "Undo",
+		"actor":    identity.ActorURL,
+		"object": map[string]any{
+			"type":   "Follow",
+			"actor":  identity.ActorURL,
+			"object": actor.ID,
+		},
+	}
+
+	undoJSON, err := json.Marshal(undo)
+	if err != nil {
+		return fmt.Errorf("marshaling Undo: %w", err)
+	}
+
+	if enqueue != nil {
+		if err := enqueue(ctx, activityID, actor.Inbox, undoJSON); err != nil {
+			return fmt.Errorf("enqueuing Undo to %s: %w", actor.Inbox, err)
+		}
+		return nil
+	}
+
+	if err := DeliverActivity(ctx, actor.Inbox, undoJSON, identity); err != nil {
+		return fmt.Errorf("delivering Undo to %s: %w", actor.Inbox, err)
+	}
 	return nil
 }

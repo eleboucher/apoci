@@ -77,7 +77,10 @@ func serveCmd(configPath *string) *cobra.Command {
 				return fmt.Errorf("loading identity: %w", err)
 			}
 
-			srv := server.New(cfg, db, blobs, identity, version, logger)
+			srv, err := server.New(cfg, db, blobs, identity, version, logger)
+			if err != nil {
+				return fmt.Errorf("creating server: %w", err)
+			}
 
 			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer cancel()
@@ -285,7 +288,7 @@ func runFollowAdd(ctx context.Context, configPath, input string) error {
 }
 
 func runFollowRemove(ctx context.Context, configPath, arg string) error {
-	db, _, err := openAll(configPath)
+	db, identity, err := openAll(configPath)
 	if err != nil {
 		return err
 	}
@@ -295,6 +298,11 @@ func runFollowRemove(ctx context.Context, configPath, arg string) error {
 	if err != nil {
 		return fmt.Errorf("resolving target: %w", err)
 	}
+
+	if err := activitypub.SendUndo(ctx, identity, actorURL, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	}
+
 	if err := db.RemoveFollow(ctx, actorURL); err != nil {
 		return err
 	}

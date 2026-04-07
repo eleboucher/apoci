@@ -53,7 +53,7 @@ func (h *ActorHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	base := "https://" + h.identity.Domain
+	base := h.endpoint
 	actor := Actor{
 		Context: []any{
 			"https://www.w3.org/ns/activitystreams",

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -215,7 +216,8 @@ func (p *APPublisher) resolveInbox(ctx context.Context, actorURL string) (string
 }
 
 func (p *APPublisher) objectURL(kind, ref string) string {
-	return p.endpoint + "/ap/objects/" + kind + "/" + ref
+	sanitized := strings.ReplaceAll(ref, "/", ":")
+	return p.endpoint + "/ap/objects/" + kind + "/" + sanitized
 }
 
 func (p *APPublisher) activityURL() string {
