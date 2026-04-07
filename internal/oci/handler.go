@@ -584,7 +584,7 @@ type limitedBlobWriter struct {
 }
 
 func (l *limitedBlobWriter) Write(p []byte) (int, error) {
-	if l.BlobWriter.Size()+int64(len(p)) > l.maxSize {
+	if l.Size()+int64(len(p)) > l.maxSize {
 		return 0, fmt.Errorf("%w: blob exceeds maximum size (%d bytes)", ociregistry.ErrBlobUploadInvalid, l.maxSize)
 	}
 	return l.BlobWriter.Write(p)

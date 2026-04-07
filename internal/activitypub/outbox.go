@@ -127,6 +127,9 @@ func (h *FollowersHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
 	follows, err := h.db.ListFollowsPage(r.Context(), offset, defaultPageSize+1)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
