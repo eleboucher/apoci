@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	code.superseriousbusiness.org/httpsig v1.5.0
 	cuelabs.dev/go/oci/ociregistry v0.0.0-20251212221603-3adeb8663819
+	github.com/caarlos0/env/v11 v11.4.0
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.1

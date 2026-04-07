@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -11,48 +12,49 @@ import (
 	"strings"
 	"time"
 
+	cenv "github.com/caarlos0/env/v11"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Endpoint      string `yaml:"endpoint"`
-	Name          string `yaml:"name"`
-	Listen        string `yaml:"listen"`
-	DataDir       string `yaml:"dataDir"`
-	KeyPath       string `yaml:"keyPath"`
-	LogLevel      string `yaml:"logLevel"`
-	LogFormat     string `yaml:"logFormat"`
-	ImmutableTags string `yaml:"immutableTags"`
-	RegistryToken string `yaml:"registryToken"`
-	AdminToken    string `yaml:"adminToken"`
-	AccountDomain string `yaml:"accountDomain"`
+	Endpoint      string `yaml:"endpoint"      env:"ATOCI_ENDPOINT"`
+	Name          string `yaml:"name"          env:"ATOCI_NAME"`
+	Listen        string `yaml:"listen"        env:"ATOCI_LISTEN"`
+	DataDir       string `yaml:"dataDir"       env:"ATOCI_DATA_DIR"`
+	KeyPath       string `yaml:"keyPath"       env:"ATOCI_KEY_PATH"`
+	LogLevel      string `yaml:"logLevel"      env:"ATOCI_LOG_LEVEL"`
+	LogFormat     string `yaml:"logFormat"     env:"ATOCI_LOG_FORMAT"`
+	ImmutableTags string `yaml:"immutableTags" env:"ATOCI_IMMUTABLE_TAGS"`
+	RegistryToken string `yaml:"registryToken" env:"ATOCI_REGISTRY_TOKEN"`
+	AdminToken    string `yaml:"adminToken"    env:"ATOCI_ADMIN_TOKEN"`
+	AccountDomain string `yaml:"accountDomain" env:"ATOCI_ACCOUNT_DOMAIN"`
 
-	Database Database `yaml:"database"`
+	Database Database `yaml:"database"   envPrefix:"ATOCI_DB_"`
 	TLS      *TLS     `yaml:"tls,omitempty"`
 
-	Peering    Peering    `yaml:"peering"`
-	Federation Federation `yaml:"federation"`
-	Limits     Limits     `yaml:"limits"`
-	Metrics    Metrics    `yaml:"metrics"`
+	Peering    Peering    `yaml:"peering"    envPrefix:"ATOCI_PEERING_"`
+	Federation Federation `yaml:"federation" envPrefix:"ATOCI_FEDERATION_"`
+	Limits     Limits     `yaml:"limits"     envPrefix:"ATOCI_"`
+	Metrics    Metrics    `yaml:"metrics"    envPrefix:"ATOCI_METRICS_"`
 
-	Domain string `yaml:"-"`
+	Domain string `yaml:"-" env:"-"`
 }
 
 type Database struct {
-	Driver       string `yaml:"driver"`       // "sqlite" (default) or "postgres"
-	DSN          string `yaml:"dsn"`          // connection string; required for postgres, ignored for sqlite
-	MaxOpenConns int    `yaml:"maxOpenConns"` // max open connections (0 = driver default: 4 for sqlite, 25 for postgres)
-	MaxIdleConns int    `yaml:"maxIdleConns"` // max idle connections (0 = driver default: 4 for sqlite, 10 for postgres)
+	Driver       string `yaml:"driver"       env:"DRIVER"`         // "sqlite" (default) or "postgres"
+	DSN          string `yaml:"dsn"          env:"DSN"`            // connection string; required for postgres, ignored for sqlite
+	MaxOpenConns int    `yaml:"maxOpenConns" env:"MAX_OPEN_CONNS"` // max open connections (0 = driver default: 4 for sqlite, 25 for postgres)
+	MaxIdleConns int    `yaml:"maxIdleConns" env:"MAX_IDLE_CONNS"` // max idle connections (0 = driver default: 4 for sqlite, 10 for postgres)
 }
 
 type TLS struct {
-	Cert string `yaml:"cert"`
-	Key  string `yaml:"key"`
+	Cert string `yaml:"cert" env:"ATOCI_TLS_CERT"`
+	Key  string `yaml:"key"  env:"ATOCI_TLS_KEY"`
 }
 
 type Peering struct {
-	HealthCheckInterval time.Duration `yaml:"healthCheckInterval"`
-	FetchTimeout        time.Duration `yaml:"fetchTimeout"`
+	HealthCheckInterval time.Duration `yaml:"healthCheckInterval" env:"HEALTH_CHECK_INTERVAL"`
+	FetchTimeout        time.Duration `yaml:"fetchTimeout"        env:"FETCH_TIMEOUT"`
 }
 
 const (
@@ -61,32 +63,51 @@ const (
 )
 
 type Federation struct {
-	AutoAccept     string   `yaml:"autoAccept"`     // "none" (default), "mutual", "all"
-	AllowedDomains []string `yaml:"allowedDomains"` // always auto-accept from these domains
-	BlockedDomains []string `yaml:"blockedDomains"` // silently drop all activities from these domains
-	BlockedActors  []string `yaml:"blockedActors"`  // silently drop all activities from these actor URLs
+	AutoAccept     string   `yaml:"autoAccept"     env:"AUTO_ACCEPT"`                      // "none" (default), "mutual", "all"
+	AllowedDomains []string `yaml:"allowedDomains" env:"ALLOWED_DOMAINS" envSeparator:","` // always auto-accept from these domains
+	BlockedDomains []string `yaml:"blockedDomains" env:"BLOCKED_DOMAINS" envSeparator:","` // silently drop all activities from these domains
+	BlockedActors  []string `yaml:"blockedActors"  env:"BLOCKED_ACTORS"  envSeparator:","` // silently drop all activities from these actor URLs
 }
 
 type Limits struct {
-	MaxManifestSize int64 `yaml:"maxManifestSize"`
-	MaxBlobSize     int64 `yaml:"maxBlobSize"`
+	MaxManifestSize int64 `yaml:"maxManifestSize" env:"MAX_MANIFEST_SIZE"`
+	MaxBlobSize     int64 `yaml:"maxBlobSize"     env:"MAX_BLOB_SIZE"`
 }
 
 type Metrics struct {
-	Enabled bool   `yaml:"enabled"`
-	Listen  string `yaml:"listen"`
-	Token   string `yaml:"token"`
+	Enabled bool   `yaml:"enabled" env:"ENABLED"`
+	Listen  string `yaml:"listen"  env:"LISTEN"`
+	Token   string `yaml:"token"   env:"TOKEN"`
 }
 
 func Load(path string) (*Config, error) {
+	cfg := &Config{}
+
 	data, err := os.ReadFile(path) //nolint:gosec // config path is provided by operator
 	if err != nil {
-		return nil, fmt.Errorf("reading config file: %w", err)
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("reading config file: %w", err)
+		}
+		// No config file — will rely on env vars and defaults.
+	} else {
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			return nil, fmt.Errorf("parsing config file: %w", err)
+		}
 	}
 
-	cfg := &Config{}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parsing config file: %w", err)
+	// Env vars override YAML values.
+	if err := cenv.Parse(cfg); err != nil {
+		return nil, fmt.Errorf("parsing environment variables: %w", err)
+	}
+
+	// Handle TLS env vars — the pointer may be nil from YAML.
+	if cfg.TLS == nil {
+		if os.Getenv("ATOCI_TLS_CERT") != "" || os.Getenv("ATOCI_TLS_KEY") != "" {
+			cfg.TLS = &TLS{}
+			if err := cenv.Parse(cfg.TLS); err != nil {
+				return nil, fmt.Errorf("parsing TLS environment variables: %w", err)
+			}
+		}
 	}
 
 	if err := applyDefaults(cfg); err != nil {
