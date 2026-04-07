@@ -2,6 +2,9 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 version: 2
 project_name: apoci
+gitea_urls:
+  api: https://git.erwanleboucher.dev/api/v1
+  download: https://git.erwanleboucher.dev
 
 before:
   hooks:
