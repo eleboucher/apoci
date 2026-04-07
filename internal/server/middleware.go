@@ -124,13 +124,8 @@ func newIPRateLimiter(r rate.Limit, burst int) *ipRateLimiter {
 }
 
 func (rl *ipRateLimiter) allow(ip string) bool {
-	item := rl.cache.Get(ip)
-	if item != nil {
-		return item.Value().Allow()
-	}
-	lim := rate.NewLimiter(rl.rate, rl.burst)
-	rl.cache.Set(ip, lim, ttlcache.DefaultTTL)
-	return lim.Allow()
+	item, _ := rl.cache.GetOrSet(ip, rate.NewLimiter(rl.rate, rl.burst))
+	return item.Value().Allow()
 }
 
 func (rl *ipRateLimiter) Stop() {

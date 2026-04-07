@@ -332,13 +332,13 @@ func TestInboxAnnounceBlobRef(t *testing.T) {
 	alice, _, inbox, db := setupInboxTest(t)
 	ctx := context.Background()
 
+	aliceEndpoint := EndpointFromActorURL(alice.ActorURL)
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, aliceEndpoint))
 
-	// Alice must exist as a peer for blob lookup to work
 	require.NoError(t, db.UpsertPeer(ctx, &database.Peer{
 		ActorURL:          alice.ActorURL,
-		Endpoint:          "https://alice.test",
+		Endpoint:          aliceEndpoint,
 		ReplicationPolicy: "lazy",
 		IsHealthy:         true,
 	}))
@@ -352,7 +352,7 @@ func TestInboxAnnounceBlobRef(t *testing.T) {
 			"type":        "OCIBlob",
 			"ociDigest":   "sha256:b1b2b3b4b5b6b7b8b9b0b1b2b3b4b5b6b7b8b9b0b1b2b3b4b5b6b7b8b9b0b1b2",
 			"ociSize":     float64(4096),
-			"ociEndpoint": "https://alice.test",
+			"ociEndpoint": aliceEndpoint,
 		},
 	}
 

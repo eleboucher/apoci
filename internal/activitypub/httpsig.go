@@ -35,11 +35,8 @@ func (sc *SignatureCache) Stop() {
 
 func (sc *SignatureCache) seen(keyID, signature string) bool {
 	key := keyID + "\x00" + signature
-	if sc.cache.Has(key) {
-		return true
-	}
-	sc.cache.Set(key, struct{}{}, ttlcache.DefaultTTL)
-	return false
+	_, loaded := sc.cache.GetOrSet(key, struct{}{})
+	return loaded
 }
 
 func SignRequest(req *http.Request, keyID string, privKey *rsa.PrivateKey, body []byte) error {

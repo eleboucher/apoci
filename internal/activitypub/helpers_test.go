@@ -17,6 +17,6 @@ func discardLogger() *slog.Logger {
 
 func TestMain(m *testing.M) {
 	SetAllowInsecureHTTP(true)
-	validate.AllowPrivateIPs = true
+	validate.AllowPrivateIPs.Store(true)
 	os.Exit(m.Run())
 }

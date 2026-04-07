@@ -8,7 +8,6 @@ import "expvar"
 var (
 	InboxActivities  = expvar.NewMap("inbox_activities") // by type: Follow, Create, etc.
 	InboxDedupHits   = expvar.NewInt("inbox_dedup_hits")
-	InboxErrors      = expvar.NewInt("inbox_errors")
 	InboxRateLimited = expvar.NewInt("inbox_rate_limited")
 )
 

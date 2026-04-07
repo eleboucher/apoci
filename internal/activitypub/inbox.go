@@ -44,6 +44,8 @@ type InboxHandler struct {
 	blockedDomains map[string]struct{}
 	blockedActors  map[string]struct{}
 	actorLimiters  *ttlcache.Cache[string, *rate.Limiter]
+	domainLimiters *ttlcache.Cache[string, *rate.Limiter]
+	fetchFailures  *ttlcache.Cache[string, struct{}]
 	sigCache       *SignatureCache
 
 	logger *slog.Logger
@@ -68,10 +70,20 @@ func NewInboxHandler(identity *Identity, db *database.DB, cfg InboxConfig, logge
 		blockedActorSet[a] = struct{}{}
 	}
 
-	limiters := ttlcache.New[string, *rate.Limiter](
+	actorLimiters := ttlcache.New[string, *rate.Limiter](
 		ttlcache.WithTTL[string, *rate.Limiter](10 * time.Minute),
 	)
-	go limiters.Start()
+	go actorLimiters.Start()
+
+	domainLimiters := ttlcache.New[string, *rate.Limiter](
+		ttlcache.WithTTL[string, *rate.Limiter](10 * time.Minute),
+	)
+	go domainLimiters.Start()
+
+	fetchFailures := ttlcache.New[string, struct{}](
+		ttlcache.WithTTL[string, struct{}](5 * time.Minute),
+	)
+	go fetchFailures.Start()
 
 	return &InboxHandler{
 		identity:        identity,
@@ -82,10 +94,19 @@ func NewInboxHandler(identity *Identity, db *database.DB, cfg InboxConfig, logge
 		allowedDomains:  cfg.AllowedDomains,
 		blockedDomains:  blockedDomainSet,
 		blockedActors:   blockedActorSet,
-		actorLimiters:   limiters,
+		actorLimiters:   actorLimiters,
+		domainLimiters:  domainLimiters,
+		fetchFailures:   fetchFailures,
 		sigCache:        NewSignatureCache(),
 		logger:          logger,
 	}
+}
+
+func (h *InboxHandler) Stop() {
+	h.actorLimiters.Stop()
+	h.domainLimiters.Stop()
+	h.fetchFailures.Stop()
+	h.sigCache.Stop()
 }
 
 func (h *InboxHandler) SetBlobReplicator(r BlobReplicator) {
@@ -182,12 +203,14 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Deduplication: skip activities we've already processed (spec MUST).
+	// Dedup: AP spec requires processing an activity at most once.
 	existing, err := h.db.GetActivity(r.Context(), activity.ID)
 	if err != nil {
-		h.logger.Warn("inbox: failed to check activity dedup", "id", activity.ID, "error", err)
+		h.logger.Error("inbox: failed to check activity dedup", "id", activity.ID, "error", err)
+		http.Error(w, "temporary error", http.StatusServiceUnavailable)
+		return
 	}
-	if err == nil && existing != nil {
+	if existing != nil {
 		metrics.InboxDedupHits.Add(1)
 		h.logger.Debug("inbox: duplicate activity, skipping", "id", activity.ID)
 		w.WriteHeader(http.StatusAccepted)
@@ -323,10 +346,12 @@ func (h *InboxHandler) handleReject(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
+	// Peer rejected our outgoing follow.
 	if err := h.db.RejectOutgoingFollow(ctx, activity.Actor); err != nil {
 		h.logger.Warn("inbox: failed to record outgoing follow rejection", "by", activity.Actor, "error", err)
 	}
 
+	// Also reject any pending inbound request from them (no-op if none exists).
 	if err := h.db.RejectFollowRequest(ctx, activity.Actor); err != nil {
 		h.logger.Error("inbox: failed to reject follow request", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -406,8 +431,13 @@ func (h *InboxHandler) fetchActorPublicKey(ctx context.Context, actorURL string)
 		}
 	}
 
+	if h.fetchFailures.Has(actorURL) {
+		return "", fmt.Errorf("actor %s recently failed to fetch (cached)", actorURL)
+	}
+
 	actor, err := FetchActor(ctx, actorURL)
 	if err != nil {
+		h.fetchFailures.Set(actorURL, struct{}{}, ttlcache.DefaultTTL)
 		return "", err
 	}
 	return actor.PublicKey.PublicKeyPEM, nil
@@ -826,6 +856,20 @@ func (h *InboxHandler) ingestBlobRef(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 
+	// Endpoint must match the sender's domain.
+	senderDomain, err := senderDomainFromActorURL(actorURL)
+	if err != nil {
+		http.Error(w, "invalid actor URL", http.StatusBadRequest)
+		return
+	}
+	endpointURL, err := url.Parse(endpoint)
+	if err != nil || strings.ToLower(endpointURL.Hostname()) != senderDomain {
+		h.logger.Warn("inbox: blob endpoint does not match sender domain",
+			"endpoint", endpoint, "sender_domain", senderDomain, "actor", actorURL)
+		http.Error(w, "endpoint must match sender domain", http.StatusForbidden)
+		return
+	}
+
 	if size < 0 || size > float64(h.maxBlobSize) {
 		http.Error(w, "invalid blob size", http.StatusBadRequest)
 		return
@@ -894,13 +938,21 @@ func (h *InboxHandler) isBlocked(actorURL string) bool {
 }
 
 func (h *InboxHandler) actorAllowed(actorURL string) bool {
-	item := h.actorLimiters.Get(actorURL)
-	if item != nil {
-		return item.Value().Allow()
+	if !h.checkLimiter(h.actorLimiters, actorURL, 5, 20) {
+		return false
 	}
-	lim := rate.NewLimiter(5, 20)
-	h.actorLimiters.Set(actorURL, lim, ttlcache.DefaultTTL)
-	return lim.Allow()
+	// Per-domain budget prevents bypassing per-actor limits via actor rotation.
+	u, err := url.Parse(actorURL)
+	if err != nil {
+		return false
+	}
+	domain := u.Hostname()
+	return h.checkLimiter(h.domainLimiters, domain, 20, 100)
+}
+
+func (h *InboxHandler) checkLimiter(cache *ttlcache.Cache[string, *rate.Limiter], key string, r rate.Limit, burst int) bool {
+	item, _ := cache.GetOrSet(key, rate.NewLimiter(r, burst))
+	return item.Value().Allow()
 }
 
 func (h *InboxHandler) shouldAutoAccept(ctx context.Context, actorURL string) bool {

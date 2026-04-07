@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -61,14 +62,16 @@ func PeerEndpoint(endpoint string) error {
 
 	host := u.Hostname()
 
-	if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "0.0.0.0" {
-		return fmt.Errorf("peer endpoint must not point to loopback address")
-	}
+	if !AllowPrivateIPs.Load() {
+		if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "0.0.0.0" {
+			return fmt.Errorf("peer endpoint must not point to loopback address")
+		}
 
-	ip := net.ParseIP(host)
-	if ip != nil {
-		if err := checkPrivateIP(ip); err != nil {
-			return err
+		ip := net.ParseIP(host)
+		if ip != nil {
+			if err := checkPrivateIP(ip); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -118,7 +121,7 @@ func checkPrivateIP(ip net.IP) error {
 
 // AllowPrivateIPs disables DNS-rebinding and private IP checks in SafeDialContext.
 // Set to true for development/testing with localhost servers.
-var AllowPrivateIPs = false
+var AllowPrivateIPs atomic.Bool
 
 // SafeDialContext is a DialContext function that resolves DNS and rejects
 // connections to private/internal IP ranges to prevent DNS rebinding attacks.
@@ -133,7 +136,7 @@ func SafeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 		return nil, fmt.Errorf("DNS lookup failed for %s: %w", host, err)
 	}
 
-	if !AllowPrivateIPs {
+	if !AllowPrivateIPs.Load() {
 		for _, ipAddr := range ips {
 			if ipAddr.IP.IsUnspecified() {
 				return nil, fmt.Errorf("connection to unspecified address blocked for host %s", host)

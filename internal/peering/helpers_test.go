@@ -8,6 +8,6 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	validate.AllowPrivateIPs = true
+	validate.AllowPrivateIPs.Store(true)
 	os.Exit(m.Run())
 }
