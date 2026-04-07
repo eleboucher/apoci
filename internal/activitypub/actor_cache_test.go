@@ -3,6 +3,7 @@ package activitypub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -58,7 +59,7 @@ func newTestIdentity(t *testing.T) *Identity {
 func TestActorCacheHit(t *testing.T) {
 	srv, fetchCount := newTestActorServer(t)
 	identity := newTestIdentity(t)
-	cache := NewActorCache(identity)
+	cache := NewActorCache(context.Background(), identity)
 
 	actorURL := srv.URL + "/ap/actor"
 	ctx := context.Background()
@@ -77,7 +78,7 @@ func TestActorCacheHit(t *testing.T) {
 func TestActorCacheInvalidate(t *testing.T) {
 	srv, fetchCount := newTestActorServer(t)
 	identity := newTestIdentity(t)
-	cache := NewActorCache(identity)
+	cache := NewActorCache(context.Background(), identity)
 
 	actorURL := srv.URL + "/ap/actor"
 	ctx := context.Background()
@@ -96,7 +97,7 @@ func TestActorCacheInvalidate(t *testing.T) {
 func TestActorCacheConcurrentAccess(t *testing.T) {
 	srv, _ := newTestActorServer(t)
 	identity := newTestIdentity(t)
-	cache := NewActorCache(identity)
+	cache := NewActorCache(context.Background(), identity)
 
 	actorURL := srv.URL + "/ap/actor"
 	ctx := context.Background()
@@ -115,7 +116,7 @@ func TestActorCacheConcurrentAccess(t *testing.T) {
 				return
 			}
 			if actor.ID != actorURL {
-				errs <- err
+				errs <- fmt.Errorf("actor.ID mismatch: got %q, want %q", actor.ID, actorURL)
 			}
 		}()
 	}

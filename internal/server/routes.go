@@ -27,6 +27,7 @@ func (s *Server) routes() http.Handler {
 	var handler http.Handler = mux
 	handler = loggingMiddleware(s.logger)(handler)
 	handler = requestIDMiddleware(handler)
+	handler = securityHeadersMiddleware(handler)
 	handler = recoveryMiddleware(s.logger)(handler)
 
 	return handler

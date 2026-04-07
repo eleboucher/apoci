@@ -9,13 +9,13 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/apoci/apoci/internal/activitypub"
-	"github.com/apoci/apoci/internal/blobstore"
-	"github.com/apoci/apoci/internal/config"
-	"github.com/apoci/apoci/internal/database"
-	"github.com/apoci/apoci/internal/metrics"
-	"github.com/apoci/apoci/internal/oci"
-	"github.com/apoci/apoci/internal/peering"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/activitypub"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/config"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/oci"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/peering"
 )
 
 type Server struct {
@@ -43,10 +43,10 @@ type Server struct {
 	logger           *slog.Logger
 }
 
-func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *activitypub.Identity, logger *slog.Logger) *Server {
+func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *activitypub.Identity, version string, logger *slog.Logger) *Server {
 	registry := oci.NewRegistry(db, blobs, identity.ActorURL, cfg.Domain, cfg.ImmutableTags, cfg.Limits.MaxManifestSize, cfg.Limits.MaxBlobSize, logger)
 
-	apPublisher := activitypub.NewAPPublisher(identity, db, cfg.Endpoint, logger)
+	apPublisher := activitypub.NewAPPublisher(context.Background(), identity, db, cfg.Endpoint, logger)
 	apResolver := activitypub.NewAPResolver(db, logger)
 	deliveryQueue := activitypub.NewDeliveryQueue(db, identity, logger)
 	fetcher := peering.NewFetcher(cfg.Peering.FetchTimeout, cfg.Limits.MaxBlobSize, cfg.Limits.MaxManifestSize, logger)
@@ -85,7 +85,7 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 		ociHandler:       registry.Handler(),
 		actorHandler:     activitypub.NewActorHandler(identity, cfg.Name, cfg.Endpoint),
 		webfingerHandler: activitypub.NewWebFingerHandler(identity),
-		nodeinfoHandler:  activitypub.NewNodeInfoHandler(identity.Domain, "0.1.0", nil),
+		nodeinfoHandler:  activitypub.NewNodeInfoHandler(identity.Domain, version, nil),
 		inboxHandler:     inboxHandler,
 		outboxHandler:    activitypub.NewOutboxHandler(identity, db),
 		followersHandler: activitypub.NewFollowersHandler(identity, db),
@@ -126,7 +126,10 @@ func (s *Server) Start(ctx context.Context) error {
 		metricsServer := &http.Server{
 			Addr:              s.cfg.Metrics.Listen,
 			Handler:           metricsHandler,
+			ReadTimeout:       5 * time.Second,
 			ReadHeaderTimeout: 5 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			IdleTimeout:       30 * time.Second,
 		}
 		go func() { //nolint:gosec // intentional background goroutine for metrics server
 			s.logger.Info("metrics server listening", "address", s.cfg.Metrics.Listen)
@@ -161,7 +164,9 @@ func (s *Server) Start(ctx context.Context) error {
 		"following", len(outgoing),
 	)
 
+	shutdownDone := make(chan struct{})
 	go func() { //nolint:gosec // intentional background goroutine for graceful shutdown
+		defer close(shutdownDone)
 		<-ctx.Done()
 		s.healthChecker.Stop()
 		s.gc.Stop()
@@ -177,8 +182,13 @@ func (s *Server) Start(ctx context.Context) error {
 		_ = s.httpServer.Shutdown(shutdownCtx)
 	}()
 
+	var serveErr error
 	if s.cfg.TLS != nil {
-		return s.httpServer.ServeTLS(ln, s.cfg.TLS.Cert, s.cfg.TLS.Key)
+		serveErr = s.httpServer.ServeTLS(ln, s.cfg.TLS.Cert, s.cfg.TLS.Key)
+	} else {
+		serveErr = s.httpServer.Serve(ln)
 	}
-	return s.httpServer.Serve(ln)
+	// Wait for shutdown goroutine to finish before returning.
+	<-shutdownDone
+	return serveErr
 }

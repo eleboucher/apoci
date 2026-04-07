@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,12 +15,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/apoci/apoci/internal/activitypub"
-	"github.com/apoci/apoci/internal/admin"
-	"github.com/apoci/apoci/internal/blobstore"
-	"github.com/apoci/apoci/internal/config"
-	"github.com/apoci/apoci/internal/database"
-	"github.com/apoci/apoci/internal/server"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/activitypub"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/admin"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/config"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/server"
 )
 
 var version = "dev"
@@ -76,13 +77,13 @@ func serveCmd(configPath *string) *cobra.Command {
 				return fmt.Errorf("loading identity: %w", err)
 			}
 
-			srv := server.New(cfg, db, blobs, identity, logger)
+			srv := server.New(cfg, db, blobs, identity, version, logger)
 
 			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer cancel()
 
 			err = srv.Start(ctx)
-			if err != nil && err != http.ErrServerClosed {
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return fmt.Errorf("server error: %w", err)
 			}
 			return nil
@@ -103,6 +104,9 @@ func followCmd(configPath *string) *cobra.Command {
 
 	getClient := func() *admin.Client {
 		if remote == "" {
+			if token != "" {
+				fmt.Fprintln(os.Stderr, "warning: --token has no effect without --remote")
+			}
 			return nil
 		}
 		return admin.NewClient(remote, token)
@@ -121,65 +125,7 @@ func followCmd(configPath *string) *cobra.Command {
 				fmt.Printf("Follow sent to %s\n", res["followed"])
 				return nil
 			}
-
-			db, identity, err := openAll(*configPath)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = db.Close() }()
-
-			input := args[0]
-			fmt.Printf("Resolving %s...\n", input)
-
-			targetActorURL, err := activitypub.ResolveFollowTarget(cmd.Context(), input)
-			if err != nil {
-				return fmt.Errorf("resolving target: %w", err)
-			}
-
-			if targetActorURL != input {
-				fmt.Printf("Resolved to %s\n", targetActorURL)
-			}
-
-			fmt.Printf("Fetching actor %s...\n", targetActorURL)
-			actor, err := activitypub.FetchActor(cmd.Context(), targetActorURL)
-			if err != nil {
-				return fmt.Errorf("fetching actor: %w", err)
-			}
-
-			endpoint := activitypub.EndpointFromActorURL(actor.ID)
-			err = db.AddFollowRequest(cmd.Context(), actor.ID, actor.PublicKey.PublicKeyPEM, endpoint)
-			if err != nil {
-				return fmt.Errorf("storing follow request: %w", err)
-			}
-
-			followActivity := map[string]any{
-				"@context": "https://www.w3.org/ns/activitystreams",
-				"id":       identity.ActorURL + "#follow-" + actor.ID,
-				"type":     "Follow",
-				"actor":    identity.ActorURL,
-				"object":   actor.ID,
-			}
-
-			activityJSON, err := json.Marshal(followActivity)
-			if err != nil {
-				return fmt.Errorf("marshaling follow: %w", err)
-			}
-
-			fmt.Printf("Sending Follow to %s...\n", actor.Inbox)
-			if err := activitypub.DeliverActivity(cmd.Context(), actor.Inbox, activityJSON, identity); err != nil {
-				return fmt.Errorf("sending follow: %w", err)
-			}
-
-			fmt.Printf("Follow sent to %s.\n", actor.ID)
-
-			_ = db.UpsertPeer(cmd.Context(), &database.Peer{
-				ActorURL:          actor.ID,
-				Endpoint:          activitypub.EndpointFromActorURL(actor.ID),
-				ReplicationPolicy: "lazy",
-				IsHealthy:         true,
-			})
-
-			return nil
+			return runFollowAdd(cmd.Context(), *configPath, args[0])
 		},
 	})
 
@@ -196,23 +142,7 @@ func followCmd(configPath *string) *cobra.Command {
 				fmt.Printf("Unfollowed %s\n", res["removed"])
 				return nil
 			}
-
-			db, _, err := openAll(*configPath)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = db.Close() }()
-
-			actorURL, err := activitypub.ResolveFollowTarget(cmd.Context(), args[0])
-			if err != nil {
-				return fmt.Errorf("resolving target: %w", err)
-			}
-
-			if err := db.RemoveFollow(cmd.Context(), actorURL); err != nil {
-				return err
-			}
-			fmt.Printf("Unfollowed %s\n", actorURL)
-			return nil
+			return runFollowRemove(cmd.Context(), *configPath, args[0])
 		},
 	})
 
@@ -230,42 +160,10 @@ func followCmd(configPath *string) *cobra.Command {
 					fmt.Println(string(data))
 					return nil
 				}
-				if len(follows) == 0 {
-					fmt.Println("Not following anyone.")
-					return nil
-				}
-				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-				_, _ = fmt.Fprintln(w, "ACTOR\tENDPOINT\tSINCE")
-				for _, f := range follows {
-					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", f.ActorURL, f.Endpoint, f.ApprovedAt.Format("2006-01-02"))
-				}
-				_ = w.Flush()
+				printFollows(follows)
 				return nil
 			}
-
-			db, _, err := openAll(*configPath)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = db.Close() }()
-
-			follows, err := db.ListFollows(cmd.Context())
-			if err != nil {
-				return err
-			}
-
-			if len(follows) == 0 {
-				fmt.Println("Not following anyone. Use 'apoci follow add <actor-url>' to follow a peer.")
-				return nil
-			}
-
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			_, _ = fmt.Fprintln(w, "ACTOR\tENDPOINT\tSINCE")
-			for _, f := range follows {
-				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", f.ActorURL, f.Endpoint, f.ApprovedAt.Format("2006-01-02"))
-			}
-			_ = w.Flush()
-			return nil
+			return runFollowList(cmd.Context(), *configPath)
 		},
 	})
 
@@ -283,42 +181,10 @@ func followCmd(configPath *string) *cobra.Command {
 					fmt.Println(string(data))
 					return nil
 				}
-				if len(requests) == 0 {
-					fmt.Println("No pending follow requests.")
-					return nil
-				}
-				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-				_, _ = fmt.Fprintln(w, "ACTOR\tENDPOINT\tREQUESTED")
-				for _, r := range requests {
-					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", r.ActorURL, r.Endpoint, r.RequestedAt.Format("2006-01-02 15:04"))
-				}
-				_ = w.Flush()
+				printFollowRequests(requests)
 				return nil
 			}
-
-			db, _, err := openAll(*configPath)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = db.Close() }()
-
-			requests, err := db.ListFollowRequests(cmd.Context())
-			if err != nil {
-				return err
-			}
-
-			if len(requests) == 0 {
-				fmt.Println("No pending follow requests.")
-				return nil
-			}
-
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			_, _ = fmt.Fprintln(w, "ACTOR\tENDPOINT\tREQUESTED")
-			for _, r := range requests {
-				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", r.ActorURL, r.Endpoint, r.RequestedAt.Format("2006-01-02 15:04"))
-			}
-			_ = w.Flush()
-			return nil
+			return runFollowPending(cmd.Context(), *configPath)
 		},
 	})
 
@@ -335,24 +201,7 @@ func followCmd(configPath *string) *cobra.Command {
 				fmt.Printf("Accepted follow from %s\n", res["accepted"])
 				return nil
 			}
-
-			db, identity, err := openAll(*configPath)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = db.Close() }()
-
-			actorURL, err := activitypub.ResolveFollowTarget(cmd.Context(), args[0])
-			if err != nil {
-				return fmt.Errorf("resolving target: %w", err)
-			}
-
-			fmt.Printf("Accepting follow from %s...\n", actorURL)
-			if err := activitypub.SendAccept(cmd.Context(), identity, db, actorURL); err != nil {
-				return err
-			}
-			fmt.Printf("Accepted follow from %s\n", actorURL)
-			return nil
+			return runFollowAccept(cmd.Context(), *configPath, args[0])
 		},
 	})
 
@@ -369,27 +218,182 @@ func followCmd(configPath *string) *cobra.Command {
 				fmt.Printf("Rejected follow from %s\n", res["rejected"])
 				return nil
 			}
-
-			db, identity, err := openAll(*configPath)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = db.Close() }()
-
-			actorURL, err := activitypub.ResolveFollowTarget(cmd.Context(), args[0])
-			if err != nil {
-				return fmt.Errorf("resolving target: %w", err)
-			}
-
-			if err := activitypub.SendReject(cmd.Context(), identity, db, actorURL); err != nil {
-				return err
-			}
-			fmt.Printf("Rejected follow from %s\n", actorURL)
-			return nil
+			return runFollowReject(cmd.Context(), *configPath, args[0])
 		},
 	})
 
 	return cmd
+}
+
+func runFollowAdd(ctx context.Context, configPath, input string) error {
+	db, identity, err := openAll(configPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	fmt.Printf("Resolving %s...\n", input)
+	targetActorURL, err := activitypub.ResolveFollowTarget(ctx, input)
+	if err != nil {
+		return fmt.Errorf("resolving target: %w", err)
+	}
+	if targetActorURL != input {
+		fmt.Printf("Resolved to %s\n", targetActorURL)
+	}
+
+	fmt.Printf("Fetching actor %s...\n", targetActorURL)
+	actor, err := activitypub.FetchActor(ctx, targetActorURL)
+	if err != nil {
+		return fmt.Errorf("fetching actor: %w", err)
+	}
+
+	endpoint := activitypub.EndpointFromActorURL(actor.ID)
+	if err := db.AddFollowRequest(ctx, actor.ID, actor.PublicKey.PublicKeyPEM, endpoint); err != nil {
+		return fmt.Errorf("storing follow request: %w", err)
+	}
+
+	followActivity := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       identity.ActorURL + "#follow-" + actor.ID,
+		"type":     "Follow",
+		"actor":    identity.ActorURL,
+		"object":   actor.ID,
+	}
+	activityJSON, err := json.Marshal(followActivity)
+	if err != nil {
+		return fmt.Errorf("marshaling follow: %w", err)
+	}
+
+	fmt.Printf("Sending Follow to %s...\n", actor.Inbox)
+	if err := activitypub.DeliverActivity(ctx, actor.Inbox, activityJSON, identity); err != nil {
+		return fmt.Errorf("sending follow: %w", err)
+	}
+	fmt.Printf("Follow sent to %s.\n", actor.ID)
+
+	if err := db.UpsertPeer(ctx, &database.Peer{
+		ActorURL:          actor.ID,
+		Endpoint:          activitypub.EndpointFromActorURL(actor.ID),
+		ReplicationPolicy: "lazy",
+		IsHealthy:         true,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to upsert peer record: %v\n", err)
+	}
+	return nil
+}
+
+func runFollowRemove(ctx context.Context, configPath, arg string) error {
+	db, _, err := openAll(configPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	actorURL, err := activitypub.ResolveFollowTarget(ctx, arg)
+	if err != nil {
+		return fmt.Errorf("resolving target: %w", err)
+	}
+	if err := db.RemoveFollow(ctx, actorURL); err != nil {
+		return err
+	}
+	fmt.Printf("Unfollowed %s\n", actorURL)
+	return nil
+}
+
+func printFollows(follows []database.Follow) {
+	if len(follows) == 0 {
+		fmt.Println("Not following anyone.")
+		return
+	}
+	w := newTabWriter()
+	_, _ = fmt.Fprintln(w, "ACTOR\tENDPOINT\tSINCE")
+	for _, f := range follows {
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", f.ActorURL, f.Endpoint, f.ApprovedAt.Format("2006-01-02"))
+	}
+	_ = w.Flush()
+}
+
+func runFollowList(ctx context.Context, configPath string) error {
+	db, _, err := openAll(configPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	follows, err := db.ListFollows(ctx)
+	if err != nil {
+		return err
+	}
+	if len(follows) == 0 {
+		fmt.Println("Not following anyone. Use 'apoci follow add <actor-url>' to follow a peer.")
+		return nil
+	}
+	printFollows(follows)
+	return nil
+}
+
+func printFollowRequests(requests []database.FollowRequest) {
+	if len(requests) == 0 {
+		fmt.Println("No pending follow requests.")
+		return
+	}
+	w := newTabWriter()
+	_, _ = fmt.Fprintln(w, "ACTOR\tENDPOINT\tREQUESTED")
+	for _, r := range requests {
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", r.ActorURL, r.Endpoint, r.RequestedAt.Format("2006-01-02 15:04"))
+	}
+	_ = w.Flush()
+}
+
+func runFollowPending(ctx context.Context, configPath string) error {
+	db, _, err := openAll(configPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	requests, err := db.ListFollowRequests(ctx)
+	if err != nil {
+		return err
+	}
+	printFollowRequests(requests)
+	return nil
+}
+
+func runFollowAccept(ctx context.Context, configPath, arg string) error {
+	db, identity, err := openAll(configPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	actorURL, err := activitypub.ResolveFollowTarget(ctx, arg)
+	if err != nil {
+		return fmt.Errorf("resolving target: %w", err)
+	}
+	fmt.Printf("Accepting follow from %s...\n", actorURL)
+	if err := activitypub.SendAccept(ctx, identity, db, actorURL); err != nil {
+		return err
+	}
+	fmt.Printf("Accepted follow from %s\n", actorURL)
+	return nil
+}
+
+func runFollowReject(ctx context.Context, configPath, arg string) error {
+	db, identity, err := openAll(configPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	actorURL, err := activitypub.ResolveFollowTarget(ctx, arg)
+	if err != nil {
+		return fmt.Errorf("resolving target: %w", err)
+	}
+	if err := activitypub.SendReject(ctx, identity, db, actorURL); err != nil {
+		return err
+	}
+	fmt.Printf("Rejected follow from %s\n", actorURL)
+	return nil
 }
 
 func identityCmd(configPath *string) *cobra.Command {
@@ -407,6 +411,9 @@ func identityCmd(configPath *string) *cobra.Command {
 		Use:   "show",
 		Short: "Show this node's actor URL and public key",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if remote == "" && token != "" {
+				fmt.Fprintln(os.Stderr, "warning: --token has no effect without --remote")
+			}
 			if remote != "" {
 				c := admin.NewClient(remote, token)
 				info, err := c.GetIdentity(cmd.Context())
@@ -460,6 +467,10 @@ func identityCmd(configPath *string) *cobra.Command {
 
 func nopLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func newTabWriter() *tabwriter.Writer {
+	return tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 }
 
 func openDB(cfg *config.Config, logger *slog.Logger) (*database.DB, error) {

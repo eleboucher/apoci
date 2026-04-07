@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/apoci/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
 
 func openTestDB(t *testing.T) *database.DB {

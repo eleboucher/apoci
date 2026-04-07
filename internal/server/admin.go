@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/apoci/apoci/internal/activitypub"
-	"github.com/apoci/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/activitypub"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
 
 const adminMaxBody int64 = 4 * 1024 // 4 KB
@@ -138,7 +139,7 @@ func (s *Server) adminAddFollow(w http.ResponseWriter, r *http.Request) {
 
 	followActivity := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
-		"id":       s.identity.ActorURL + "#follow-" + actor.ID,
+		"id":       s.identity.ActorURL + "#follow-" + url.QueryEscape(actor.ID),
 		"type":     "Follow",
 		"actor":    s.identity.ActorURL,
 		"object":   actor.ID,

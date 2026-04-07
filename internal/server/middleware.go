@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"regexp"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -13,7 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/apoci/apoci/internal/metrics"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 )
 
 type responseWriter struct {
@@ -33,12 +35,13 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-const maxRequestIDLen = 128
+// requestIDSafeRe matches only safe characters for the X-Request-ID header.
+var requestIDSafeRe = regexp.MustCompile(`^[a-zA-Z0-9\-_]{1,128}$`)
 
 func requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqID := r.Header.Get("X-Request-ID")
-		if reqID == "" || len(reqID) > maxRequestIDLen {
+		if reqID == "" || !requestIDSafeRe.MatchString(reqID) {
 			reqID = uuid.New().String()
 		}
 		w.Header().Set("X-Request-ID", reqID)
@@ -68,7 +71,10 @@ func loggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 }
 
 // registryAuthMiddleware requires a Bearer token for mutating OCI registry requests.
-// Read-only requests (GET, HEAD) are allowed without authentication.
+// Read-only requests (GET, HEAD) are intentionally allowed without authentication
+// to support anonymous image pulls from public registries.
+// Basic auth is also accepted, with the password treated as the token, to support
+// OCI clients (e.g. flux) that only support Basic auth.
 func registryAuthMiddleware(token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -77,9 +83,15 @@ func registryAuthMiddleware(token string) func(http.Handler) http.Handler {
 				return
 			}
 
+			provided := ""
 			auth := r.Header.Get("Authorization")
-			provided, ok := strings.CutPrefix(auth, "Bearer ")
-			if !ok || subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
+			if t, ok := strings.CutPrefix(auth, "Bearer "); ok {
+				provided = t
+			} else if _, p, ok := r.BasicAuth(); ok {
+				provided = p
+			}
+
+			if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
 				w.Header().Set("WWW-Authenticate", `Bearer realm="apoci",service="registry"`)
 				http.Error(w, "authentication required", http.StatusUnauthorized)
 				return
@@ -161,6 +173,16 @@ func bearerAuthMiddleware(token string) func(http.Handler) http.Handler {
 	}
 }
 
+// securityHeadersMiddleware adds standard defensive HTTP security headers to all responses.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
 func recoveryMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +192,7 @@ func recoveryMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 						"panic", rec,
 						"method", r.Method,
 						"path", r.URL.Path,
+						"stack", string(debug.Stack()),
 					)
 					http.Error(w, "internal server error", http.StatusInternalServerError)
 				}

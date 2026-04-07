@@ -20,31 +20,32 @@ func (db *DB) GetRepository(ctx context.Context, name string) (*Repository, erro
 }
 
 func (db *DB) GetOrCreateRepository(ctx context.Context, name, ownerDID string) (*Repository, error) {
-	r, err := db.GetRepository(ctx, name)
-	if err != nil {
-		return nil, err
-	}
-	if r != nil {
-		if r.OwnerID != ownerDID {
-			return nil, fmt.Errorf("repository %q owned by %s, not %s", name, r.OwnerID, ownerDID)
-		}
-		return r, nil
-	}
-
 	tx, err := db.bun.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("beginning repository transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// ON CONFLICT DO NOTHING avoids a constraint error when two concurrent requests race.
+	var existing Repository
+	err = tx.NewRaw(
+		"SELECT id, name, owner_id, created_at FROM repositories WHERE name = ?", name).
+		Scan(ctx, &existing.ID, &existing.Name, &existing.OwnerID, &existing.CreatedAt)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("querying repository in transaction: %w", err)
+	}
+	if err == nil {
+		if existing.OwnerID != ownerDID {
+			return nil, fmt.Errorf("repository %q owned by %s, not %s", name, existing.OwnerID, ownerDID)
+		}
+		return &existing, nil
+	}
+
 	_, err = tx.NewRaw(
 		"INSERT INTO repositories (name, owner_id) VALUES (?, ?) ON CONFLICT (name) DO NOTHING", name, ownerDID).Exec(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("creating repository: %w", err)
 	}
 
-	// Re-read to get the ID (whether we just inserted or a concurrent writer did).
 	var repo Repository
 	err = tx.NewRaw(
 		"SELECT id, name, owner_id, created_at FROM repositories WHERE name = ?", name).Scan(ctx, &repo.ID, &repo.Name, &repo.OwnerID, &repo.CreatedAt)

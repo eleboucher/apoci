@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/apoci/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
 
 func TestPublishManifestCreatesActivity(t *testing.T) {
@@ -17,7 +17,7 @@ func TestPublishManifestCreatesActivity(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
-	pub := NewAPPublisher(id, db, "https://test.example.com", discardLogger())
+	pub := NewAPPublisher(context.Background(), id, db, "https://test.example.com", discardLogger())
 
 	ctx := context.Background()
 	manifest := []byte(`{"schemaVersion":2}`)
@@ -46,7 +46,7 @@ func TestPublishTagCreatesUpdateActivity(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
-	pub := NewAPPublisher(id, db, "https://test.example.com", discardLogger())
+	pub := NewAPPublisher(context.Background(), id, db, "https://test.example.com", discardLogger())
 
 	ctx := context.Background()
 	err = pub.PublishTag(ctx, "test/repo", "v1.0", "sha256:abc123")
@@ -65,7 +65,7 @@ func TestPublishBlobRefCreatesAnnounceActivity(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
-	pub := NewAPPublisher(id, db, "https://test.example.com", discardLogger())
+	pub := NewAPPublisher(context.Background(), id, db, "https://test.example.com", discardLogger())
 
 	ctx := context.Background()
 	err = pub.PublishBlobRef(ctx, "sha256:blob123", 4096)

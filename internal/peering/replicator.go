@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/apoci/apoci/internal/blobstore"
-	"github.com/apoci/apoci/internal/database"
-	"github.com/apoci/apoci/internal/metrics"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 )
 
 const maxConcurrentReplications = 10

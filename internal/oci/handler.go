@@ -21,11 +21,11 @@ import (
 	"cuelabs.dev/go/oci/ociregistry/ocimem"
 	"cuelabs.dev/go/oci/ociregistry/ociserver"
 
-	"github.com/apoci/apoci/internal/blobstore"
-	"github.com/apoci/apoci/internal/database"
-	"github.com/apoci/apoci/internal/metrics"
-	"github.com/apoci/apoci/internal/peering"
-	"github.com/apoci/apoci/internal/validate"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/peering"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
 )
 
 type Publisher interface {
@@ -129,9 +129,8 @@ const defaultMediaType = "application/octet-stream"
 
 func (r *Registry) getBlob(ctx context.Context, repo string, digest ociregistry.Digest) (ociregistry.BlobReader, error) {
 	metrics.RegistryBlobPulls.Add(1)
-	// Single Open call avoids TOCTOU race and triple-stat from a separate Exists() pre-check.
 	f, err := r.blobs.Open(string(digest))
-	if err != nil {
+	if err != nil && !errors.Is(err, blobstore.ErrBlobNotFound) {
 		return nil, fmt.Errorf("opening blob: %w", err)
 	}
 	if f != nil {
@@ -176,7 +175,7 @@ func (r *Registry) fetchBlobFromPeers(ctx context.Context, repo string, digest o
 			continue
 		}
 
-		storedDigest, size, err := r.blobs.Put(stream.Body, string(digest))
+		storedDigest, size, err := r.blobs.Put(io.LimitReader(stream.Body, r.maxBlobSize+1), string(digest))
 		if closeErr := stream.Body.Close(); closeErr != nil {
 			r.logger.Warn("failed to close blob stream", "peer", peer.PeerEndpoint, "error", closeErr)
 		}
@@ -207,10 +206,13 @@ func (r *Registry) fetchBlobFromPeers(ctx context.Context, repo string, digest o
 			"size", size,
 		)
 
-		// Serve from disk now that the blob is cached locally.
 		f, err := r.blobs.Open(storedDigest)
-		if err != nil || f == nil {
-			r.logger.Warn("failed to open cached blob after fetch", "error", err)
+		if err != nil {
+			if errors.Is(err, blobstore.ErrBlobNotFound) {
+				r.logger.Warn("cached blob disappeared after fetch", "digest", storedDigest)
+			} else {
+				r.logger.Warn("failed to open cached blob after fetch", "error", err)
+			}
 			continue
 		}
 		info, err := f.Stat()
@@ -231,17 +233,17 @@ func (r *Registry) fetchBlobFromPeers(ctx context.Context, repo string, digest o
 
 func (r *Registry) getBlobRange(ctx context.Context, repo string, digest ociregistry.Digest, offset0, offset1 int64) (ociregistry.BlobReader, error) {
 	f, err := r.blobs.Open(string(digest))
-	if err != nil {
+	if err != nil && !errors.Is(err, blobstore.ErrBlobNotFound) {
 		return nil, fmt.Errorf("opening blob: %w", err)
 	}
-	if f == nil {
+	if errors.Is(err, blobstore.ErrBlobNotFound) {
 		if r.resolver != nil && r.fetcher != nil {
 			reader, fetchErr := r.fetchBlobFromPeers(ctx, repo, digest)
 			if fetchErr == nil && reader != nil {
 				_ = reader.Close()
 				metrics.RegistryBlobPullThru.Add(1)
 				f, err = r.blobs.Open(string(digest))
-				if err != nil || f == nil {
+				if err != nil {
 					return nil, ociregistry.ErrBlobUnknown
 				}
 			}
@@ -515,9 +517,7 @@ func (r *Registry) pushBlobChunked(ctx context.Context, repo string, chunkSize i
 
 	// The commit callback fires after the HTTP handler returns, so use a non-cancellable
 	// context with a timeout to prevent indefinite blocking on shutdown.
-	// AfterFunc ensures the cancel is called even if the upload is abandoned (callback never fires).
 	commitCtx, commitCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
-	context.AfterFunc(commitCtx, commitCancel)
 	buf := ocimem.NewBuffer(func(b *ocimem.Buffer) error {
 		defer commitCancel()
 		desc, data, err := b.GetBlob()
@@ -639,11 +639,13 @@ func (r *Registry) deleteBlob(ctx context.Context, repo string, digest ociregist
 	if repoObj.OwnerID != r.localID {
 		return ociregistry.ErrDenied
 	}
-	if err := r.blobs.Delete(string(digest)); err != nil {
-		return fmt.Errorf("deleting blob file: %w", err)
-	}
+	// Delete from DB first so that any concurrent reader that opens the file
+	// via the DB index will get a not-found error rather than a dangling open.
 	if err := r.db.DeleteBlob(ctx, string(digest)); err != nil {
 		return fmt.Errorf("deleting blob record: %w", err)
+	}
+	if err := r.blobs.Delete(string(digest)); err != nil {
+		return fmt.Errorf("deleting blob file: %w", err)
 	}
 	return nil
 }
@@ -686,13 +688,20 @@ const listPageSize = 1000
 
 func (r *Registry) repositories(ctx context.Context, startAfter string) iter.Seq2[string, error] {
 	return func(yield func(string, error) bool) {
-		repos, err := r.db.ListRepositoriesAfter(ctx, startAfter, listPageSize)
-		if err != nil {
-			yield("", err)
-			return
-		}
-		for _, repo := range repos {
-			if !yield(repo.Name, nil) {
+		cursor := startAfter
+		for {
+			repos, err := r.db.ListRepositoriesAfter(ctx, cursor, listPageSize)
+			if err != nil {
+				yield("", err)
+				return
+			}
+			for _, repo := range repos {
+				if !yield(repo.Name, nil) {
+					return
+				}
+				cursor = repo.Name
+			}
+			if len(repos) < listPageSize {
 				return
 			}
 		}
@@ -711,13 +720,20 @@ func (r *Registry) tags(ctx context.Context, repo string, startAfter string) ite
 			return
 		}
 
-		tagList, err := r.db.ListTagsAfter(ctx, repoObj.ID, startAfter, listPageSize)
-		if err != nil {
-			yield("", err)
-			return
-		}
-		for _, t := range tagList {
-			if !yield(t, nil) {
+		cursor := startAfter
+		for {
+			tagList, err := r.db.ListTagsAfter(ctx, repoObj.ID, cursor, listPageSize)
+			if err != nil {
+				yield("", err)
+				return
+			}
+			for _, t := range tagList {
+				if !yield(t, nil) {
+					return
+				}
+				cursor = t
+			}
+			if len(tagList) < listPageSize {
 				return
 			}
 		}

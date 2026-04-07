@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/apoci/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
 
 type HealthChecker struct {
@@ -49,6 +49,7 @@ func (hc *HealthChecker) Stop() {
 	hc.mu.Lock()
 	if hc.cancel != nil {
 		hc.cancel()
+		hc.cancel = nil
 		hc.running = false
 	}
 	hc.mu.Unlock()

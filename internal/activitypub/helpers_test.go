@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/apoci/apoci/internal/validate"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
 )
 
 const testActorURL = "https://test.example.com/ap/actor"
@@ -16,7 +16,7 @@ func discardLogger() *slog.Logger {
 }
 
 func TestMain(m *testing.M) {
-	AllowInsecureHTTP = true
+	SetAllowInsecureHTTP(true)
 	validate.AllowPrivateIPs = true
 	os.Exit(m.Run())
 }

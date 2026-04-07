@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/apoci/apoci/internal/blobstore"
-	"github.com/apoci/apoci/internal/database"
-	"github.com/apoci/apoci/internal/metrics"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 )
 
 const (
@@ -116,15 +116,17 @@ func (gc *GarbageCollector) cleanupOrphanedBlobMetadata(ctx context.Context) {
 
 // cleanupOrphanedBlobFiles removes blob files on disk that have no corresponding DB record.
 func (gc *GarbageCollector) cleanupOrphanedBlobFiles(ctx context.Context) {
-	knownDigests, err := gc.db.AllBlobDigests(ctx)
-	if err != nil {
-		gc.logger.Error("gc: failed to list known blob digests", "error", err)
-		return
-	}
-
+	// Snapshot disk digests before DB digests to avoid deleting a blob that was
+	// written to disk after the disk snapshot but before the DB snapshot.
 	diskDigests, err := gc.blobs.ListDigests()
 	if err != nil {
 		gc.logger.Error("gc: failed to list blob files on disk", "error", err)
+		return
+	}
+
+	knownDigests, err := gc.db.AllBlobDigests(ctx, 1000)
+	if err != nil {
+		gc.logger.Error("gc: failed to list known blob digests", "error", err)
 		return
 	}
 

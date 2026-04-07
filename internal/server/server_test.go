@@ -11,11 +11,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/apoci/apoci/internal/activitypub"
-	"github.com/apoci/apoci/internal/blobstore"
-	"github.com/apoci/apoci/internal/config"
-	"github.com/apoci/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/activitypub"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/config"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
+
+const testRegistryToken = "test-token"
 
 func nopLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
@@ -50,7 +52,7 @@ func testServer(t *testing.T) *Server {
 		},
 	}
 
-	return New(cfg, db, blobs, identity, nopLog())
+	return New(cfg, db, blobs, identity, "test", nopLog())
 }
 
 func TestHealthz(t *testing.T) {
@@ -286,12 +288,12 @@ func TestAdminIdentityRequiresAuth(t *testing.T) {
 
 func TestAdminIdentityWithToken(t *testing.T) {
 	s := testServer(t)
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testRegistryToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
 	req, _ := http.NewRequest("GET", srv.URL+"/api/admin/identity", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer "+testRegistryToken)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
@@ -306,12 +308,12 @@ func TestAdminIdentityWithToken(t *testing.T) {
 
 func TestAdminFollowsListEmpty(t *testing.T) {
 	s := testServer(t)
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testRegistryToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
 	req, _ := http.NewRequest("GET", srv.URL+"/api/admin/follows", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer "+testRegistryToken)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()

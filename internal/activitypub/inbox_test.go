@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/apoci/apoci/internal/config"
-	"github.com/apoci/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/config"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
 
 func testInboxSetup(t *testing.T) *InboxHandler {

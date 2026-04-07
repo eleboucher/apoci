@@ -85,7 +85,7 @@ func (db *DB) PutPeerBlob(ctx context.Context, peerActor, blobDigest, peerEndpoi
 
 // CleanupStalePeerBlobs removes peer blob references not verified within the given duration.
 func (db *DB) CleanupStalePeerBlobs(ctx context.Context, olderThan time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-olderThan).UTC().Format(time.DateTime)
+	cutoff := time.Now().Add(-olderThan).UTC().Format(time.RFC3339)
 	res, err := db.bun.NewRaw(
 		`DELETE FROM peer_blobs WHERE last_verified_at < ?`, cutoff).Exec(ctx)
 	if err != nil {

@@ -195,6 +195,11 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("could not derive domain from endpoint")
 	}
 
+	endpointScheme := strings.ToLower(strings.SplitN(cfg.Endpoint, "://", 2)[0])
+	if endpointScheme != "https" && endpointScheme != "http" {
+		return fmt.Errorf("endpoint scheme must be 'https' or 'http', got %q", endpointScheme)
+	}
+
 	validDrivers := map[string]bool{"sqlite": true, "postgres": true}
 	if !validDrivers[cfg.Database.Driver] {
 		return fmt.Errorf("database.driver must be 'sqlite' or 'postgres'")
@@ -228,6 +233,19 @@ func validate(cfg *Config) error {
 		if strings.Contains(cfg.AccountDomain, "/") || strings.Contains(cfg.AccountDomain, ":") {
 			return fmt.Errorf("accountDomain must be a bare hostname (no scheme, port, or path)")
 		}
+	}
+
+	if cfg.Limits.MaxManifestSize < 0 {
+		return fmt.Errorf("limits.maxManifestSize must not be negative")
+	}
+	if cfg.Limits.MaxBlobSize < 0 {
+		return fmt.Errorf("limits.maxBlobSize must not be negative")
+	}
+	if cfg.Peering.HealthCheckInterval < 0 {
+		return fmt.Errorf("peering.healthCheckInterval must not be negative")
+	}
+	if cfg.Peering.FetchTimeout < 0 {
+		return fmt.Errorf("peering.fetchTimeout must not be negative")
 	}
 
 	return nil

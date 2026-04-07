@@ -8,9 +8,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/apoci/apoci/internal/metrics"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 
-	"github.com/apoci/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
 
 const (
@@ -37,11 +37,11 @@ func (p *APPublisher) SetNotifyFunc(fn func()) {
 	p.onEnqueue = fn
 }
 
-func NewAPPublisher(identity *Identity, db *database.DB, endpoint string, logger *slog.Logger) *APPublisher {
+func NewAPPublisher(ctx context.Context, identity *Identity, db *database.DB, endpoint string, logger *slog.Logger) *APPublisher {
 	return &APPublisher{
 		identity:   identity,
 		db:         db,
-		actorCache: NewActorCache(identity),
+		actorCache: NewActorCache(ctx, identity),
 		endpoint:   endpoint,
 		logger:     logger,
 	}
@@ -111,7 +111,7 @@ func (p *APPublisher) Stop() {
 func (p *APPublisher) createAndDeliver(ctx context.Context, activityType string, object any) error {
 	metrics.OutboundActivities.Add(activityType, 1)
 	activityID := p.activityURL()
-	followersURL := "https://" + p.identity.Domain + "/ap/followers"
+	followersURL := p.endpoint + "/ap/followers"
 
 	activity := map[string]any{
 		"@context": ContextActivityStreams,
@@ -194,9 +194,9 @@ func (p *APPublisher) resolveInbox(ctx context.Context, actorURL string) (string
 }
 
 func (p *APPublisher) objectURL(kind, ref string) string {
-	return "https://" + p.identity.Domain + "/ap/objects/" + kind + "/" + ref
+	return p.endpoint + "/ap/objects/" + kind + "/" + ref
 }
 
 func (p *APPublisher) activityURL() string {
-	return "https://" + p.identity.Domain + "/ap/activities/" + uuid.New().String()
+	return p.endpoint + "/ap/activities/" + uuid.New().String()
 }

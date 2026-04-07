@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/apoci/apoci/internal/database"
-	"github.com/apoci/apoci/internal/oci"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/oci"
 )
 
 type APResolver struct {

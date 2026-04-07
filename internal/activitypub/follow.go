@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/apoci/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
 
 func SendAccept(ctx context.Context, identity *Identity, db *database.DB, followerActorURL string) error {

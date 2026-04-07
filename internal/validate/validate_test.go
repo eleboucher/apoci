@@ -113,13 +113,13 @@ func TestManifestContent(t *testing.T) {
 		{"valid", []byte(`{"schemaVersion":2}`), false},
 		{"empty", []byte{}, true},
 		{"nil", nil, true},
-		{"too large", make([]byte, DefaultMaxManifestSize+1), true},
-		{"at limit", make([]byte, DefaultMaxManifestSize), false},
+		{"too large", make([]byte, 10*1024*1024+1), true},
+		{"at limit", make([]byte, 10*1024*1024), false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ManifestContent(tt.input, DefaultMaxManifestSize)
+			err := ManifestContent(tt.input, 10*1024*1024)
 			if tt.wantErr {
 				assert.Error(t, err, "ManifestContent(len=%d)", len(tt.input))
 			} else {

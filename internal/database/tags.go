@@ -7,7 +7,7 @@ import (
 	"fmt"
 )
 
-var ErrTagImmutable = fmt.Errorf("tag is immutable and cannot be overwritten")
+var ErrTagImmutable = errors.New("tag is immutable and cannot be overwritten")
 
 func (db *DB) GetTag(ctx context.Context, repoID int64, name string) (*Tag, error) {
 	t := &Tag{}
@@ -37,11 +37,14 @@ func (db *DB) PutTagWithImmutable(ctx context.Context, repoID int64, name, manif
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var existing bool
+	var isImmutable bool
 	err = tx.NewRaw(
 		"SELECT immutable FROM tags WHERE repository_id = ? AND name = ?",
-		repoID, name).Scan(ctx, &existing)
-	if err == nil && existing {
+		repoID, name).Scan(ctx, &isImmutable)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("checking tag immutability: %w", err)
+	}
+	if err == nil && isImmutable {
 		return ErrTagImmutable
 	}
 
@@ -60,8 +63,14 @@ func (db *DB) PutTagWithImmutable(ctx context.Context, repoID int64, name, manif
 }
 
 func (db *DB) DeleteTag(ctx context.Context, repoID int64, name string) error {
+	tx, err := db.bun.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning delete tag transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	var immutable bool
-	err := db.bun.NewRaw(
+	err = tx.NewRaw(
 		"SELECT immutable FROM tags WHERE repository_id = ? AND name = ?",
 		repoID, name).Scan(ctx, &immutable)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -74,12 +83,12 @@ func (db *DB) DeleteTag(ctx context.Context, repoID int64, name string) error {
 		return ErrTagImmutable
 	}
 
-	_, err = db.bun.NewRaw(
+	_, err = tx.NewRaw(
 		"DELETE FROM tags WHERE repository_id = ? AND name = ?", repoID, name).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("deleting tag: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (db *DB) ListTagsAfter(ctx context.Context, repoID int64, startAfter string, limit int) ([]string, error) {

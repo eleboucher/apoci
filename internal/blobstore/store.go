@@ -3,6 +3,7 @@ package blobstore
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,8 +12,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/apoci/apoci/internal/validate"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
 )
+
+// ErrBlobNotFound is returned by Open when the requested blob does not exist on disk.
+var ErrBlobNotFound = errors.New("blob not found")
 
 type Store struct {
 	root   string
@@ -87,7 +91,7 @@ func (s *Store) Open(digest string) (*os.File, error) {
 	f, err := os.Open(path) //nolint:gosec // path is constructed from content-addressable digest
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, ErrBlobNotFound
 		}
 		return nil, fmt.Errorf("opening blob: %w", err)
 	}
@@ -119,6 +123,8 @@ var hexDigestRe = regexp.MustCompile(`^[a-f0-9]{64}$`)
 // ListDigests enumerates all blob digests stored on disk.
 func (s *Store) ListDigests() ([]string, error) {
 	var digests []string
+	var errs []error
+
 	subdirs, err := os.ReadDir(s.root)
 	if err != nil {
 		return nil, fmt.Errorf("reading blob root: %w", err)
@@ -129,6 +135,7 @@ func (s *Store) ListDigests() ([]string, error) {
 		}
 		entries, err := os.ReadDir(filepath.Join(s.root, subdir.Name()))
 		if err != nil {
+			errs = append(errs, fmt.Errorf("reading blob subdir %s: %w", subdir.Name(), err))
 			continue
 		}
 		for _, entry := range entries {
@@ -140,6 +147,9 @@ func (s *Store) ListDigests() ([]string, error) {
 			}
 			digests = append(digests, "sha256:"+entry.Name())
 		}
+	}
+	if len(errs) > 0 {
+		return digests, errors.Join(errs...)
 	}
 	return digests, nil
 }

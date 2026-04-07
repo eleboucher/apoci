@@ -14,9 +14,9 @@ import (
 	"cuelabs.dev/go/oci/ociregistry"
 	"github.com/stretchr/testify/require"
 
-	"github.com/apoci/apoci/internal/blobstore"
-	"github.com/apoci/apoci/internal/config"
-	"github.com/apoci/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/config"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
 
 const testManifestMediaType = "application/vnd.oci.image.manifest.v1+json"

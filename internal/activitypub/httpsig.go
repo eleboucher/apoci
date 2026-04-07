@@ -14,7 +14,7 @@ import (
 	"code.superseriousbusiness.org/httpsig"
 )
 
-const signatureMaxAge = 30 * time.Minute
+const signatureMaxAge = 5 * time.Minute
 
 func SignRequest(req *http.Request, keyID string, privKey *rsa.PrivateKey, body []byte) error {
 	if req.Header.Get("Host") == "" && req.Host != "" {
@@ -50,8 +50,36 @@ func VerifyRequest(req *http.Request, pubKeyPEM string, body []byte) error {
 		return fmt.Errorf("verifying signature: %w", err)
 	}
 
-	if err := enforceSignedHeaders(req); err != nil {
+	signedHeaders, err := extractSignedHeaders(req)
+	if err != nil {
 		return err
+	}
+
+	for _, required := range requiredSignedHeaders {
+		found := false
+		for _, h := range signedHeaders {
+			if strings.EqualFold(h, required) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("%s must be included in signed headers", required)
+		}
+	}
+
+	// If a body is present, the Digest header must be signed.
+	if len(body) > 0 {
+		digestSigned := false
+		for _, h := range signedHeaders {
+			if strings.EqualFold(h, "digest") {
+				digestSigned = true
+				break
+			}
+		}
+		if !digestSigned {
+			return fmt.Errorf("digest must be included in signed headers when body is present")
+		}
 	}
 
 	dateStr := req.Header.Get("Date")
@@ -70,7 +98,7 @@ func VerifyRequest(req *http.Request, pubKeyPEM string, body []byte) error {
 		return fmt.Errorf("signature expired: Date header is %s old", age.Round(time.Second))
 	}
 
-	if body != nil {
+	if len(body) > 0 {
 		if err := verifyBodyDigest(req, body); err != nil {
 			return err
 		}
@@ -92,41 +120,36 @@ func ExtractKeyID(req *http.Request) (string, error) {
 	return verifier.KeyId(), nil
 }
 
-func enforceSignedHeaders(req *http.Request) error {
+// extractSignedHeaders parses the headers= field from the Signature header,
+// rejecting duplicate headers= fields.
+func extractSignedHeaders(req *http.Request) ([]string, error) {
 	sig := req.Header.Get("Signature")
 	if sig == "" {
-		return fmt.Errorf("missing Signature header")
+		return nil, fmt.Errorf("missing Signature header")
 	}
 
-	var signedSet string
+	var headersVal string
+	found := false
 	for part := range strings.SplitSeq(sig, ",") {
 		part = strings.TrimSpace(part)
 		if val, ok := strings.CutPrefix(part, "headers="); ok {
-			signedSet = strings.Trim(val, `"`)
-			break
-		}
-	}
-
-	signed := strings.Fields(signedSet)
-	for _, required := range requiredSignedHeaders {
-		found := false
-		for _, h := range signed {
-			if strings.EqualFold(h, required) {
-				found = true
-				break
+			if found {
+				return nil, fmt.Errorf("duplicate headers= field in Signature header")
 			}
-		}
-		if !found {
-			return fmt.Errorf("%s must be included in signed headers", required)
+			headersVal = strings.Trim(val, `"`)
+			found = true
 		}
 	}
-	return nil
+	if !found {
+		return nil, fmt.Errorf("headers= field missing from Signature header")
+	}
+	return strings.Fields(headersVal), nil
 }
 
 func verifyBodyDigest(req *http.Request, body []byte) error {
 	d := req.Header.Get("Digest")
 	if d == "" {
-		return nil
+		return fmt.Errorf("digest header required when body is present")
 	}
 	if !strings.HasPrefix(d, "SHA-256=") {
 		return fmt.Errorf("unsupported digest algorithm: %s", d)

@@ -17,11 +17,14 @@ type ActorCache struct {
 	group    singleflight.Group
 }
 
-func NewActorCache(identity *Identity) *ActorCache {
+func NewActorCache(ctx context.Context, identity *Identity) *ActorCache {
 	cache := ttlcache.New[string, *Actor](
 		ttlcache.WithTTL[string, *Actor](actorCacheTTL),
 	)
 	go cache.Start() // starts automatic expired-item eviction
+	context.AfterFunc(ctx, func() {
+		cache.Stop()
+	})
 
 	return &ActorCache{
 		identity: identity,

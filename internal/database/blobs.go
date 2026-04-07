@@ -26,7 +26,7 @@ func (db *DB) PutBlob(ctx context.Context, digest string, sizeBytes int64, media
 		 ON CONFLICT(digest) DO UPDATE SET
 		   size_bytes = excluded.size_bytes,
 		   media_type = COALESCE(excluded.media_type, blobs.media_type),
-		   stored_locally = excluded.stored_locally`,
+		   stored_locally = blobs.stored_locally OR excluded.stored_locally`,
 		digest, sizeBytes, mediaType, storedLocally).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("putting blob: %w", err)
@@ -76,17 +76,25 @@ func (db *DB) OrphanedBlobs(ctx context.Context, limit int) ([]string, error) {
 	return digests, nil
 }
 
-// AllBlobDigests returns all blob digests known in the database.
-func (db *DB) AllBlobDigests(ctx context.Context) (map[string]bool, error) {
-	var list []string
-	err := db.bun.NewRaw("SELECT digest FROM blobs").Scan(ctx, &list)
-	if err != nil {
-		return nil, fmt.Errorf("listing blob digests: %w", err)
-	}
-
-	digests := make(map[string]bool, len(list))
-	for _, d := range list {
-		digests[d] = true
+// AllBlobDigests returns all blob digests known in the database, paging in batches of pageSize.
+func (db *DB) AllBlobDigests(ctx context.Context, pageSize int) (map[string]bool, error) {
+	digests := make(map[string]bool)
+	var afterDigest string
+	for {
+		var batch []string
+		err := db.bun.NewRaw(
+			"SELECT digest FROM blobs WHERE digest > ? ORDER BY digest LIMIT ?",
+			afterDigest, pageSize).Scan(ctx, &batch)
+		if err != nil {
+			return nil, fmt.Errorf("listing blob digests: %w", err)
+		}
+		for _, d := range batch {
+			digests[d] = true
+		}
+		if len(batch) < pageSize {
+			break
+		}
+		afterDigest = batch[len(batch)-1]
 	}
 	return digests, nil
 }

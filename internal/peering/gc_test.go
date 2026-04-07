@@ -8,8 +8,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/apoci/apoci/internal/blobstore"
-	"github.com/apoci/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
 
 func testGCDeps(t *testing.T) (*database.DB, *blobstore.Store) {
@@ -91,7 +91,7 @@ func TestGCCleansOrphanedBlobFiles(t *testing.T) {
 	require.True(t, blobs.Exists(digest), "expected blob file to exist before cleanup")
 
 	// Check that AllBlobDigests returns nothing (blob not in DB).
-	knownDigests, err := db.AllBlobDigests(ctx)
+	knownDigests, err := db.AllBlobDigests(ctx, 1000)
 	require.NoError(t, err)
 	require.False(t, knownDigests[digest], "expected digest to NOT be in DB")
 
@@ -135,7 +135,7 @@ func TestGCPreservesValidData(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.PutBlob(ctx, diskDigest, 18, nil, true))
 
-	knownDigests, err := db.AllBlobDigests(ctx)
+	knownDigests, err := db.AllBlobDigests(ctx, 1000)
 	require.NoError(t, err)
 	require.True(t, knownDigests[diskDigest], "expected disk blob digest to be in known digests")
 

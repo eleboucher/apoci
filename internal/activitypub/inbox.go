@@ -3,6 +3,7 @@ package activitypub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,9 +14,9 @@ import (
 	"github.com/jellydator/ttlcache/v3"
 	"golang.org/x/time/rate"
 
-	"github.com/apoci/apoci/internal/database"
-	"github.com/apoci/apoci/internal/metrics"
-	"github.com/apoci/apoci/internal/validate"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
 )
 
 type BlobReplicator interface {
@@ -139,7 +140,7 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if activity.Actor != actorURL {
+	if normaliseActorURL(activity.Actor) != normaliseActorURL(actorURL) {
 		h.logger.Warn("inbox: actor mismatch", "signed", actorURL, "claimed", activity.Actor)
 		http.Error(w, "actor mismatch", http.StatusForbidden)
 		return
@@ -165,6 +166,9 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Deduplication: skip activities we've already processed (spec MUST).
 	existing, err := h.db.GetActivity(r.Context(), activity.ID)
+	if err != nil {
+		h.logger.Warn("inbox: failed to check activity dedup", "id", activity.ID, "error", err)
+	}
 	if err == nil && existing != nil {
 		metrics.InboxDedupHits.Add(1)
 		h.logger.Debug("inbox: duplicate activity, skipping", "id", activity.ID)
@@ -221,7 +225,12 @@ func (h *InboxHandler) handleFollow(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
-	activityJSON, _ := json.Marshal(activity)
+	activityJSON, err := json.Marshal(activity)
+	if err != nil {
+		h.logger.Error("inbox: failed to marshal Follow activity", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	h.storeActivity(ctx, activity.ID, ActivityFollow, activity.Actor, activityJSON)
 
 	if h.shouldAutoAccept(ctx, activity.Actor) {
@@ -261,11 +270,18 @@ func (h *InboxHandler) handleAccept(ctx context.Context, w http.ResponseWriter, 
 	// An Accept(Follow) means a remote peer accepted our outgoing Follow request.
 	// It does NOT auto-accept any incoming follow request from them — that requires
 	// explicit operator approval via "apoci follow accept".
-	if err := h.db.AcceptOutgoingFollow(ctx, activity.Actor); err == nil {
+	if err := h.db.AcceptOutgoingFollow(ctx, activity.Actor); err != nil {
+		h.logger.Warn("inbox: failed to record outgoing follow acceptance", "by", activity.Actor, "error", err)
+	} else {
 		h.logger.Info("inbox: outgoing follow accepted", "by", activity.Actor)
 	}
 
-	activityJSON, _ := json.Marshal(activity)
+	activityJSON, err := json.Marshal(activity)
+	if err != nil {
+		h.logger.Error("inbox: failed to marshal Accept activity", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	h.storeActivity(ctx, activity.ID, ActivityAccept, activity.Actor, activityJSON)
 
 	w.WriteHeader(http.StatusAccepted)
@@ -289,7 +305,9 @@ func (h *InboxHandler) handleReject(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
-	_ = h.db.RejectOutgoingFollow(ctx, activity.Actor)
+	if err := h.db.RejectOutgoingFollow(ctx, activity.Actor); err != nil {
+		h.logger.Warn("inbox: failed to record outgoing follow rejection", "by", activity.Actor, "error", err)
+	}
 
 	if err := h.db.RejectFollowRequest(ctx, activity.Actor); err != nil {
 		h.logger.Error("inbox: failed to reject follow request", "error", err)
@@ -297,7 +315,12 @@ func (h *InboxHandler) handleReject(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
-	activityJSON, _ := json.Marshal(activity)
+	activityJSON, err := json.Marshal(activity)
+	if err != nil {
+		h.logger.Error("inbox: failed to marshal Reject activity", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	h.storeActivity(ctx, activity.ID, ActivityReject, activity.Actor, activityJSON)
 
 	h.logger.Info("inbox: follow rejected", "by", activity.Actor)
@@ -323,7 +346,12 @@ func (h *InboxHandler) handleUndo(ctx context.Context, w http.ResponseWriter, ac
 		return
 	}
 
-	activityJSON, _ := json.Marshal(activity)
+	activityJSON, err := json.Marshal(activity)
+	if err != nil {
+		h.logger.Error("inbox: failed to marshal Undo activity", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	h.storeActivity(ctx, activity.ID, ActivityUndo, activity.Actor, activityJSON)
 
 	h.logger.Info("inbox: follow undone", "by", activity.Actor)
@@ -341,6 +369,25 @@ func (h *InboxHandler) fetchActorPublicKey(ctx context.Context, actorURL string)
 		return fr.PublicKeyPEM, nil
 	}
 
+	// Only fetch from domains that are allowed (if an allowlist is configured).
+	if len(h.allowedDomains) > 0 {
+		u, err := url.Parse(actorURL)
+		if err != nil {
+			return "", fmt.Errorf("invalid actor URL: %w", err)
+		}
+		host := u.Hostname()
+		allowed := false
+		for _, d := range h.allowedDomains {
+			if host == d || strings.HasSuffix(host, "."+d) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return "", fmt.Errorf("actor domain %q not in allowed list", host)
+		}
+	}
+
 	actor, err := FetchActor(ctx, actorURL)
 	if err != nil {
 		return "", err
@@ -353,6 +400,20 @@ func keyIDToActorURL(keyID string) string {
 		return base
 	}
 	return keyID
+}
+
+// normaliseActorURL strips trailing slashes and lowercases the scheme+host
+// so that URL comparison is not sensitive to minor formatting differences.
+func normaliseActorURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	u.Fragment = ""
+	u.RawQuery = ""
+	u.Host = strings.ToLower(u.Host)
+	u.Scheme = strings.ToLower(u.Scheme)
+	return strings.TrimRight(u.String(), "/")
 }
 
 func (h *InboxHandler) handleCreate(ctx context.Context, w http.ResponseWriter, activity *RawActivity, rawBody []byte) {
@@ -464,7 +525,12 @@ func (h *InboxHandler) handleDelete(ctx context.Context, w http.ResponseWriter, 
 	}
 
 	if rw.status == 0 || rw.status < 400 {
-		activityJSON, _ := json.Marshal(activity)
+		activityJSON, err := json.Marshal(activity)
+		if err != nil {
+			h.logger.Error("inbox: failed to marshal Delete activity", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 		h.storeActivity(ctx, activity.ID, ActivityDelete, activity.Actor, activityJSON)
 	}
 }
@@ -554,7 +620,7 @@ func (h *InboxHandler) ingestManifest(ctx context.Context, w http.ResponseWriter
 		return
 	}
 
-	if size < 0 || size > float64(h.maxManifestSize) {
+	if size <= 0 || size > float64(h.maxManifestSize) {
 		http.Error(w, "invalid manifest size", http.StatusBadRequest)
 		return
 	}

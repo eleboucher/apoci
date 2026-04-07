@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/apoci/apoci/internal/validate"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
 )
 
 func TestMain(m *testing.M) {

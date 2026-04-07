@@ -77,6 +77,14 @@ func PeerEndpoint(endpoint string) error {
 
 var privateRanges []privateRange
 
+func mustParseCIDR(network string) *net.IPNet {
+	_, cidr, err := net.ParseCIDR(network)
+	if err != nil {
+		panic(fmt.Sprintf("validate: invalid CIDR %q: %v", network, err))
+	}
+	return cidr
+}
+
 func init() {
 	for _, entry := range []struct {
 		network string
@@ -90,8 +98,7 @@ func init() {
 		{"fc00::/7", "IPv6 unique local"},
 		{"fe80::/10", "IPv6 link-local"},
 	} {
-		_, cidr, _ := net.ParseCIDR(entry.network)
-		privateRanges = append(privateRanges, privateRange{cidr: cidr, label: entry.label})
+		privateRanges = append(privateRanges, privateRange{cidr: mustParseCIDR(entry.network), label: entry.label})
 	}
 }
 
@@ -113,10 +120,8 @@ func checkPrivateIP(ip net.IP) error {
 // Set to true for development/testing with localhost servers.
 var AllowPrivateIPs = false
 
-// SafeDialContext is a DialContext function that resolves DNS and checks all
-// resolved IPs against private/internal ranges before connecting.
-// This prevents DNS rebinding attacks where a hostname initially resolves to a
-// public IP but later resolves to a private IP (e.g., cloud metadata endpoint).
+// SafeDialContext is a DialContext function that resolves DNS and rejects
+// connections to private/internal IP ranges to prevent DNS rebinding attacks.
 func SafeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -150,9 +155,6 @@ func SafeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 	}
 	return nil, fmt.Errorf("failed to connect to %s: %w", host, lastErr)
 }
-
-// DefaultMaxManifestSize is the default maximum manifest size (10 MB).
-const DefaultMaxManifestSize = 10 * 1024 * 1024
 
 func ManifestContent(content []byte, maxSize int64) error {
 	if int64(len(content)) > maxSize {

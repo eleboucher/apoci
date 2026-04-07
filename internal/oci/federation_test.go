@@ -9,11 +9,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/apoci/apoci/internal/activitypub"
-	"github.com/apoci/apoci/internal/blobstore"
-	"github.com/apoci/apoci/internal/config"
-	"github.com/apoci/apoci/internal/database"
-	"github.com/apoci/apoci/internal/oci"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/activitypub"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/config"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/oci"
 )
 
 func nopLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -33,7 +33,7 @@ func testRegistryWithFederation(t *testing.T) (*oci.Registry, *database.DB) {
 	require.NoError(t, err)
 
 	reg := oci.NewRegistry(db, blobs, identity.ActorURL, "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
-	pub := activitypub.NewAPPublisher(identity, db, "https://test.example.com", nopLog())
+	pub := activitypub.NewAPPublisher(context.Background(), identity, db, "https://test.example.com", nopLog())
 	reg.SetPublisher(pub)
 
 	return reg, db

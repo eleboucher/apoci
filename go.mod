@@ -1,4 +1,4 @@
-module github.com/apoci/apoci
+module git.erwanleboucher.dev/eleboucher/apoci
 
 go 1.26.1
 

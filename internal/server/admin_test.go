@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/apoci/apoci/internal/activitypub"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/activitypub"
 )
 
 // mockAPFederator is a test double for apFederator.

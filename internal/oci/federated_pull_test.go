@@ -10,11 +10,11 @@ import (
 	"cuelabs.dev/go/oci/ociregistry"
 	"github.com/stretchr/testify/require"
 
-	"github.com/apoci/apoci/internal/blobstore"
-	"github.com/apoci/apoci/internal/config"
-	"github.com/apoci/apoci/internal/database"
-	"github.com/apoci/apoci/internal/oci"
-	"github.com/apoci/apoci/internal/peering"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/config"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/oci"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/peering"
 )
 
 func testDescriptor(data []byte, mediaType string) ociregistry.Descriptor {
