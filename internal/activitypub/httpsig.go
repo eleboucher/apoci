@@ -139,6 +139,9 @@ func VerifyRequest(req *http.Request, pubKeyPEM string, body []byte, sigCache *S
 	if sigCache != nil {
 		keyID := verifier.KeyId()
 		sig := extractRawSignature(req)
+		if sig == "" {
+			return fmt.Errorf("missing signature= field in Signature header")
+		}
 		if sigCache.seen(keyID, sig) {
 			return fmt.Errorf("replayed signature detected")
 		}

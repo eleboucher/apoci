@@ -5,23 +5,26 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/uptrace/bun"
 )
 
 func (db *DB) AddFollow(ctx context.Context, actorURL, publicKeyPEM, endpoint string) error {
-	_, err := db.bun.NewRaw(
-		`INSERT INTO follows (actor_url, public_key_pem, endpoint)
-		 VALUES (?, ?, ?)
-		 ON CONFLICT(actor_url) DO UPDATE SET
-		   public_key_pem = excluded.public_key_pem,
-		   endpoint = excluded.endpoint`,
-		actorURL, publicKeyPEM, endpoint).Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("adding follow: %w", err)
-	}
-	if _, err := db.bun.NewRaw("DELETE FROM follow_requests WHERE actor_url = ?", actorURL).Exec(ctx); err != nil {
-		db.logger.Warn("failed to cleanup follow request after accepting", "actor", actorURL, "error", err)
-	}
-	return nil
+	return db.bun.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := tx.NewRaw(
+			`INSERT INTO follows (actor_url, public_key_pem, endpoint)
+			 VALUES (?, ?, ?)
+			 ON CONFLICT(actor_url) DO UPDATE SET
+			   public_key_pem = excluded.public_key_pem,
+			   endpoint = excluded.endpoint`,
+			actorURL, publicKeyPEM, endpoint).Exec(ctx); err != nil {
+			return fmt.Errorf("adding follow: %w", err)
+		}
+		if _, err := tx.NewRaw("DELETE FROM follow_requests WHERE actor_url = ?", actorURL).Exec(ctx); err != nil {
+			return fmt.Errorf("cleaning up follow request: %w", err)
+		}
+		return nil
+	})
 }
 
 func (db *DB) RemoveFollow(ctx context.Context, actorURL string) error {

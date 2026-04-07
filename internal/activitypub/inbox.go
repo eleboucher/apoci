@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -179,7 +180,17 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if normaliseActorURL(activity.Actor) != normaliseActorURL(actorURL) {
+	normClaimed, err := normaliseActorURL(activity.Actor)
+	if err != nil {
+		http.Error(w, "invalid actor URL", http.StatusBadRequest)
+		return
+	}
+	normSigned, err := normaliseActorURL(actorURL)
+	if err != nil {
+		http.Error(w, "invalid actor URL", http.StatusBadRequest)
+		return
+	}
+	if normClaimed != normSigned {
 		h.logger.Warn("inbox: actor mismatch", "signed", actorURL, "claimed", activity.Actor)
 		http.Error(w, "actor mismatch", http.StatusForbidden)
 		return
@@ -200,6 +211,11 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if activity.ID == "" {
 		http.Error(w, "activity missing id", http.StatusBadRequest)
+		return
+	}
+
+	if err := validate.ActivityID(activity.ID); err != nil {
+		http.Error(w, "activity ID too long", http.StatusBadRequest)
 		return
 	}
 
@@ -308,9 +324,16 @@ func (h *InboxHandler) handleAccept(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
-	// An Accept(Follow) means a remote peer accepted our outgoing Follow request.
-	// It does NOT auto-accept any incoming follow request from them — that requires
-	// explicit operator approval via "apoci follow accept".
+	// Verify we actually have a pending outgoing follow to this actor before
+	// accepting. Without this check, a spurious Accept(Follow) from any actor
+	// with a valid signature would create an unauthorized follow relationship.
+	outgoing, err := h.db.GetOutgoingFollow(ctx, activity.Actor)
+	if err != nil || outgoing == nil || outgoing.Status != "pending" {
+		h.logger.Warn("inbox: Accept(Follow) from actor we have no pending follow to", "actor", activity.Actor)
+		w.WriteHeader(http.StatusAccepted) // silent accept per AP convention
+		return
+	}
+
 	if err := h.db.AcceptOutgoingFollow(ctx, activity.Actor); err != nil {
 		h.logger.Warn("inbox: failed to record outgoing follow acceptance", "by", activity.Actor, "error", err)
 	} else {
@@ -351,11 +374,9 @@ func (h *InboxHandler) handleReject(ctx context.Context, w http.ResponseWriter, 
 		h.logger.Warn("inbox: failed to record outgoing follow rejection", "by", activity.Actor, "error", err)
 	}
 
-	// Also reject any pending inbound request from them (no-op if none exists).
+	// Also reject any pending inbound request from them (best-effort, no-op if none exists).
 	if err := h.db.RejectFollowRequest(ctx, activity.Actor); err != nil {
-		h.logger.Error("inbox: failed to reject follow request", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		h.logger.Debug("inbox: no pending inbound follow request to reject", "actor", activity.Actor, "error", err)
 	}
 
 	activityJSON, err := json.Marshal(activity)
@@ -452,16 +473,19 @@ func keyIDToActorURL(keyID string) string {
 
 // normaliseActorURL strips trailing slashes and lowercases the scheme+host
 // so that URL comparison is not sensitive to minor formatting differences.
-func normaliseActorURL(raw string) string {
+func normaliseActorURL(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return raw
+		return "", fmt.Errorf("invalid actor URL %q: %w", raw, err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("actor URL %q missing scheme or host", raw)
 	}
 	u.Fragment = ""
 	u.RawQuery = ""
 	u.Host = strings.ToLower(u.Host)
 	u.Scheme = strings.ToLower(u.Scheme)
-	return strings.TrimRight(u.String(), "/")
+	return strings.TrimRight(u.String(), "/"), nil
 }
 
 func (h *InboxHandler) handleCreate(ctx context.Context, w http.ResponseWriter, activity *RawActivity, rawBody []byte) {
@@ -645,6 +669,11 @@ func (h *InboxHandler) deleteTag(ctx context.Context, w http.ResponseWriter, obj
 	}
 
 	if err := h.db.DeleteTag(ctx, repoObj.ID, tag); err != nil {
+		if errors.Is(err, database.ErrTagImmutable) {
+			h.logger.Warn("inbox: rejected delete of immutable tag", "repo", repo, "tag", tag, "actor", actorURL)
+			http.Error(w, "tag is immutable", http.StatusForbidden)
+			return
+		}
 		h.logger.Error("inbox: failed to delete tag", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -672,6 +701,11 @@ func (h *InboxHandler) ingestManifest(ctx context.Context, w http.ResponseWriter
 
 	if err := validate.Digest(digest); err != nil {
 		http.Error(w, "invalid digest", http.StatusBadRequest)
+		return
+	}
+
+	if mediaType == "" || !validate.MediaType(mediaType) {
+		http.Error(w, "invalid or missing ociMediaType", http.StatusBadRequest)
 		return
 	}
 
@@ -799,6 +833,16 @@ func (h *InboxHandler) ingestTag(ctx context.Context, w http.ResponseWriter, obj
 
 	if err := validate.RepoName(repo); err != nil {
 		http.Error(w, "invalid repository name", http.StatusBadRequest)
+		return
+	}
+
+	if err := validate.Tag(tag); err != nil {
+		http.Error(w, "invalid tag name", http.StatusBadRequest)
+		return
+	}
+
+	if err := validate.Digest(digest); err != nil {
+		http.Error(w, "invalid digest", http.StatusBadRequest)
 		return
 	}
 
