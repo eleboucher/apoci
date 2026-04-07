@@ -59,10 +59,10 @@ const (
 )
 
 type Federation struct {
-	AutoAcceptMutual  bool     `yaml:"autoAcceptMutual"`  // auto-accept if we already follow the requester
-	AutoAcceptDomains []string `yaml:"autoAcceptDomains"` // auto-accept from these domains
-	BlockedDomains    []string `yaml:"blockedDomains"`    // silently drop all activities from these domains
-	BlockedActors     []string `yaml:"blockedActors"`     // silently drop all activities from these actor URLs
+	AutoAccept     string   `yaml:"autoAccept"`     // "none" (default), "mutual", "all"
+	AllowedDomains []string `yaml:"allowedDomains"` // always auto-accept from these domains
+	BlockedDomains []string `yaml:"blockedDomains"` // silently drop all activities from these domains
+	BlockedActors  []string `yaml:"blockedActors"`  // silently drop all activities from these actor URLs
 }
 
 type Limits struct {
@@ -113,7 +113,7 @@ func applyDefaults(cfg *Config) error {
 		cfg.Listen = ":5000"
 	}
 	if cfg.DataDir == "" {
-		cfg.DataDir = "/var/lib/apoci"
+		cfg.DataDir = "/apoci/storage"
 	}
 	if cfg.KeyPath == "" {
 		cfg.KeyPath = filepath.Join(cfg.DataDir, "ap.key")
@@ -141,6 +141,9 @@ func applyDefaults(cfg *Config) error {
 	}
 	if cfg.Metrics.Listen == "" {
 		cfg.Metrics.Listen = ":9090"
+	}
+	if cfg.Federation.AutoAccept == "" {
+		cfg.Federation.AutoAccept = "none"
 	}
 	if cfg.AccountDomain == "" {
 		cfg.AccountDomain = cfg.Domain
@@ -208,6 +211,11 @@ func validate(cfg *Config) error {
 	validFormats := map[string]bool{"json": true, "text": true}
 	if !validFormats[cfg.LogFormat] {
 		return fmt.Errorf("logFormat must be 'json' or 'text'")
+	}
+
+	validAutoAccept := map[string]bool{"none": true, "mutual": true, "all": true}
+	if !validAutoAccept[cfg.Federation.AutoAccept] {
+		return fmt.Errorf("federation.autoAccept must be 'none', 'mutual', or 'all'")
 	}
 
 	if cfg.ImmutableTags != "" {

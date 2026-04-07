@@ -36,13 +36,13 @@ Looks for `apoci.yaml` in the current directory by default. Override with `-c` o
 On first run, a registry token is auto-generated at `{dataDir}/registry.token`. Use it to push:
 
 ```bash
-cat /var/lib/apoci/registry.token
+cat ~/apoci/data/registry.token
 ```
 
 Push something:
 
 ```bash
-TOKEN=$(cat /var/lib/apoci/registry.token)
+TOKEN=$(cat ~/apoci/data/registry.token)
 docker login foo.com -u registry -p "$TOKEN"
 docker push foo.com/foo.com/myapp:v1
 ```
@@ -81,7 +81,7 @@ apoci follow pending
 apoci follow accept foo.com
 ```
 
-No auto-accept. Every follow is operator-approved.
+By default, every follow requires operator approval. Set `federation.autoAccept: mutual` to auto-accept peers you already follow, `all` for a public profile, or use `federation.allowedDomains` to trust specific domains.
 
 ### What gets federated
 
@@ -132,9 +132,9 @@ Search `@registry@foo.com` in Mastodon to follow a node from the fediverse.
 ```bash
 make docker
 docker run -d -p 5000:5000 \
-  -v apoci-data:/var/lib/apoci \
-  -v $(pwd)/apoci.yaml:/etc/apoci/apoci.yaml:ro \
-  -e APOCI_CONFIG=/etc/apoci/apoci.yaml \
+  --user 1000:1000 \
+  -v ~/apoci/data:/apoci/storage \
+  -v $(pwd)/apoci.yaml:/apoci/config/apoci.yaml:ro \
   apoci:latest
 ```
 
@@ -244,8 +244,8 @@ Path-prefix proxying (`example.com/registry/...`) is not supported.
 | `peering.fetchTimeout` | `60s` | Blob fetch timeout |
 | `limits.maxManifestSize` | `10485760` | Max manifest size in bytes (10 MB) |
 | `limits.maxBlobSize` | `536870912` | Max blob size in bytes (512 MB) |
-| `federation.autoAcceptMutual` | `false` | Auto-accept follows from peers you already follow |
-| `federation.autoAcceptDomains` | `[]` | Auto-accept follows from these domains |
+| `federation.autoAccept` | `none` | `none`, `mutual` (peers you follow), or `all` (public) |
+| `federation.allowedDomains` | `[]` | Always auto-accept follows from these domains |
 | `federation.blockedDomains` | `[]` | Silently drop all activities from these domains |
 | `federation.blockedActors` | `[]` | Silently drop all activities from these actor URLs |
 | `metrics.enabled` | `false` | Expose `/debug/vars` |

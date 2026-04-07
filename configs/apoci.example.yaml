@@ -26,13 +26,10 @@ endpoint: "https://registry.example.com"
 #   fetchTimeout: 60s
 
 # federation:
-#   autoAcceptMutual: false    # auto-accept follows from peers you already follow
-#   autoAcceptDomains: []      # auto-accept follows from these domains
-#     # - "trusted-registry.example.com"
+#   autoAccept: none           # none, mutual, or all
+#   allowedDomains: []         # always auto-accept follows from these domains
 #   blockedDomains: []         # silently drop all activities from these domains
-#     # - "spam.example.com"
 #   blockedActors: []          # silently drop all activities from these actor URLs
-#     # - "https://evil.example.com/ap/actor"
 
 # limits:
 #   maxManifestSize: 10485760     # 10 MB
