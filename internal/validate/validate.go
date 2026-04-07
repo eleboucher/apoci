@@ -159,6 +159,22 @@ func SafeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 	return nil, fmt.Errorf("failed to connect to %s: %w", host, lastErr)
 }
 
+// mediaTypeRe matches valid MIME media types used in OCI manifests.
+var mediaTypeRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9!#$&\-^_.+]{0,126}/[a-zA-Z0-9][a-zA-Z0-9!#$&\-^_.+]{0,126}$`)
+
+// MediaType returns true if s looks like a valid media type (type/subtype).
+func MediaType(s string) bool {
+	return len(s) <= 255 && mediaTypeRe.MatchString(s)
+}
+
+// ActivityID validates that an ActivityPub activity ID is not too long.
+func ActivityID(id string) error {
+	if len(id) > 2048 {
+		return fmt.Errorf("activity ID too long (max 2048 chars)")
+	}
+	return nil
+}
+
 func ManifestContent(content []byte, maxSize int64) error {
 	if int64(len(content)) > maxSize {
 		return fmt.Errorf("manifest too large: %d bytes (max %d)", len(content), maxSize)
