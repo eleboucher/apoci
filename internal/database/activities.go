@@ -54,14 +54,12 @@ func (db *DB) ListActivitiesPage(ctx context.Context, actorURL string, beforeID 
 
 // CountActivities returns the total number of activities for the given actor.
 func (db *DB) CountActivities(ctx context.Context, actorURL string) (int, error) {
-	query := "SELECT COUNT(*) FROM activities"
-	var args []any
+	q := db.bun.NewSelect().TableExpr("activities").ColumnExpr("COUNT(*)")
 	if actorURL != "" {
-		query += " WHERE actor_url = ?"
-		args = append(args, actorURL)
+		q = q.Where("actor_url = ?", actorURL)
 	}
 	var count int
-	if err := db.bun.NewRaw(query, args...).Scan(ctx, &count); err != nil {
+	if err := q.Scan(ctx, &count); err != nil {
 		return 0, fmt.Errorf("counting activities: %w", err)
 	}
 	return count, nil

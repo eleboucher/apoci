@@ -70,7 +70,8 @@ func TestFederatedBlobPull(t *testing.T) {
 
 	blobData := []byte("federated blob content")
 
-	reg := oci.NewRegistry(db, blobs, "https://local.test/ap/actor", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, discardLog())
+	reg, err := oci.NewRegistry(db, blobs, "https://local.test/ap/actor", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, discardLog())
+	require.NoError(t, err)
 	reg.SetFederation(
 		&mockResolver{peers: []oci.BlobPeer{{PeerEndpoint: "https://peer.test"}}},
 		&mockFetcher{result: &peering.FetchResult{
@@ -112,7 +113,8 @@ func TestBlobPullLocalFirst(t *testing.T) {
 	blobs, err := blobstore.New(dir, discardLog())
 	require.NoError(t, err)
 
-	reg := oci.NewRegistry(db, blobs, "https://local.test/ap/actor", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, discardLog())
+	reg, err := oci.NewRegistry(db, blobs, "https://local.test/ap/actor", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, discardLog())
+	require.NoError(t, err)
 
 	// No federation configured -- should work for local blobs
 	ctx := context.Background()
@@ -138,7 +140,8 @@ func TestBlobPullNotFound(t *testing.T) {
 	blobs, err := blobstore.New(dir, discardLog())
 	require.NoError(t, err)
 
-	reg := oci.NewRegistry(db, blobs, "https://local.test/ap/actor", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, discardLog())
+	reg, err := oci.NewRegistry(db, blobs, "https://local.test/ap/actor", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, discardLog())
+	require.NoError(t, err)
 	reg.SetFederation(
 		&mockResolver{peers: nil},
 		&mockFetcher{err: nil, result: nil},

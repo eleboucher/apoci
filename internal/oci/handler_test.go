@@ -32,7 +32,8 @@ func testRegistry(t *testing.T) (*Registry, *httptest.Server) {
 	blobs, err := blobstore.New(dir, nopLog())
 	require.NoError(t, err)
 
-	reg := NewRegistry(db, blobs, "https://test.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	reg, err := NewRegistry(db, blobs, "https://test.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
 	srv := httptest.NewServer(reg.Handler())
 	t.Cleanup(srv.Close)
 
@@ -136,15 +137,17 @@ func TestOwnershipEnforcement(t *testing.T) {
 	blobs, _ := blobstore.New(dir, nopLog())
 
 	// Alice creates the repo
-	alice := NewRegistry(db, blobs, "https://alice.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	alice, err := NewRegistry(db, blobs, "https://alice.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
 	ctx := context.Background()
 
 	manifest := []byte(`{"schemaVersion":2}`)
-	_, err := alice.PushManifest(ctx, "alice.example.com/shared/repo", "v1", manifest, "application/vnd.oci.image.manifest.v1+json")
+	_, err = alice.PushManifest(ctx, "alice.example.com/shared/repo", "v1", manifest, "application/vnd.oci.image.manifest.v1+json")
 	require.NoError(t, err)
 
 	// Bob tries to push to Alice's repo -- should fail
-	bob := NewRegistry(db, blobs, "https://bob.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	bob, err := NewRegistry(db, blobs, "https://bob.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
 	_, err = bob.PushManifest(ctx, "alice.example.com/shared/repo", "v2", manifest, "application/vnd.oci.image.manifest.v1+json")
 	require.Error(t, err, "expected ownership error when bob pushes to alice's repo")
 }
@@ -290,13 +293,14 @@ func TestTagImmutability(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	blobs, _ := blobstore.New(dir, nopLog())
 
-	reg := NewRegistry(db, blobs, "https://test.example.com", "", `^v[0-9]`, config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	reg, err := NewRegistry(db, blobs, "https://test.example.com", "", `^v[0-9]`, config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
 	ctx := context.Background()
 
 	manifest := []byte(`{"schemaVersion":2}`)
 
 	// First push to v1.0 succeeds
-	_, err := reg.PushManifest(ctx, "test.example.com/test/immutable", "v1.0", manifest, "application/vnd.oci.image.manifest.v1+json")
+	_, err = reg.PushManifest(ctx, "test.example.com/test/immutable", "v1.0", manifest, "application/vnd.oci.image.manifest.v1+json")
 	require.NoError(t, err, "first push to v1.0 should succeed")
 
 	// Second push to v1.0 is rejected
@@ -316,14 +320,15 @@ func TestNamespaceEnforcement(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	blobs, _ := blobstore.New(dir, nopLog())
 
-	reg := NewRegistry(db, blobs, "https://alice.example.com", "alice", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	reg, err := NewRegistry(db, blobs, "https://alice.example.com", "alice", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
 	ctx := context.Background()
 
 	manifest := []byte(`{"schemaVersion":2}`)
 	mediaType := testManifestMediaType
 
 	// Push to namespaced repo succeeds
-	_, err := reg.PushManifest(ctx, "alice/myapp", "v1", manifest, mediaType)
+	_, err = reg.PushManifest(ctx, "alice/myapp", "v1", manifest, mediaType)
 	require.NoError(t, err, "push to alice/myapp should succeed")
 
 	// Push outside namespace is rejected
@@ -416,12 +421,13 @@ func TestBlobSizeLimitEnforced(t *testing.T) {
 	blobs, _ := blobstore.New(dir, nopLog())
 
 	// Create registry with a tiny 100-byte blob limit.
-	reg := NewRegistry(db, blobs, "https://test.example.com", "", "", config.DefaultMaxManifestSize, 100, nopLog())
+	reg, err := NewRegistry(db, blobs, "https://test.example.com", "", "", config.DefaultMaxManifestSize, 100, nopLog())
+	require.NoError(t, err)
 	ctx := context.Background()
 
 	// Blob under limit succeeds.
 	small := make([]byte, 50)
-	_, err := reg.PushBlob(ctx, "test.example.com/test/sizelimit", descriptorFor(small), strings.NewReader(string(small)))
+	_, err = reg.PushBlob(ctx, "test.example.com/test/sizelimit", descriptorFor(small), strings.NewReader(string(small)))
 	require.NoError(t, err, "small blob should succeed")
 
 	// Blob over limit is rejected.
@@ -437,12 +443,13 @@ func TestBlobSizeLimitBoundary(t *testing.T) {
 	blobs, _ := blobstore.New(dir, nopLog())
 
 	limit := int64(100)
-	reg := NewRegistry(db, blobs, "https://test.example.com", "", "", config.DefaultMaxManifestSize, limit, nopLog())
+	reg, err := NewRegistry(db, blobs, "https://test.example.com", "", "", config.DefaultMaxManifestSize, limit, nopLog())
+	require.NoError(t, err)
 	ctx := context.Background()
 
 	// Exactly at limit succeeds.
 	atLimit := make([]byte, limit)
-	_, err := reg.PushBlob(ctx, "test.example.com/test/boundary", descriptorFor(atLimit), strings.NewReader(string(atLimit)))
+	_, err = reg.PushBlob(ctx, "test.example.com/test/boundary", descriptorFor(atLimit), strings.NewReader(string(atLimit)))
 	require.NoError(t, err, "blob at exact limit should succeed")
 
 	// One byte over is rejected.
@@ -458,11 +465,12 @@ func TestManifestSizeLimitEnforced(t *testing.T) {
 	blobs, _ := blobstore.New(dir, nopLog())
 
 	// Create registry with a tiny 200-byte manifest limit.
-	reg := NewRegistry(db, blobs, "https://test.example.com", "", "", 200, config.DefaultMaxBlobSize, nopLog())
+	reg, err := NewRegistry(db, blobs, "https://test.example.com", "", "", 200, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
 	ctx := context.Background()
 
 	small := []byte(`{"schemaVersion":2}`)
-	_, err := reg.PushManifest(ctx, "test.example.com/test/manlimit", "v1", small, testManifestMediaType)
+	_, err = reg.PushManifest(ctx, "test.example.com/test/manlimit", "v1", small, testManifestMediaType)
 	require.NoError(t, err, "small manifest should succeed")
 
 	// Create a manifest over the limit.

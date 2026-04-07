@@ -64,10 +64,14 @@ type Registry struct {
 	maxBlobSize     int64
 }
 
-func NewRegistry(db *database.DB, blobs *blobstore.Store, localID, namespace, immutableTagPattern string, maxManifestSize, maxBlobSize int64, logger *slog.Logger) *Registry {
+func NewRegistry(db *database.DB, blobs *blobstore.Store, localID, namespace, immutableTagPattern string, maxManifestSize, maxBlobSize int64, logger *slog.Logger) (*Registry, error) {
 	var immutableRe *regexp.Regexp
 	if immutableTagPattern != "" {
-		immutableRe = regexp.MustCompile(immutableTagPattern)
+		var err error
+		immutableRe, err = regexp.Compile(immutableTagPattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid immutable tag pattern %q: %w", immutableTagPattern, err)
+		}
 	}
 
 	// When no explicit namespace is given, derive it from the localID (actor URL)
@@ -107,7 +111,7 @@ func NewRegistry(db *database.DB, blobs *blobstore.Store, localID, namespace, im
 		Tags_:                  r.tags,
 		Referrers_:             r.referrers,
 	}
-	return r
+	return r, nil
 }
 
 func (r *Registry) SetPublisher(p Publisher) {
@@ -204,8 +208,8 @@ func (r *Registry) fetchBlobFromPeers(ctx context.Context, repo string, digest o
 		}
 
 		if r.publisher != nil {
-			if err := r.publisher.PublishBlobRef(ctx, storedDigest, size); err != nil {
-				r.logger.Warn("failed to publish pulled blob ref", "digest", storedDigest, "error", err)
+			if pubErr := r.publisher.PublishBlobRef(ctx, storedDigest, size); pubErr != nil {
+				r.logger.Warn("failed to publish pulled blob ref", "digest", storedDigest, "error", pubErr)
 			}
 		}
 
@@ -384,7 +388,11 @@ func (r *Registry) fetchManifestFromSource(ctx context.Context, repo string, m *
 		return nil, fmt.Errorf("fetching manifest from peer %s: %w", follow.Endpoint, err)
 	}
 
-	// Cache the content locally so we don't have to pull-through again.
+	computed := string(godigest.FromBytes(data))
+	if computed != m.Digest {
+		return nil, fmt.Errorf("manifest digest mismatch: expected %s, got %s", m.Digest, computed)
+	}
+
 	if mediaType != "" {
 		m.MediaType = mediaType
 	}
@@ -549,10 +557,19 @@ func (r *Registry) pushBlobChunked(ctx context.Context, repo string, chunkSize i
 		if err := r.db.PutBlob(commitCtx, string(desc.Digest), desc.Size, &mt, true); err != nil {
 			return fmt.Errorf("recording chunked blob: %w", err)
 		}
+
+		metrics.RegistryBlobPushes.Add(1)
 		r.logger.Info("chunked blob committed",
 			"repo", repo,
 			"digest", string(desc.Digest),
 			"size", desc.Size)
+
+		if r.publisher != nil {
+			if err := r.publisher.PublishBlobRef(commitCtx, string(desc.Digest), desc.Size); err != nil {
+				r.logger.Warn("failed to publish chunked blob ref to federation", "error", err)
+			}
+		}
+
 		return nil
 	}, "")
 
@@ -582,7 +599,7 @@ func (r *Registry) pushManifest(ctx context.Context, repo string, tag string, co
 	dgst := godigest.FromBytes(contents)
 	digest := string(dgst)
 
-	meta := parseManifestMeta(contents)
+	meta := parseManifestMeta(contents, r.logger)
 
 	m := &database.Manifest{
 		RepositoryID:  repoObj.ID,
@@ -798,7 +815,7 @@ type manifestMeta struct {
 	artifactType  *string
 }
 
-func parseManifestMeta(content []byte) manifestMeta {
+func parseManifestMeta(content []byte, logger *slog.Logger) manifestMeta {
 	var parsed struct {
 		Config       ocispec.Descriptor   `json:"config"`
 		Layers       []ocispec.Descriptor `json:"layers"`
@@ -806,6 +823,9 @@ func parseManifestMeta(content []byte) manifestMeta {
 		ArtifactType string               `json:"artifactType,omitempty"`
 	}
 	if err := json.Unmarshal(content, &parsed); err != nil {
+		if logger != nil {
+			logger.Warn("failed to parse manifest metadata", "error", err)
+		}
 		return manifestMeta{}
 	}
 

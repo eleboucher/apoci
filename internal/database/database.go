@@ -107,6 +107,34 @@ func (db *DB) Close() error {
 }
 
 func (db *DB) migrate(ctx context.Context) error {
+	if _, err := db.bun.ExecContext(ctx,
+		`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`); err != nil {
+		return fmt.Errorf("creating schema_version table: %w", err)
+	}
+
+	version := 0
+	row := db.bun.QueryRowContext(ctx, `SELECT version FROM schema_version LIMIT 1`)
+	if err := row.Scan(&version); err != nil {
+		// No row yet.
+		if _, err := db.bun.ExecContext(ctx, `INSERT INTO schema_version (version) VALUES (0)`); err != nil {
+			return fmt.Errorf("initializing schema version: %w", err)
+		}
+	}
+
+	if version < 1 {
+		if err := db.migrateV1(ctx); err != nil {
+			return fmt.Errorf("migration v1: %w", err)
+		}
+		if _, err := db.bun.ExecContext(ctx, `UPDATE schema_version SET version = 1`); err != nil {
+			return fmt.Errorf("updating schema version to 1: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// migrateV1 creates base tables, constraints, and indexes.
+func (db *DB) migrateV1(ctx context.Context) error {
 	models := []any{
 		(*Repository)(nil),
 		(*Manifest)(nil),
@@ -130,7 +158,6 @@ func (db *DB) migrate(ctx context.Context) error {
 		}
 	}
 
-	// Composite unique constraints (not expressible via struct tags alone).
 	compositeConstraints := []string{
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_manifests_repo_digest ON manifests (repository_id, digest)",
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_repo_name ON tags (repository_id, name)",
@@ -145,7 +172,6 @@ func (db *DB) migrate(ctx context.Context) error {
 		}
 	}
 
-	// Performance indexes.
 	indexes := []string{
 		"CREATE INDEX IF NOT EXISTS idx_manifests_digest ON manifests (digest)",
 		"CREATE INDEX IF NOT EXISTS idx_manifests_repo ON manifests (repository_id)",

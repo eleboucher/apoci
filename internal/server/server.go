@@ -34,7 +34,7 @@ type Server struct {
 	actorHandler        http.Handler
 	webfingerHandler    http.Handler
 	nodeinfoHandler     *activitypub.NodeInfoHandler
-	inboxHandler        http.Handler
+	inboxHandler        *activitypub.InboxHandler
 	outboxHandler       http.Handler
 	followersHandler    http.Handler
 	followingHandler    http.Handler
@@ -44,8 +44,11 @@ type Server struct {
 	logger              *slog.Logger
 }
 
-func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *activitypub.Identity, version string, logger *slog.Logger) *Server {
-	registry := oci.NewRegistry(db, blobs, identity.ActorURL, cfg.Domain, cfg.ImmutableTags, cfg.Limits.MaxManifestSize, cfg.Limits.MaxBlobSize, logger)
+func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *activitypub.Identity, version string, logger *slog.Logger) (*Server, error) {
+	registry, err := oci.NewRegistry(db, blobs, identity.ActorURL, cfg.Domain, cfg.ImmutableTags, cfg.Limits.MaxManifestSize, cfg.Limits.MaxBlobSize, logger)
+	if err != nil {
+		return nil, err
+	}
 
 	apPublisher := activitypub.NewAPPublisher(context.Background(), identity, db, cfg.Endpoint, logger)
 	apResolver := activitypub.NewAPResolver(db, logger)
@@ -115,7 +118,7 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 		MaxHeaderBytes:    1 << 20,
 	}
 
-	return s
+	return s, nil
 }
 
 func (s *Server) Start(ctx context.Context) error {
@@ -180,19 +183,30 @@ func (s *Server) Start(ctx context.Context) error {
 	go func() { //nolint:gosec // intentional background goroutine for graceful shutdown
 		defer close(shutdownDone)
 		<-ctx.Done()
-		s.healthChecker.Stop()
-		s.gc.Stop()
-		s.logger.Info("waiting for in-flight blob replications")
-		s.blobReplicator.Wait()
-		s.logger.Info("stopping delivery queue")
-		s.deliveryQueue.Stop()
-		s.inboxLimiter.Stop()
-		s.registryPushLimiter.Stop()
-		s.publisher.Stop()
+
+		// 1. Stop accepting new requests.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		s.logger.Info("shutting down HTTP server")
 		_ = s.httpServer.Shutdown(shutdownCtx)
+
+		// 2. Stop background workers.
+		s.healthChecker.Stop()
+		s.gc.Stop()
+
+		// 3. Wait for in-flight blob replications.
+		s.logger.Info("waiting for in-flight blob replications")
+		s.blobReplicator.Wait()
+
+		// 4. Drain and stop the delivery queue.
+		s.logger.Info("stopping delivery queue")
+		s.deliveryQueue.Stop()
+
+		// 5. Cleanup caches and remaining resources.
+		s.inboxHandler.Stop()
+		s.inboxLimiter.Stop()
+		s.registryPushLimiter.Stop()
+		s.publisher.Stop()
 	}()
 
 	var serveErr error

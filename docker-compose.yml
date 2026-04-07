@@ -1,11 +1,12 @@
 services:
   apoci:
     build: .
+    restart: unless-stopped
     ports:
       - "5000:5000"
     volumes:
       - apoci-data:/var/lib/apoci
-      - ./configs/apoci.example.yaml:/etc/apoci/apoci.yaml:ro
+      - ./configs/apoci.example.yaml:/apoci/config/apoci.yaml:ro
 
 volumes:
   apoci-data:
