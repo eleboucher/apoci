@@ -41,7 +41,6 @@ dataDir: %q
 keyPath: "/tmp/ap.key"
 logLevel: debug
 logFormat: text
-region: eu-west
 `, dir))
 
 	cfg, err := Load(path)
@@ -50,7 +49,6 @@ region: eu-west
 	require.Equal(t, ":8080", cfg.Listen)
 	require.Equal(t, dir, cfg.DataDir)
 	require.Equal(t, "debug", cfg.LogLevel)
-	require.Equal(t, "eu-west", cfg.Region)
 }
 
 func TestDefaults(t *testing.T) {

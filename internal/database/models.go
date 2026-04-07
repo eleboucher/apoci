@@ -84,7 +84,6 @@ type Peer struct {
 	ActorURL          string     `bun:"actor_url,notnull,unique"`
 	Name              *string    `bun:"name"`
 	Endpoint          string     `bun:"endpoint,notnull"`
-	Region            *string    `bun:"region"`
 	ReplicationPolicy string     `bun:"replication_policy,default:'lazy'"`
 	LastSeenAt        *time.Time `bun:"last_seen_at"`
 	IsHealthy         bool       `bun:"is_healthy,notnull,default:true"`

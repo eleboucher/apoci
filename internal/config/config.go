@@ -22,7 +22,6 @@ type Config struct {
 	KeyPath       string `yaml:"keyPath"`
 	LogLevel      string `yaml:"logLevel"`
 	LogFormat     string `yaml:"logFormat"`
-	Region        string `yaml:"region"`
 	ImmutableTags string `yaml:"immutableTags"`
 	RegistryToken string `yaml:"registryToken"`
 	AccountDomain string `yaml:"accountDomain"`

@@ -10,16 +10,15 @@ import (
 
 func (db *DB) UpsertPeer(ctx context.Context, p *Peer) error {
 	_, err := db.bun.NewRaw(
-		`INSERT INTO peers (actor_url, name, endpoint, region, replication_policy, last_seen_at, is_healthy)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO peers (actor_url, name, endpoint, replication_policy, last_seen_at, is_healthy)
+		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(actor_url) DO UPDATE SET
 		   name = COALESCE(excluded.name, peers.name),
 		   endpoint = excluded.endpoint,
-		   region = COALESCE(excluded.region, peers.region),
 		   replication_policy = excluded.replication_policy,
 		   last_seen_at = excluded.last_seen_at,
 		   is_healthy = excluded.is_healthy`,
-		p.ActorURL, p.Name, p.Endpoint, p.Region, p.ReplicationPolicy, p.LastSeenAt, p.IsHealthy).Exec(ctx)
+		p.ActorURL, p.Name, p.Endpoint, p.ReplicationPolicy, p.LastSeenAt, p.IsHealthy).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("upserting peer: %w", err)
 	}
@@ -85,7 +84,7 @@ func (db *DB) PutPeerBlob(ctx context.Context, peerActor, blobDigest, peerEndpoi
 
 // CleanupStalePeerBlobs removes peer blob references not verified within the given duration.
 func (db *DB) CleanupStalePeerBlobs(ctx context.Context, olderThan time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-olderThan).UTC().Format(time.RFC3339)
+	cutoff := time.Now().Add(-olderThan)
 	res, err := db.bun.NewRaw(
 		`DELETE FROM peer_blobs WHERE last_verified_at < ?`, cutoff).Exec(ctx)
 	if err != nil {

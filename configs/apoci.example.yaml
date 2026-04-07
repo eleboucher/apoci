@@ -4,11 +4,10 @@ endpoint: "https://registry.example.com"
 
 # name: "registry.example.com"   # defaults to domain from endpoint
 # listen: ":5000"
-# dataDir: "/var/lib/apoci"
-# keyPath: "/var/lib/apoci/ap.key"
+# dataDir: "/apoci/storage"
+# keyPath: "/apoci/storage/ap.key"
 # registryToken: ""              # auto-generated to {dataDir}/registry.token if empty
 # accountDomain: "example.com"  # vanity domain for @registry@example.com (defaults to endpoint domain)
-# region: "eu-west"
 
 # database:
 #   driver: sqlite     # sqlite (default) or postgres

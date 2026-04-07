@@ -2,6 +2,7 @@ package activitypub
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -168,4 +169,76 @@ func TestFollowersHandler(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&collection))
 	require.Equal(t, testOrderedCollection, collection["type"])
 	require.Equal(t, float64(0), collection["totalItems"])
+}
+
+// TestShouldAutoAcceptMutualPending verifies that mutual mode auto-accepts
+// when our outgoing follow is still pending (simultaneous-follow scenario).
+func TestShouldAutoAcceptMutualPending(t *testing.T) {
+	dir := t.TempDir()
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	peerActor := "https://peer.example.com/ap/actor"
+
+	// Add outgoing follow in pending state (we sent Follow, they haven't accepted yet).
+	require.NoError(t, db.AddOutgoingFollow(ctx, peerActor))
+
+	id, _ := LoadOrCreateIdentity("bob.example.com", "", "", discardLogger())
+	handler := NewInboxHandler(id, db, InboxConfig{
+		MaxManifestSize: 1 << 20,
+		MaxBlobSize:     1 << 20,
+		AutoAccept:      "mutual",
+	}, discardLogger())
+
+	// Should auto-accept even though our outgoing follow is only pending.
+	require.True(t, handler.shouldAutoAccept(ctx, peerActor),
+		"mutual mode must auto-accept when outgoing follow is pending")
+}
+
+// TestShouldAutoAcceptMutualAccepted verifies that mutual mode still accepts
+// when the outgoing follow has already been accepted.
+func TestShouldAutoAcceptMutualAccepted(t *testing.T) {
+	dir := t.TempDir()
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	peerActor := "https://peer2.example.com/ap/actor"
+
+	require.NoError(t, db.AddOutgoingFollow(ctx, peerActor))
+	require.NoError(t, db.AcceptOutgoingFollow(ctx, peerActor))
+
+	id, _ := LoadOrCreateIdentity("bob.example.com", "", "", discardLogger())
+	handler := NewInboxHandler(id, db, InboxConfig{
+		MaxManifestSize: 1 << 20,
+		MaxBlobSize:     1 << 20,
+		AutoAccept:      "mutual",
+	}, discardLogger())
+
+	require.True(t, handler.shouldAutoAccept(ctx, peerActor),
+		"mutual mode must auto-accept when outgoing follow is accepted")
+}
+
+// TestShouldAutoAcceptMutualNone verifies that mutual mode does NOT auto-accept
+// when we have no outgoing follow at all.
+func TestShouldAutoAcceptMutualNone(t *testing.T) {
+	dir := t.TempDir()
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+
+	id, _ := LoadOrCreateIdentity("bob.example.com", "", "", discardLogger())
+	handler := NewInboxHandler(id, db, InboxConfig{
+		MaxManifestSize: 1 << 20,
+		MaxBlobSize:     1 << 20,
+		AutoAccept:      "mutual",
+	}, discardLogger())
+
+	require.False(t, handler.shouldAutoAccept(ctx, "https://stranger.example.com/ap/actor"),
+		"mutual mode must not auto-accept with no outgoing follow")
 }

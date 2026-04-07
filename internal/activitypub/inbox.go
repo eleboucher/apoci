@@ -489,6 +489,8 @@ func (h *InboxHandler) handleUpdate(ctx context.Context, w http.ResponseWriter, 
 		rw.WriteHeader(http.StatusAccepted)
 	}
 
+	// storeActivity is called unconditionally below for all non-error responses;
+	// the Actor invalidation case calls rw.WriteHeader directly but still reaches it.
 	if rw.status == 0 || rw.status < 400 {
 		h.storeActivity(ctx, activity.ID, ActivityUpdate, activity.Actor, rawBody)
 	}
@@ -906,9 +908,12 @@ func (h *InboxHandler) shouldAutoAccept(ctx context.Context, actorURL string) bo
 		return true
 	}
 
+	// "mutual" triggers when we have an outgoing follow in any non-rejected state
+	// (pending or accepted). This covers the simultaneous-follow case where both
+	// sides send Follow at the same time and neither has accepted yet.
 	if h.autoAccept == "mutual" {
 		of, err := h.db.GetOutgoingFollow(ctx, actorURL)
-		if err == nil && of != nil && of.Status == "accepted" {
+		if err == nil && of != nil && (of.Status == "pending" || of.Status == "accepted") {
 			return true
 		}
 	}

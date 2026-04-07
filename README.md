@@ -11,7 +11,6 @@ Federated OCI registry over ActivityPub. Each node is a single-user registry and
   └────────────┘       └────────────┘       └────────────┘
 ```
 
-Docker, Helm, Flux, ORAS -- any OCI client works. Discoverable via WebFinger and NodeInfo, so Mastodon can follow your registry and see pushes in its feed.
 
 ## Quick start
 
@@ -63,6 +62,13 @@ docker pull foo.com/bar.com/myapp:v1       # bar's image, from your node (federa
 
 The third case is the point: foo follows bar, so foo has bar's metadata. On pull, foo fetches the blob from bar, verifies the SHA-256, caches it, and serves it. Next pull is local.
 
+Namespace is enforced on **pushes** only -- all repos must be prefixed with your domain. Pulls are unrestricted (any repo that exists locally or can be fetched from a peer is served).
+
+```bash
+docker push foo.com/myapp:v1               # DENIED: repository must start with "foo.com/"
+docker push foo.com/foo.com/myapp:v1       # OK
+```
+
 ## Federation
 
 ### Follow a peer
@@ -94,6 +100,10 @@ When you push a manifest, three AP activities go out to followers:
 | Blob | `Announce` `OCIBlob` | Peer records blob location for pull-through |
 
 Peers eagerly replicate blobs in the background. If the origin goes down, peers already have the data.
+
+### Delivery
+
+All outbound activities (including follow Accept/Reject) go through a persistent delivery queue with automatic retry and exponential backoff. Failed deliveries are retried up to 10 times before being marked as permanently failed. Completed deliveries are cleaned up after 7 days.
 
 ### Manage follows
 
@@ -152,53 +162,7 @@ docker compose up --build -d
 docker compose -f docker-compose.postgres.yml up --build -d
 ```
 
-### Systemd
 
-```ini
-[Unit]
-Description=apoci
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/apoci serve -c /etc/apoci/apoci.yaml
-User=apoci
-Restart=on-failure
-LimitNOFILE=65535
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### Reverse proxy
-
-nginx:
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name foo.com;
-    ssl_certificate /etc/letsencrypt/live/foo.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/foo.com/privkey.pem;
-    client_max_body_size 0;  # Let apoci enforce limits via limits.maxBlobSize
-
-    location / {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 900;
-    }
-}
-```
-
-Caddy:
-
-```
-foo.com {
-    reverse_proxy 127.0.0.1:5000
-}
-```
 
 ## Split-domain
 
@@ -231,7 +195,7 @@ Path-prefix proxying (`example.com/registry/...`) is not supported.
 | `endpoint` | *(required)* | Public URL; determines domain and namespace |
 | `name` | domain | Display name (AP actor name) |
 | `listen` | `:5000` | Bind address |
-| `dataDir` | `/var/lib/apoci` | Database and blob storage |
+| `dataDir` | `/apoci/storage` | Database and blob storage |
 | `database.driver` | `sqlite` | `sqlite` or `postgres` |
 | `database.dsn` | | Postgres connection string (required when driver is `postgres`) |
 | `database.maxOpenConns` | `4`/`25` | Max open DB connections (default: 4 for sqlite, 25 for postgres) |
@@ -256,9 +220,8 @@ Path-prefix proxying (`example.com/registry/...`) is not supported.
 | `metrics.listen` | `:9090` | Metrics bind address |
 | `metrics.token` | | Bearer token for metrics |
 
-Config lookup: `./apoci.yaml` by default, override with `-c <path>` or `APOCI_CONFIG` env var.
+Config lookup: `config/apoci.yaml` by default, override with `-c <path>` or `APOCI_CONFIG` env var.
 
-Requires Go 1.26+ and a C compiler (CGO for SQLite).
 
 ## API
 

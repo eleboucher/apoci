@@ -81,6 +81,21 @@ func TestExtractKeyID(t *testing.T) {
 	require.Equal(t, "https://alice.example.com/ap/actor#main-key", keyID)
 }
 
+func TestExtractRawSignatureMalformedHeader(t *testing.T) {
+	// A header with no signature= field should return empty string, not the raw header.
+	req := httptest.NewRequest("POST", "https://example.com/ap/inbox", nil)
+	req.Header.Set("Signature", `keyId="https://example.com/key",algorithm="rsa-sha256"`)
+	got := extractRawSignature(req)
+	require.Empty(t, got, "expected empty string when no signature= field present")
+}
+
+func TestExtractRawSignatureFound(t *testing.T) {
+	req := httptest.NewRequest("POST", "https://example.com/ap/inbox", nil)
+	req.Header.Set("Signature", `keyId="https://example.com/key",signature="abc123=="`)
+	got := extractRawSignature(req)
+	require.Equal(t, "abc123==", got)
+}
+
 func TestReplayDetection(t *testing.T) {
 	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)

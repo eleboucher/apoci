@@ -68,7 +68,7 @@ func (db *DB) MarkDeliveryFailed(ctx context.Context, id int64, attempts, maxAtt
 
 // CleanupDeliveries removes completed/failed deliveries older than the given age.
 func (db *DB) CleanupDeliveries(ctx context.Context, olderThan time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-olderThan).UTC().Format(time.DateTime)
+	cutoff := time.Now().Add(-olderThan)
 	res, err := db.bun.NewRaw(
 		`DELETE FROM delivery_queue
 		 WHERE status IN ('delivered', 'failed') AND created_at < ?`, cutoff).Exec(ctx)

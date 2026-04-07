@@ -158,7 +158,8 @@ func extractRawSignature(req *http.Request) string {
 			return strings.Trim(val, `"`)
 		}
 	}
-	return sig
+	// No signature= field found — return empty so the cache check is skipped.
+	return ""
 }
 
 func ExtractKeyID(req *http.Request) (string, error) {

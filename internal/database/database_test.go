@@ -363,3 +363,43 @@ func TestEnqueueDeliveryIdempotent(t *testing.T) {
 }
 
 func nopLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+func TestCleanupDeliveriesPassesTimeDirect(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, db.EnqueueDelivery(ctx, "act-cleanup-1", "https://inbox.example.com", []byte(`{}`)))
+
+	// Mark as delivered so it is eligible for cleanup.
+	pending, err := db.PendingDeliveries(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	require.NoError(t, db.MarkDelivered(ctx, pending[0].ID))
+
+	// Cleanup with a negative age — everything delivered counts as older-than.
+	n, err := db.CleanupDeliveries(ctx, -1*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+}
+
+func TestCleanupStalePeerBlobsPassesTimeDirect(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	now := time.Now()
+	name := "peer-for-cleanup"
+	require.NoError(t, db.UpsertPeer(ctx, &Peer{
+		ActorURL:          "https://peer.example.com/ap/actor",
+		Name:              &name,
+		Endpoint:          "https://peer.example.com",
+		ReplicationPolicy: "lazy",
+		LastSeenAt:        &now,
+		IsHealthy:         true,
+	}))
+	require.NoError(t, db.PutPeerBlob(ctx, "https://peer.example.com/ap/actor", "sha256:staleclean", "https://peer.example.com"))
+
+	// Cleanup with a negative age — the just-inserted row counts as stale.
+	n, err := db.CleanupStalePeerBlobs(ctx, -1*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+}
