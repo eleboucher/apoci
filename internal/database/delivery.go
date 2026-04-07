@@ -45,11 +45,11 @@ func (db *DB) MarkDelivered(ctx context.Context, id int64) error {
 }
 
 // MarkDeliveryFailed records a failed attempt and schedules retry with backoff.
-func (db *DB) MarkDeliveryFailed(ctx context.Context, id int64, attempts int, lastError string) error {
+func (db *DB) MarkDeliveryFailed(ctx context.Context, id int64, attempts, maxAttempts int, lastError string) error {
 	backoff := time.Duration(1<<min(attempts, 12)) * time.Second
 	nextAttempt := time.Now().Add(backoff)
 	status := "pending"
-	if attempts+1 >= 10 {
+	if attempts+1 >= maxAttempts {
 		status = "failed"
 	}
 	_, err := db.bun.NewRaw(

@@ -20,7 +20,7 @@ import (
 
 func openTestDB(t *testing.T) *database.DB {
 	t.Helper()
-	db, err := database.OpenSQLite(t.TempDir(), discardLogger())
+	db, err := database.OpenSQLite(t.TempDir(), 0, 0, discardLogger())
 	require.NoError(t, err, "opening test database")
 	t.Cleanup(func() { _ = db.Close() })
 	return db

@@ -27,6 +27,7 @@ type apFederator interface {
 type realAPFederator struct {
 	identity *activitypub.Identity
 	db       *database.DB
+	enqueue  activitypub.EnqueueFunc
 }
 
 func (f *realAPFederator) ResolveFollowTarget(ctx context.Context, input string) (string, error) {
@@ -42,11 +43,11 @@ func (f *realAPFederator) DeliverActivity(ctx context.Context, inboxURL string, 
 }
 
 func (f *realAPFederator) SendAccept(ctx context.Context, followerActorURL string) error {
-	return activitypub.SendAccept(ctx, f.identity, f.db, followerActorURL)
+	return activitypub.SendAccept(ctx, f.identity, f.db, followerActorURL, f.enqueue)
 }
 
 func (f *realAPFederator) SendReject(ctx context.Context, followerActorURL string) error {
-	return activitypub.SendReject(ctx, f.identity, f.db, followerActorURL)
+	return activitypub.SendReject(ctx, f.identity, f.db, followerActorURL, f.enqueue)
 }
 
 func (s *Server) adminRouter() http.Handler {

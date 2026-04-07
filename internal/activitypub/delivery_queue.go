@@ -123,7 +123,7 @@ func (q *DeliveryQueue) deliver(ctx context.Context, d database.Delivery) {
 			"max", d.MaxAttempts,
 			"error", err,
 		)
-		if dbErr := q.db.MarkDeliveryFailed(ctx, d.ID, d.Attempts, err.Error()); dbErr != nil {
+		if dbErr := q.db.MarkDeliveryFailed(ctx, d.ID, d.Attempts, d.MaxAttempts, err.Error()); dbErr != nil {
 			q.logger.Error("failed to mark delivery failed", "error", dbErr)
 		}
 		if d.Attempts+1 >= d.MaxAttempts {

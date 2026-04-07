@@ -16,7 +16,7 @@ func testGCDeps(t *testing.T) (*database.DB, *blobstore.Store) {
 	t.Helper()
 
 	dbDir := t.TempDir()
-	db, err := database.OpenSQLite(dbDir, nopLog())
+	db, err := database.OpenSQLite(dbDir, 0, 0, nopLog())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 

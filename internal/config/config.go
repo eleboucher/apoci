@@ -39,8 +39,10 @@ type Config struct {
 }
 
 type Database struct {
-	Driver string `yaml:"driver"` // "sqlite" (default) or "postgres"
-	DSN    string `yaml:"dsn"`    // connection string; required for postgres, ignored for sqlite
+	Driver       string `yaml:"driver"`       // "sqlite" (default) or "postgres"
+	DSN          string `yaml:"dsn"`          // connection string; required for postgres, ignored for sqlite
+	MaxOpenConns int    `yaml:"maxOpenConns"` // max open connections (0 = driver default: 4 for sqlite, 25 for postgres)
+	MaxIdleConns int    `yaml:"maxIdleConns"` // max idle connections (0 = driver default: 4 for sqlite, 10 for postgres)
 }
 
 type TLS struct {

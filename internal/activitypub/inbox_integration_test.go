@@ -32,7 +32,7 @@ func setupInboxTest(t *testing.T) (alice *Identity, bob *Identity, inbox *InboxH
 	t.Helper()
 	dir := t.TempDir()
 
-	db, err := database.OpenSQLite(dir, discardLogger())
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 

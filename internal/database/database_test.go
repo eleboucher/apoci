@@ -13,7 +13,7 @@ import (
 func testDB(t *testing.T) *DB {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := OpenSQLite(dir, nopLog())
+	db, err := OpenSQLite(dir, 0, 0, nopLog())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	return db

@@ -25,7 +25,7 @@ func testRegistry(t *testing.T) (*Registry, *httptest.Server) {
 	t.Helper()
 	dir := t.TempDir()
 
-	db, err := database.OpenSQLite(dir, nopLog())
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -131,7 +131,7 @@ func TestListRepositoriesAndTags(t *testing.T) {
 func TestOwnershipEnforcement(t *testing.T) {
 	dir := t.TempDir()
 
-	db, _ := database.OpenSQLite(dir, nopLog())
+	db, _ := database.OpenSQLite(dir, 0, 0, nopLog())
 	defer func() { _ = db.Close() }()
 	blobs, _ := blobstore.New(dir, nopLog())
 
@@ -286,7 +286,7 @@ func TestReferrersFilterByArtifactType(t *testing.T) {
 
 func TestTagImmutability(t *testing.T) {
 	dir := t.TempDir()
-	db, _ := database.OpenSQLite(dir, nopLog())
+	db, _ := database.OpenSQLite(dir, 0, 0, nopLog())
 	defer func() { _ = db.Close() }()
 	blobs, _ := blobstore.New(dir, nopLog())
 
@@ -312,7 +312,7 @@ func TestTagImmutability(t *testing.T) {
 
 func TestNamespaceEnforcement(t *testing.T) {
 	dir := t.TempDir()
-	db, _ := database.OpenSQLite(dir, nopLog())
+	db, _ := database.OpenSQLite(dir, 0, 0, nopLog())
 	defer func() { _ = db.Close() }()
 	blobs, _ := blobstore.New(dir, nopLog())
 
@@ -411,7 +411,7 @@ func TestResolveBlobAndManifest(t *testing.T) {
 
 func TestBlobSizeLimitEnforced(t *testing.T) {
 	dir := t.TempDir()
-	db, _ := database.OpenSQLite(dir, nopLog())
+	db, _ := database.OpenSQLite(dir, 0, 0, nopLog())
 	defer func() { _ = db.Close() }()
 	blobs, _ := blobstore.New(dir, nopLog())
 
@@ -432,7 +432,7 @@ func TestBlobSizeLimitEnforced(t *testing.T) {
 
 func TestBlobSizeLimitBoundary(t *testing.T) {
 	dir := t.TempDir()
-	db, _ := database.OpenSQLite(dir, nopLog())
+	db, _ := database.OpenSQLite(dir, 0, 0, nopLog())
 	defer func() { _ = db.Close() }()
 	blobs, _ := blobstore.New(dir, nopLog())
 
@@ -453,7 +453,7 @@ func TestBlobSizeLimitBoundary(t *testing.T) {
 
 func TestManifestSizeLimitEnforced(t *testing.T) {
 	dir := t.TempDir()
-	db, _ := database.OpenSQLite(dir, nopLog())
+	db, _ := database.OpenSQLite(dir, 0, 0, nopLog())
 	defer func() { _ = db.Close() }()
 	blobs, _ := blobstore.New(dir, nopLog())
 

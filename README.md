@@ -106,7 +106,7 @@ apoci identity show
 ## Security
 
 1. **Follow gate** -- only approved peers can send activities
-2. **HTTP Signatures** -- RSA-SHA256 on every request, replay-protected (30min window)
+2. **HTTP Signatures** -- RSA-SHA256 on every request, replay-protected (5min window + seen-signature cache)
 3. **Origin ownership** -- a followed peer can only write to repos it created
 4. **Content addressing** -- SHA-256 verified on every blob fetch
 5. **SSRF protection** -- private IPs blocked after DNS resolution (prevents rebinding)
@@ -232,6 +232,8 @@ Path-prefix proxying (`example.com/registry/...`) is not supported.
 | `dataDir` | `/var/lib/apoci` | Database and blob storage |
 | `database.driver` | `sqlite` | `sqlite` or `postgres` |
 | `database.dsn` | | Postgres connection string (required when driver is `postgres`) |
+| `database.maxOpenConns` | `4`/`25` | Max open DB connections (default: 4 for sqlite, 25 for postgres) |
+| `database.maxIdleConns` | `4`/`10` | Max idle DB connections (default: 4 for sqlite, 10 for postgres) |
 | `keyPath` | `{dataDir}/ap.key` | RSA key, generated on first run |
 | `registryToken` | *(auto-generated)* | Bearer token for push; saved to `{dataDir}/registry.token`. Reads are unauthenticated. |
 | `accountDomain` | endpoint domain | Vanity domain for `@registry@<domain>` handle |

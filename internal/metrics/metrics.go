@@ -50,6 +50,7 @@ var (
 	RegistryBlobPulls        = expvar.NewInt("registry_blob_pulls")
 	RegistryBlobPullThru     = expvar.NewInt("registry_blob_pull_throughs")
 	RegistryManifestPullThru = expvar.NewInt("registry_manifest_pull_throughs")
+	RegistryPushRateLimited  = expvar.NewInt("registry_push_rate_limited")
 )
 
 // Federation state (gauges, set periodically or on change).

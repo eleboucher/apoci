@@ -12,7 +12,7 @@ import (
 
 func TestPublishManifestCreatesActivity(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, discardLogger())
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -41,7 +41,7 @@ func TestPublishManifestCreatesActivity(t *testing.T) {
 
 func TestPublishTagCreatesUpdateActivity(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, discardLogger())
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -60,7 +60,7 @@ func TestPublishTagCreatesUpdateActivity(t *testing.T) {
 
 func TestPublishBlobRefCreatesAnnounceActivity(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, discardLogger())
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 

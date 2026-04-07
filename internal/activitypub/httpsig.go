@@ -12,9 +12,35 @@ import (
 	"time"
 
 	"code.superseriousbusiness.org/httpsig"
+	"github.com/jellydator/ttlcache/v3"
 )
 
 const signatureMaxAge = 5 * time.Minute
+
+type SignatureCache struct {
+	cache *ttlcache.Cache[string, struct{}]
+}
+
+func NewSignatureCache() *SignatureCache {
+	cache := ttlcache.New[string, struct{}](
+		ttlcache.WithTTL[string, struct{}](signatureMaxAge + 1*time.Minute),
+	)
+	go cache.Start()
+	return &SignatureCache{cache: cache}
+}
+
+func (sc *SignatureCache) Stop() {
+	sc.cache.Stop()
+}
+
+func (sc *SignatureCache) seen(keyID, signature string) bool {
+	key := keyID + "\x00" + signature
+	if sc.cache.Has(key) {
+		return true
+	}
+	sc.cache.Set(key, struct{}{}, ttlcache.DefaultTTL)
+	return false
+}
 
 func SignRequest(req *http.Request, keyID string, privKey *rsa.PrivateKey, body []byte) error {
 	if req.Header.Get("Host") == "" && req.Host != "" {
@@ -44,7 +70,7 @@ func SignRequest(req *http.Request, keyID string, privKey *rsa.PrivateKey, body 
 
 var requiredSignedHeaders = []string{"(request-target)", "host", "date"}
 
-func VerifyRequest(req *http.Request, pubKeyPEM string, body []byte) error {
+func VerifyRequest(req *http.Request, pubKeyPEM string, body []byte, sigCache *SignatureCache) error {
 	verifier, err := httpsig.NewVerifier(req)
 	if err != nil {
 		return fmt.Errorf("verifying signature: %w", err)
@@ -109,7 +135,30 @@ func VerifyRequest(req *http.Request, pubKeyPEM string, body []byte) error {
 		return fmt.Errorf("parsing public key: %w", err)
 	}
 
-	return verifier.Verify(pubKey, httpsig.RSA_SHA256)
+	if err := verifier.Verify(pubKey, httpsig.RSA_SHA256); err != nil {
+		return err
+	}
+
+	if sigCache != nil {
+		keyID := verifier.KeyId()
+		sig := extractRawSignature(req)
+		if sigCache.seen(keyID, sig) {
+			return fmt.Errorf("replayed signature detected")
+		}
+	}
+
+	return nil
+}
+
+func extractRawSignature(req *http.Request) string {
+	sig := req.Header.Get("Signature")
+	for part := range strings.SplitSeq(sig, ",") {
+		part = strings.TrimSpace(part)
+		if val, ok := strings.CutPrefix(part, "signature="); ok {
+			return strings.Trim(val, `"`)
+		}
+	}
+	return sig
 }
 
 func ExtractKeyID(req *http.Request) (string, error) {

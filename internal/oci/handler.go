@@ -469,6 +469,11 @@ func (r *Registry) pushBlob(ctx context.Context, repo string, desc ociregistry.D
 	if err := r.checkNamespace(repo); err != nil {
 		return ociregistry.Descriptor{}, err
 	}
+
+	if desc.Size > r.maxBlobSize {
+		return ociregistry.Descriptor{}, fmt.Errorf("%w: blob exceeds maximum size (%d bytes)", ociregistry.ErrBlobUploadInvalid, r.maxBlobSize)
+	}
+
 	if _, err := r.db.GetOrCreateRepository(ctx, repo, r.localID); err != nil {
 		return ociregistry.Descriptor{}, fmt.Errorf("getting repository: %w", err)
 	}

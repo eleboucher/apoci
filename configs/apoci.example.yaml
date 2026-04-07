@@ -13,6 +13,8 @@ endpoint: "https://registry.example.com"
 # database:
 #   driver: sqlite     # sqlite (default) or postgres
 #   dsn: ""            # required for postgres, e.g. "postgres://user:pass@localhost:5432/apoci?sslmode=disable"
+#   maxOpenConns: 0    # max open connections (0 = default: 4 for sqlite, 25 for postgres)
+#   maxIdleConns: 0    # max idle connections (0 = default: 4 for sqlite, 10 for postgres)
 
 # logLevel: info     # debug, info, warn, error
 # logFormat: json    # json, text

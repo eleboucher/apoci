@@ -247,11 +247,6 @@ func runFollowAdd(ctx context.Context, configPath, input string) error {
 		return fmt.Errorf("fetching actor: %w", err)
 	}
 
-	endpoint := activitypub.EndpointFromActorURL(actor.ID)
-	if err := db.AddFollowRequest(ctx, actor.ID, actor.PublicKey.PublicKeyPEM, endpoint); err != nil {
-		return fmt.Errorf("storing follow request: %w", err)
-	}
-
 	followActivity := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
 		"id":       identity.ActorURL + "#follow-" + actor.ID,
@@ -269,6 +264,11 @@ func runFollowAdd(ctx context.Context, configPath, input string) error {
 		return fmt.Errorf("sending follow: %w", err)
 	}
 	fmt.Printf("Follow sent to %s.\n", actor.ID)
+
+	endpoint := activitypub.EndpointFromActorURL(actor.ID)
+	if err := db.AddFollowRequest(ctx, actor.ID, actor.PublicKey.PublicKeyPEM, endpoint); err != nil {
+		return fmt.Errorf("storing follow request: %w", err)
+	}
 
 	if err := db.UpsertPeer(ctx, &database.Peer{
 		ActorURL:          actor.ID,
@@ -371,7 +371,7 @@ func runFollowAccept(ctx context.Context, configPath, arg string) error {
 		return fmt.Errorf("resolving target: %w", err)
 	}
 	fmt.Printf("Accepting follow from %s...\n", actorURL)
-	if err := activitypub.SendAccept(ctx, identity, db, actorURL); err != nil {
+	if err := activitypub.SendAccept(ctx, identity, db, actorURL, nil); err != nil {
 		return err
 	}
 	fmt.Printf("Accepted follow from %s\n", actorURL)
@@ -389,7 +389,7 @@ func runFollowReject(ctx context.Context, configPath, arg string) error {
 	if err != nil {
 		return fmt.Errorf("resolving target: %w", err)
 	}
-	if err := activitypub.SendReject(ctx, identity, db, actorURL); err != nil {
+	if err := activitypub.SendReject(ctx, identity, db, actorURL, nil); err != nil {
 		return err
 	}
 	fmt.Printf("Rejected follow from %s\n", actorURL)
@@ -476,9 +476,9 @@ func newTabWriter() *tabwriter.Writer {
 func openDB(cfg *config.Config, logger *slog.Logger) (*database.DB, error) {
 	switch cfg.Database.Driver {
 	case "postgres":
-		return database.OpenPostgres(cfg.Database.DSN, logger)
+		return database.OpenPostgres(cfg.Database.DSN, cfg.Database.MaxOpenConns, cfg.Database.MaxIdleConns, logger)
 	default:
-		return database.OpenSQLite(cfg.DataDir, logger)
+		return database.OpenSQLite(cfg.DataDir, cfg.Database.MaxOpenConns, cfg.Database.MaxIdleConns, logger)
 	}
 }
 

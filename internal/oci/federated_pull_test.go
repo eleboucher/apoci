@@ -61,7 +61,7 @@ func discardLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard,
 
 func TestFederatedBlobPull(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, discardLog())
+	db, err := database.OpenSQLite(dir, 0, 0, discardLog())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -105,7 +105,7 @@ func TestFederatedBlobPull(t *testing.T) {
 
 func TestBlobPullLocalFirst(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, discardLog())
+	db, err := database.OpenSQLite(dir, 0, 0, discardLog())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -131,7 +131,7 @@ func TestBlobPullLocalFirst(t *testing.T) {
 
 func TestBlobPullNotFound(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, discardLog())
+	db, err := database.OpenSQLite(dir, 0, 0, discardLog())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 

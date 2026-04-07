@@ -22,7 +22,7 @@ type DB struct {
 }
 
 // OpenSQLite opens a SQLite database in the given data directory.
-func OpenSQLite(dataDir string, logger *slog.Logger) (*DB, error) {
+func OpenSQLite(dataDir string, maxOpen, maxIdle int, logger *slog.Logger) (*DB, error) {
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("creating data directory: %w", err)
 	}
@@ -35,8 +35,14 @@ func OpenSQLite(dataDir string, logger *slog.Logger) (*DB, error) {
 		return nil, fmt.Errorf("opening sqlite database: %w", err)
 	}
 
-	sqldb.SetMaxOpenConns(4)
-	sqldb.SetMaxIdleConns(4)
+	if maxOpen <= 0 {
+		maxOpen = 4
+	}
+	if maxIdle <= 0 {
+		maxIdle = maxOpen
+	}
+	sqldb.SetMaxOpenConns(maxOpen)
+	sqldb.SetMaxIdleConns(maxIdle)
 
 	if err := sqldb.Ping(); err != nil {
 		_ = sqldb.Close()
@@ -56,14 +62,20 @@ func OpenSQLite(dataDir string, logger *slog.Logger) (*DB, error) {
 }
 
 // OpenPostgres opens a PostgreSQL database with the given DSN.
-func OpenPostgres(dsn string, logger *slog.Logger) (*DB, error) {
+func OpenPostgres(dsn string, maxOpen, maxIdle int, logger *slog.Logger) (*DB, error) {
 	sqldb, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening postgres database: %w", err)
 	}
 
-	sqldb.SetMaxOpenConns(25)
-	sqldb.SetMaxIdleConns(10)
+	if maxOpen <= 0 {
+		maxOpen = 25
+	}
+	if maxIdle <= 0 {
+		maxIdle = 10
+	}
+	sqldb.SetMaxOpenConns(maxOpen)
+	sqldb.SetMaxIdleConns(maxIdle)
 
 	if err := sqldb.Ping(); err != nil {
 		_ = sqldb.Close()

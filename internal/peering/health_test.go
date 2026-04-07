@@ -15,7 +15,7 @@ import (
 
 func TestHealthCheckerStartStop(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, nopLog())
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -57,7 +57,7 @@ func TestHealthCheckerStartStop(t *testing.T) {
 
 func TestHealthCheckerDoubleStartIsNoop(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, nopLog())
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 

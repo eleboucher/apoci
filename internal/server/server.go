@@ -19,28 +19,29 @@ import (
 )
 
 type Server struct {
-	cfg              *config.Config
-	db               *database.DB
-	blobs            *blobstore.Store
-	identity         *activitypub.Identity
-	apFed            apFederator
-	registry         *oci.Registry
-	publisher        *activitypub.APPublisher
-	deliveryQueue    *activitypub.DeliveryQueue
-	blobReplicator   *peering.BlobReplicator
-	gc               *peering.GarbageCollector
-	healthChecker    *peering.HealthChecker
-	ociHandler       http.Handler
-	actorHandler     http.Handler
-	webfingerHandler http.Handler
-	nodeinfoHandler  *activitypub.NodeInfoHandler
-	inboxHandler     http.Handler
-	outboxHandler    http.Handler
-	followersHandler http.Handler
-	followingHandler http.Handler
-	inboxLimiter     *ipRateLimiter
-	httpServer       *http.Server
-	logger           *slog.Logger
+	cfg                 *config.Config
+	db                  *database.DB
+	blobs               *blobstore.Store
+	identity            *activitypub.Identity
+	apFed               apFederator
+	registry            *oci.Registry
+	publisher           *activitypub.APPublisher
+	deliveryQueue       *activitypub.DeliveryQueue
+	blobReplicator      *peering.BlobReplicator
+	gc                  *peering.GarbageCollector
+	healthChecker       *peering.HealthChecker
+	ociHandler          http.Handler
+	actorHandler        http.Handler
+	webfingerHandler    http.Handler
+	nodeinfoHandler     *activitypub.NodeInfoHandler
+	inboxHandler        http.Handler
+	outboxHandler       http.Handler
+	followersHandler    http.Handler
+	followingHandler    http.Handler
+	inboxLimiter        *ipRateLimiter
+	registryPushLimiter *ipRateLimiter
+	httpServer          *http.Server
+	logger              *slog.Logger
 }
 
 func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *activitypub.Identity, version string, logger *slog.Logger) *Server {
@@ -60,6 +61,14 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 	registry.SetPublisher(apPublisher)
 	registry.SetFederation(apResolver, fetcher)
 
+	enqueueFunc := activitypub.EnqueueFunc(func(ctx context.Context, activityID, inboxURL string, activityJSON []byte) error {
+		if err := db.EnqueueDelivery(ctx, activityID, inboxURL, activityJSON); err != nil {
+			return err
+		}
+		deliveryQueue.Notify()
+		return nil
+	})
+
 	inboxHandler := activitypub.NewInboxHandler(identity, db, activitypub.InboxConfig{
 		MaxManifestSize: cfg.Limits.MaxManifestSize,
 		MaxBlobSize:     cfg.Limits.MaxBlobSize,
@@ -69,29 +78,31 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 		BlockedActors:   cfg.Federation.BlockedActors,
 	}, logger)
 	inboxHandler.SetBlobReplicator(blobReplicator)
+	inboxHandler.SetEnqueueFunc(enqueueFunc)
 
 	s := &Server{
-		cfg:              cfg,
-		db:               db,
-		blobs:            blobs,
-		identity:         identity,
-		apFed:            &realAPFederator{identity: identity, db: db},
-		registry:         registry,
-		publisher:        apPublisher,
-		deliveryQueue:    deliveryQueue,
-		blobReplicator:   blobReplicator,
-		gc:               gc,
-		healthChecker:    healthChecker,
-		ociHandler:       registry.Handler(),
-		actorHandler:     activitypub.NewActorHandler(identity, cfg.Name, cfg.Endpoint),
-		webfingerHandler: activitypub.NewWebFingerHandler(identity),
-		nodeinfoHandler:  activitypub.NewNodeInfoHandler(identity.Domain, version, nil),
-		inboxHandler:     inboxHandler,
-		outboxHandler:    activitypub.NewOutboxHandler(identity, db),
-		followersHandler: activitypub.NewFollowersHandler(identity, db),
-		followingHandler: activitypub.NewFollowingHandler(identity, db),
-		inboxLimiter:     newIPRateLimiter(10, 50), // 10 req/sec, burst of 50
-		logger:           logger,
+		cfg:                 cfg,
+		db:                  db,
+		blobs:               blobs,
+		identity:            identity,
+		apFed:               &realAPFederator{identity: identity, db: db, enqueue: enqueueFunc},
+		registry:            registry,
+		publisher:           apPublisher,
+		deliveryQueue:       deliveryQueue,
+		blobReplicator:      blobReplicator,
+		gc:                  gc,
+		healthChecker:       healthChecker,
+		ociHandler:          registry.Handler(),
+		actorHandler:        activitypub.NewActorHandler(identity, cfg.Name, cfg.Endpoint),
+		webfingerHandler:    activitypub.NewWebFingerHandler(identity),
+		nodeinfoHandler:     activitypub.NewNodeInfoHandler(identity.Domain, version, nil),
+		inboxHandler:        inboxHandler,
+		outboxHandler:       activitypub.NewOutboxHandler(identity, db),
+		followersHandler:    activitypub.NewFollowersHandler(identity, db),
+		followingHandler:    activitypub.NewFollowingHandler(identity, db),
+		inboxLimiter:        newIPRateLimiter(10, 50), // 10 req/sec, burst of 50
+		registryPushLimiter: newIPRateLimiter(5, 20),  // 5 req/sec, burst of 20 for push ops
+		logger:              logger,
 	}
 
 	s.httpServer = &http.Server{
@@ -175,6 +186,7 @@ func (s *Server) Start(ctx context.Context) error {
 		s.logger.Info("stopping delivery queue")
 		s.deliveryQueue.Stop()
 		s.inboxLimiter.Stop()
+		s.registryPushLimiter.Stop()
 		s.publisher.Stop()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

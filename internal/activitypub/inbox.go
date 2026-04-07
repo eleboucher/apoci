@@ -27,6 +27,7 @@ type InboxHandler struct {
 	identity       *Identity
 	db             *database.DB
 	blobReplicator BlobReplicator
+	enqueue        EnqueueFunc
 
 	maxManifestSize int64
 	maxBlobSize     int64
@@ -36,6 +37,7 @@ type InboxHandler struct {
 	blockedDomains map[string]struct{}
 	blockedActors  map[string]struct{}
 	actorLimiters  *ttlcache.Cache[string, *rate.Limiter]
+	sigCache       *SignatureCache
 
 	logger *slog.Logger
 }
@@ -74,12 +76,17 @@ func NewInboxHandler(identity *Identity, db *database.DB, cfg InboxConfig, logge
 		blockedDomains:  blockedDomainSet,
 		blockedActors:   blockedActorSet,
 		actorLimiters:   limiters,
+		sigCache:        NewSignatureCache(),
 		logger:          logger,
 	}
 }
 
 func (h *InboxHandler) SetBlobReplicator(r BlobReplicator) {
 	h.blobReplicator = r
+}
+
+func (h *InboxHandler) SetEnqueueFunc(fn EnqueueFunc) {
+	h.enqueue = fn
 }
 
 const (
@@ -128,7 +135,7 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := VerifyRequest(r, pubKeyPEM, body); err != nil {
+	if err := VerifyRequest(r, pubKeyPEM, body, h.sigCache); err != nil {
 		h.logger.Warn("inbox: invalid signature", "actor", actorURL, "error", err)
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
@@ -234,7 +241,7 @@ func (h *InboxHandler) handleFollow(ctx context.Context, w http.ResponseWriter, 
 	h.storeActivity(ctx, activity.ID, ActivityFollow, activity.Actor, activityJSON)
 
 	if h.shouldAutoAccept(ctx, activity.Actor) {
-		if err := SendAccept(ctx, h.identity, h.db, activity.Actor); err != nil {
+		if err := SendAccept(ctx, h.identity, h.db, activity.Actor, h.enqueue); err != nil {
 			h.logger.Warn("inbox: auto-accept failed, request remains pending", "from", activity.Actor, "error", err)
 		} else {
 			h.logger.Info("inbox: auto-accepted follow request", "from", activity.Actor)

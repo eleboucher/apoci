@@ -18,7 +18,7 @@ func testInboxSetup(t *testing.T) *InboxHandler {
 	t.Helper()
 	dir := t.TempDir()
 
-	db, err := database.OpenSQLite(dir, discardLogger())
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -93,7 +93,7 @@ const testOrderedCollection = "OrderedCollection"
 
 func TestOutboxHandler(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, discardLogger())
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -113,7 +113,7 @@ func TestOutboxHandler(t *testing.T) {
 
 func TestFollowingHandler(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, discardLogger())
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -135,7 +135,7 @@ func TestFollowingHandler(t *testing.T) {
 
 func TestFollowingHandlerRejectsPost(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, discardLogger())
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -151,7 +151,7 @@ func TestFollowingHandlerRejectsPost(t *testing.T) {
 
 func TestFollowersHandler(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, discardLogger())
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
