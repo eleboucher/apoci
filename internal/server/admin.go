@@ -117,13 +117,15 @@ func (s *Server) adminAddFollow(w http.ResponseWriter, r *http.Request) {
 
 	actorURL, err := s.apFed.ResolveFollowTarget(ctx, req.Target)
 	if err != nil {
-		http.Error(w, "resolving target: "+err.Error(), http.StatusBadGateway)
+		s.logger.Error("resolving follow target", "target", req.Target, "error", err)
+		http.Error(w, "could not resolve target", http.StatusBadGateway)
 		return
 	}
 
 	actor, err := s.apFed.FetchActor(ctx, actorURL)
 	if err != nil {
-		http.Error(w, "fetching actor: "+err.Error(), http.StatusBadGateway)
+		s.logger.Error("fetching actor", "actor_url", actorURL, "error", err)
+		http.Error(w, "could not fetch actor", http.StatusBadGateway)
 		return
 	}
 
@@ -150,7 +152,8 @@ func (s *Server) adminAddFollow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.apFed.DeliverActivity(ctx, actor.Inbox, activityJSON); err != nil {
-		http.Error(w, "delivering follow: "+err.Error(), http.StatusBadGateway)
+		s.logger.Error("delivering follow activity", "inbox", actor.Inbox, "error", err)
+		http.Error(w, "could not deliver follow activity", http.StatusBadGateway)
 		return
 	}
 
@@ -178,12 +181,14 @@ func (s *Server) adminAcceptFollow(w http.ResponseWriter, r *http.Request) {
 
 	actorURL, err := s.apFed.ResolveFollowTarget(ctx, req.Target)
 	if err != nil {
-		http.Error(w, "resolving target: "+err.Error(), http.StatusBadGateway)
+		s.logger.Error("resolving follow target", "target", req.Target, "error", err)
+		http.Error(w, "could not resolve target", http.StatusBadGateway)
 		return
 	}
 
 	if err := s.apFed.SendAccept(ctx, actorURL); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Error("sending accept", "actor_url", actorURL, "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -202,12 +207,14 @@ func (s *Server) adminRejectFollow(w http.ResponseWriter, r *http.Request) {
 
 	actorURL, err := s.apFed.ResolveFollowTarget(ctx, req.Target)
 	if err != nil {
-		http.Error(w, "resolving target: "+err.Error(), http.StatusBadGateway)
+		s.logger.Error("resolving follow target", "target", req.Target, "error", err)
+		http.Error(w, "could not resolve target", http.StatusBadGateway)
 		return
 	}
 
 	if err := s.apFed.SendReject(ctx, actorURL); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Error("sending reject", "actor_url", actorURL, "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -226,12 +233,14 @@ func (s *Server) adminRemoveFollow(w http.ResponseWriter, r *http.Request) {
 
 	actorURL, err := s.apFed.ResolveFollowTarget(ctx, req.Target)
 	if err != nil {
-		http.Error(w, "resolving target: "+err.Error(), http.StatusBadGateway)
+		s.logger.Error("resolving follow target", "target", req.Target, "error", err)
+		http.Error(w, "could not resolve target", http.StatusBadGateway)
 		return
 	}
 
 	if err := s.db.RemoveFollow(ctx, actorURL); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Error("removing follow", "actor_url", actorURL, "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
