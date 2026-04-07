@@ -2,7 +2,7 @@
 
 > **Status: Beta** -- Running in production is possible, but expect rough edges. APIs may change between minor versions.
 
-You self-host Forgejo, your container registry, and everything else on one box. If that box dies, you need the container images to rebuild it -- but they lived on the box that just died. apoci solves this: federate your registry over ActivityPub so a handful of friends mirror your artifacts. When your server goes down, your peers still serve your images and you can bootstrap from any of them.
+You self-host Forgejo, your container registry, and everything else on one homelab. If that homelab dies, how will you rebootstrap it. apoci solves this: federate your registry over ActivityPub so a handful of friends mirror your artifacts. When your server goes down, your peers still serve your images and you can bootstrap from any of them.
 
 Each node is a single-user registry and an AP actor (`@registry@foo.com`). Push an artifact and it federates to your followers.
 
