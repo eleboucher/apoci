@@ -14,8 +14,8 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/activitypub"
 )
 
-// mockAPFederator is a test double for apFederator.
-// Each function field defaults to nil; set only what a given test needs.
+const testToken = "test-token"
+
 type mockAPFederator struct {
 	resolveFollowTargetFn func(ctx context.Context, input string) (string, error)
 	fetchActorFn          func(ctx context.Context, actorURL string) (*activitypub.Actor, error)
@@ -28,7 +28,6 @@ func (m *mockAPFederator) ResolveFollowTarget(ctx context.Context, input string)
 	if m.resolveFollowTargetFn != nil {
 		return m.resolveFollowTargetFn(ctx, input)
 	}
-	// Default: pass https:// URLs through unchanged (mirrors the real implementation).
 	return input, nil
 }
 
@@ -60,7 +59,6 @@ func (m *mockAPFederator) SendReject(ctx context.Context, followerActorURL strin
 	return errors.New("sendReject not configured")
 }
 
-// testServerWithMock creates a test Server with the given mock federator.
 func testServerWithMock(t *testing.T, fed apFederator) *Server {
 	t.Helper()
 	s := testServer(t)
@@ -68,7 +66,6 @@ func testServerWithMock(t *testing.T, fed apFederator) *Server {
 	return s
 }
 
-// adminActor returns a minimal Actor used throughout admin tests.
 func adminActor(actorURL, inboxURL string) *activitypub.Actor {
 	return &activitypub.Actor{
 		ID:    actorURL,
@@ -81,11 +78,9 @@ func adminActor(actorURL, inboxURL string) *activitypub.Actor {
 	}
 }
 
-// --- GET /api/admin/identity ---
-
 func TestAdminGetIdentityFields(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -109,11 +104,9 @@ func TestAdminGetIdentityFields(t *testing.T) {
 	require.Contains(t, info["publicKey"], "-----BEGIN PUBLIC KEY-----")
 }
 
-// --- GET /api/admin/follows ---
-
 func TestAdminListFollowsEmpty(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -132,7 +125,7 @@ func TestAdminListFollowsEmpty(t *testing.T) {
 
 func TestAdminListFollowsWithData(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	ctx := context.Background()
 
 	require.NoError(t, s.db.AddFollow(ctx, "https://alice.example.com/ap/actor", "pubkey-alice", "https://alice.example.com"))
@@ -149,7 +142,6 @@ func TestAdminListFollowsWithData(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	// database.Follow has no json tags → fields are serialised with their Go names.
 	var follows []struct {
 		ActorURL string `json:"ActorURL"`
 	}
@@ -166,7 +158,7 @@ func TestAdminListFollowsWithData(t *testing.T) {
 
 func TestAdminListFollowsInternalError(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -181,11 +173,9 @@ func TestAdminListFollowsInternalError(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }
 
-// --- GET /api/admin/follows/pending ---
-
 func TestAdminListPendingEmpty(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -204,7 +194,7 @@ func TestAdminListPendingEmpty(t *testing.T) {
 
 func TestAdminListPendingWithData(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	ctx := context.Background()
 
 	require.NoError(t, s.db.AddFollowRequest(ctx, "https://carol.example.com/ap/actor", "pubkey-carol", "https://carol.example.com"))
@@ -220,7 +210,6 @@ func TestAdminListPendingWithData(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	// database.FollowRequest has no json tags → Go field names.
 	var requests []struct {
 		ActorURL string `json:"ActorURL"`
 	}
@@ -229,11 +218,9 @@ func TestAdminListPendingWithData(t *testing.T) {
 	require.Equal(t, "https://carol.example.com/ap/actor", requests[0].ActorURL)
 }
 
-// --- POST /api/admin/follows ---
-
 func TestAdminAddFollowMissingTarget(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -255,7 +242,7 @@ func TestAdminAddFollowResolveError(t *testing.T) {
 		},
 	}
 	s := testServerWithMock(t, fed)
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -277,7 +264,7 @@ func TestAdminAddFollowFetchActorError(t *testing.T) {
 		},
 	}
 	s := testServerWithMock(t, fed)
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -304,7 +291,7 @@ func TestAdminAddFollowDeliveryError(t *testing.T) {
 		},
 	}
 	s := testServerWithMock(t, fed)
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -334,7 +321,7 @@ func TestAdminAddFollowSuccess(t *testing.T) {
 		},
 	}
 	s := testServerWithMock(t, fed)
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -359,11 +346,9 @@ func TestAdminAddFollowSuccess(t *testing.T) {
 	require.NotNil(t, fr, "follow request should be persisted")
 }
 
-// --- POST /api/admin/follows/accept ---
-
 func TestAdminAcceptFollowMissingTarget(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -385,7 +370,7 @@ func TestAdminAcceptFollowSendAcceptError(t *testing.T) {
 		},
 	}
 	s := testServerWithMock(t, fed)
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -410,12 +395,11 @@ func TestAdminAcceptFollowSuccess(t *testing.T) {
 	fed := &mockAPFederator{
 		sendAcceptFn: func(_ context.Context, followerActorURL string) error {
 			acceptedURL = followerActorURL
-			// Replicate what the real SendAccept does to the DB.
 			return nil
 		},
 	}
 	s := testServerWithMock(t, fed)
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL))
 
 	srv := httptest.NewServer(s.routes())
@@ -437,11 +421,9 @@ func TestAdminAcceptFollowSuccess(t *testing.T) {
 	require.Equal(t, actorURL, acceptedURL)
 }
 
-// --- POST /api/admin/follows/reject ---
-
 func TestAdminRejectFollowMissingTarget(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -463,7 +445,7 @@ func TestAdminRejectFollowSendRejectError(t *testing.T) {
 		},
 	}
 	s := testServerWithMock(t, fed)
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -492,7 +474,7 @@ func TestAdminRejectFollowSuccess(t *testing.T) {
 		},
 	}
 	s := testServerWithMock(t, fed)
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL))
 
 	srv := httptest.NewServer(s.routes())
@@ -514,11 +496,9 @@ func TestAdminRejectFollowSuccess(t *testing.T) {
 	require.Equal(t, actorURL, rejectedURL)
 }
 
-// --- DELETE /api/admin/follows ---
-
 func TestAdminRemoveFollowMissingTarget(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -535,7 +515,7 @@ func TestAdminRemoveFollowMissingTarget(t *testing.T) {
 func TestAdminRemoveFollowNotFound(t *testing.T) {
 	const actorURL = "https://peer.example.com/ap/actor"
 	s := testServerWithMock(t, &mockAPFederator{})
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
@@ -555,7 +535,7 @@ func TestAdminRemoveFollowSuccess(t *testing.T) {
 	ctx := context.Background()
 
 	s := testServerWithMock(t, &mockAPFederator{})
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	require.NoError(t, s.db.AddFollow(ctx, actorURL, "pubkey-peer", "https://peer.example.com"))
 
 	srv := httptest.NewServer(s.routes())
@@ -580,11 +560,9 @@ func TestAdminRemoveFollowSuccess(t *testing.T) {
 	require.Nil(t, f, "follow should be removed from the DB")
 }
 
-// --- Auth enforcement ---
-
 func TestAdminAllEndpointsRequireAuth(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
-	s.cfg.RegistryToken = "test-token"
+	s.cfg.RegistryToken = testToken
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 

@@ -32,7 +32,7 @@ func main() {
 		Version: version,
 	}
 
-	defaultConfig := "apoci.yaml"
+	defaultConfig := "config/apoci.yaml"
 	if env := os.Getenv("APOCI_CONFIG"); env != "" {
 		defaultConfig = env
 	}
