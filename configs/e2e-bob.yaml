@@ -1,9 +1,0 @@
-endpoint: "http://bob:5000"
-adminToken: "bob-e2e-token"
-registryToken: "bob-registry-token"
-logLevel: debug
-logFormat: text
-
-federation:
-  autoAccept: all
-  allowInsecureHTTP: true

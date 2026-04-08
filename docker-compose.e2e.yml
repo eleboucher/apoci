@@ -1,22 +1,16 @@
-configs:
-  alice-config:
-    file: ./configs/e2e-alice.yaml
-  bob-config:
-    file: ./configs/e2e-bob.yaml
-  charlie-config:
-    file: ./configs/e2e-charlie.yaml
-  e2e-tests:
-    file: ./tests/e2e/federation.sh
-
 services:
   alice:
     build: .
-    configs:
-      - source: alice-config
-        target: /etc/apoci.yaml
-    command: ["serve", "-c", "/etc/apoci.yaml"]
     volumes:
       - alice-data:/apoci/storage
+    environment:
+      APOCI_ENDPOINT: "http://alice:5000"
+      APOCI_ADMIN_TOKEN: "alice-e2e-token"
+      APOCI_REGISTRY_TOKEN: "alice-registry-token"
+      APOCI_LOG_LEVEL: "debug"
+      APOCI_LOG_FORMAT: "text"
+      APOCI_FEDERATION_AUTO_ACCEPT: "all"
+      APOCI_FEDERATION_ALLOW_INSECURE_HTTP: "true"
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
       interval: 2s
@@ -25,12 +19,16 @@ services:
 
   bob:
     build: .
-    configs:
-      - source: bob-config
-        target: /etc/apoci.yaml
-    command: ["serve", "-c", "/etc/apoci.yaml"]
     volumes:
       - bob-data:/apoci/storage
+    environment:
+      APOCI_ENDPOINT: "http://bob:5000"
+      APOCI_ADMIN_TOKEN: "bob-e2e-token"
+      APOCI_REGISTRY_TOKEN: "bob-registry-token"
+      APOCI_LOG_LEVEL: "debug"
+      APOCI_LOG_FORMAT: "text"
+      APOCI_FEDERATION_AUTO_ACCEPT: "all"
+      APOCI_FEDERATION_ALLOW_INSECURE_HTTP: "true"
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
       interval: 2s
@@ -39,12 +37,18 @@ services:
 
   charlie:
     build: .
-    configs:
-      - source: charlie-config
-        target: /etc/apoci.yaml
-    command: ["serve", "-c", "/etc/apoci.yaml"]
     volumes:
       - charlie-data:/apoci/storage
+    environment:
+      APOCI_ENDPOINT: "http://charlie:5000"
+      APOCI_ADMIN_TOKEN: "charlie-e2e-token"
+      APOCI_REGISTRY_TOKEN: "charlie-registry-token"
+      APOCI_LOG_LEVEL: "debug"
+      APOCI_LOG_FORMAT: "text"
+      APOCI_FEDERATION_AUTO_ACCEPT: "none"
+      APOCI_FEDERATION_ALLOW_INSECURE_HTTP: "true"
+      APOCI_FEDERATION_BLOCKED_DOMAINS: "blocked.example.com"
+      APOCI_FEDERATION_BLOCKED_ACTORS: "http://blocked-actor.example.com/ap/actor"
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
       interval: 2s
@@ -52,7 +56,7 @@ services:
       retries: 10
 
   e2e:
-    image: public.ecr.aws/docker/library/alpine:3.21
+    build: tests/e2e
     depends_on:
       alice:
         condition: service_healthy
@@ -60,10 +64,6 @@ services:
         condition: service_healthy
       charlie:
         condition: service_healthy
-    configs:
-      - source: e2e-tests
-        target: /tests/federation.sh
-    entrypoint: ["sh", "-c", "apk add --no-cache curl coreutils > /dev/null 2>&1 && sh /tests/federation.sh"]
 
 volumes:
   alice-data:

@@ -1,9 +1,0 @@
-endpoint: "http://alice:5000"
-adminToken: "alice-e2e-token"
-registryToken: "alice-registry-token"
-logLevel: debug
-logFormat: text
-
-federation:
-  autoAccept: all
-  allowInsecureHTTP: true
