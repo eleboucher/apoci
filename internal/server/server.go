@@ -114,9 +114,9 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 	}
 
 	s := &Server{
-		cfg:                 cfg,
-		db:                  db,
-		identity:            identity,
+		cfg:      cfg,
+		db:       db,
+		identity: identity,
 		fedSvc: &federation.Service{
 			Fed:      &federation.RealFederator{Identity: identity, Enqueue: enqueueFunc},
 			DB:       db,

@@ -88,12 +88,15 @@ docker pull foo.com/bar.com/myapp:v1       # bar's image, from your node (federa
 
 The third case is the point: foo follows bar, so foo has bar's metadata. On pull, foo fetches the blob from bar, verifies the SHA-256, caches it, and serves it. Next pull is local.
 
-Namespace is enforced on **pushes** only -- all repos must be prefixed with your domain. Pulls are unrestricted (any repo that exists locally or can be fetched from a peer is served).
+The domain prefix is added automatically when the repo path is not domain-scoped, so you don't need to type it:
 
 ```bash
-docker push foo.com/myapp:v1               # DENIED: repository must start with "foo.com/"
-docker push foo.com/foo.com/myapp:v1       # OK
+docker push foo.com/myapp:v1               # stored as foo.com/myapp
+docker push foo.com/foo.com/myapp:v1       # also works (prefix already present)
+docker push foo.com/foreign.dev/app:v1     # DENIED: foreign domain
 ```
+
+Pulls require the repository to exist in the database (created by a prior push or federation). Blobs cannot be read from arbitrary or non-existent repository paths.
 
 ## Federation
 
@@ -165,7 +168,7 @@ This hits the admin API (`/api/admin/...`) on the remote node, authenticated wit
 
 1. **Follow gate** -- only approved peers can send activities
 2. **Replay-resistant HTTP Signatures** -- RSA-SHA256 on every request; replays are rejected (5-minute validity window with a seen-signature cache)
-3. **Namespace enforcement** -- writes are always scoped to the node's domain; the namespace is derived from `endpoint` automatically, so a node at `foo.com` can only push to `foo.com/*`
+3. **Namespace enforcement** -- writes are scoped to the node's domain; reads require the repository to exist. Blobs and manifests are only served from repositories that were created by a prior push or federation
 4. **Origin ownership** -- a followed peer can only write to repos it created
 5. **Content addressing** -- SHA-256 verified on every blob fetch
 6. **SSRF protection** -- private IPs blocked after DNS resolution (prevents rebinding)

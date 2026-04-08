@@ -301,6 +301,33 @@ check_status "bob pull blob via pull-through" "200" \
   "$BOB/v2/$REPO/blobs/$BLOB_DIGEST"
 
 # ==============================================================
+echo "--- Phase 8b: Repo-scoped blob isolation ---"
+
+# Blobs pushed to alice.test/myapp must NOT be readable from non-existent repos.
+check_status "alice blob 404 from nonexistent repo" "404" \
+  "$ALICE/v2/library/unknown/blobs/$BLOB_DIGEST"
+
+check_status "alice blob 404 from arbitrary path" "404" \
+  "$ALICE/v2/fake/repo/blobs/$BLOB_DIGEST"
+
+check_status "alice manifest 404 from nonexistent repo" "404" \
+  "$ALICE/v2/library/unknown/manifests/$MANIFEST_DIGEST"
+
+# Same checks on Bob (federated copy).
+check_status "bob blob 404 from nonexistent repo" "404" \
+  "$BOB/v2/library/unknown/blobs/$BLOB_DIGEST"
+
+check_status "bob blob 404 from arbitrary path" "404" \
+  "$BOB/v2/fake/repo/blobs/$BLOB_DIGEST"
+
+# Blobs are still accessible from the correct repo.
+check_status "alice blob 200 from correct repo" "200" \
+  "$ALICE/v2/$REPO/blobs/$BLOB_DIGEST"
+
+check_status "bob blob 200 from correct repo" "200" \
+  "$BOB/v2/$REPO/blobs/$BLOB_DIGEST"
+
+# ==============================================================
 echo "--- Phase 9: Tag update federation ---"
 
 BLOB_CONTENT_V2="e2e-test-blob-v2-$(date +%s)"

@@ -430,6 +430,40 @@ func TestResolveBlobAndManifest(t *testing.T) {
 	require.Error(t, err, "expected error for nonexistent manifest")
 }
 
+func TestBlobReadRequiresExistingRepo(t *testing.T) {
+	reg, _ := testRegistry(t)
+	ctx := context.Background()
+
+	// Push a blob to repo A.
+	blobData := []byte("scoped blob data")
+	desc, err := reg.PushBlob(ctx, "test.example.com/test/repoA", descriptorFor(blobData), strings.NewReader(string(blobData)))
+	require.NoError(t, err)
+
+	// GetBlob from the same repo works.
+	reader, err := reg.GetBlob(ctx, "test.example.com/test/repoA", desc.Digest)
+	require.NoError(t, err)
+	got, _ := io.ReadAll(reader)
+	_ = reader.Close()
+	require.Equal(t, string(blobData), string(got))
+
+	// GetBlob from a non-existent repo is rejected.
+	_, err = reg.GetBlob(ctx, "test.example.com/test/nonexistent", desc.Digest)
+	require.Error(t, err, "blob read from non-existent repo must fail")
+
+	// GetBlobRange from a non-existent repo is rejected.
+	_, err = reg.GetBlobRange(ctx, "test.example.com/test/nonexistent", desc.Digest, 0, 5)
+	require.Error(t, err, "blob range read from non-existent repo must fail")
+
+	// ResolveBlob from a non-existent repo is rejected.
+	_, err = reg.ResolveBlob(ctx, "test.example.com/test/nonexistent", desc.Digest)
+	require.Error(t, err, "resolve blob from non-existent repo must fail")
+
+	// ResolveBlob from the same repo works.
+	resolved, err := reg.ResolveBlob(ctx, "test.example.com/test/repoA", desc.Digest)
+	require.NoError(t, err)
+	require.Equal(t, desc.Digest, resolved.Digest)
+}
+
 func TestBlobSizeLimitEnforced(t *testing.T) {
 	dir := t.TempDir()
 	db, _ := database.OpenSQLite(dir, 0, 0, nopLog())

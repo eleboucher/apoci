@@ -192,6 +192,15 @@ const defaultMediaType = "application/octet-stream"
 func (r *Registry) getBlob(ctx context.Context, repo string, digest ociregistry.Digest) (ociregistry.BlobReader, error) {
 	repo = r.normalizeRepo(repo)
 	metrics.RegistryBlobPulls.Add(1)
+
+	repoObj, err := r.db.GetRepository(ctx, repo)
+	if err != nil {
+		return nil, fmt.Errorf("checking repo: %w", err)
+	}
+	if repoObj == nil {
+		return nil, ociregistry.ErrNameUnknown
+	}
+
 	f, err := r.blobs.Open(string(digest))
 	if err != nil && !errors.Is(err, blobstore.ErrBlobNotFound) {
 		return nil, fmt.Errorf("opening blob: %w", err)
@@ -296,6 +305,15 @@ func (r *Registry) fetchBlobFromPeers(ctx context.Context, repo string, digest o
 
 func (r *Registry) getBlobRange(ctx context.Context, repo string, digest ociregistry.Digest, offset0, offset1 int64) (ociregistry.BlobReader, error) {
 	repo = r.normalizeRepo(repo)
+
+	repoObj, err := r.db.GetRepository(ctx, repo)
+	if err != nil {
+		return nil, fmt.Errorf("checking repo: %w", err)
+	}
+	if repoObj == nil {
+		return nil, ociregistry.ErrNameUnknown
+	}
+
 	f, err := r.blobs.Open(string(digest))
 	if err != nil && !errors.Is(err, blobstore.ErrBlobNotFound) {
 		return nil, fmt.Errorf("opening blob: %w", err)
@@ -499,7 +517,16 @@ func (r *Registry) fetchManifestFromSource(ctx context.Context, repo string, m *
 	return data, nil
 }
 
-func (r *Registry) resolveBlob(ctx context.Context, _ string, digest ociregistry.Digest) (ociregistry.Descriptor, error) {
+func (r *Registry) resolveBlob(ctx context.Context, repo string, digest ociregistry.Digest) (ociregistry.Descriptor, error) {
+	repo = r.normalizeRepo(repo)
+	repoObj, err := r.db.GetRepository(ctx, repo)
+	if err != nil {
+		return ociregistry.Descriptor{}, fmt.Errorf("checking repo: %w", err)
+	}
+	if repoObj == nil {
+		return ociregistry.Descriptor{}, ociregistry.ErrNameUnknown
+	}
+
 	blob, err := r.db.GetBlob(ctx, string(digest))
 	if err != nil {
 		return ociregistry.Descriptor{}, fmt.Errorf("resolving blob: %w", err)

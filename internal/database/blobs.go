@@ -34,6 +34,22 @@ func (db *DB) PutBlob(ctx context.Context, digest string, sizeBytes int64, media
 	return nil
 }
 
+// BlobExistsInRepo checks whether a blob is referenced by any manifest in the given repository.
+func (db *DB) BlobExistsInRepo(ctx context.Context, repoName string, digest string) (bool, error) {
+	var exists bool
+	err := db.bun.NewRaw(
+		`SELECT EXISTS(
+			SELECT 1 FROM manifest_layers ml
+			JOIN manifests m ON m.id = ml.manifest_id
+			JOIN repositories r ON r.id = m.repository_id
+			WHERE r.name = ? AND ml.blob_digest = ?
+		)`, repoName, digest).Scan(ctx, &exists)
+	if err != nil {
+		return false, fmt.Errorf("checking blob in repo: %w", err)
+	}
+	return exists, nil
+}
+
 // FindRepoForBlob returns the name of a repository that references this blob via manifest layers.
 func (db *DB) FindRepoForBlob(ctx context.Context, digest string) (string, error) {
 	var name string

@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testMediaType = "application/octet-stream"
+
 func testDB(t *testing.T) *DB {
 	t.Helper()
 	dir := t.TempDir()
@@ -139,7 +141,7 @@ func TestBlobCRUD(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
 
-	mt := "application/octet-stream"
+	mt := testMediaType
 	require.NoError(t, db.PutBlob(ctx, "sha256:blob1", 1024, &mt, true))
 
 	blob, err := db.GetBlob(ctx, "sha256:blob1")
@@ -336,7 +338,7 @@ func TestBlobPutDoesNotOverwriteSizeFromPeerAnnouncement(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
 
-	mt := "application/octet-stream"
+	mt := testMediaType
 	require.NoError(t, db.PutBlob(ctx, "sha256:sizetest", 1024, &mt, true))
 
 	// Peer announces the same digest with a wrong size — should not overwrite.
@@ -345,6 +347,45 @@ func TestBlobPutDoesNotOverwriteSizeFromPeerAnnouncement(t *testing.T) {
 	blob, err := db.GetBlob(ctx, "sha256:sizetest")
 	require.NoError(t, err)
 	require.Equal(t, int64(1024), blob.SizeBytes, "size must not be overwritten by peer announcement")
+}
+
+func TestBlobExistsInRepo(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	repo, _ := db.GetOrCreateRepository(ctx, "test/scoped", testAliceActor)
+
+	// Put a blob and a manifest that references it.
+	mt := testMediaType
+	require.NoError(t, db.PutBlob(ctx, "sha256:scoped1", 100, &mt, true))
+
+	m := &Manifest{
+		RepositoryID: repo.ID,
+		Digest:       "sha256:manifest-scoped",
+		MediaType:    "application/vnd.oci.image.manifest.v1+json",
+		SizeBytes:    50,
+		Content:      []byte(`{}`),
+	}
+	require.NoError(t, db.PutManifest(ctx, m))
+	got, _ := db.GetManifestByDigest(ctx, repo.ID, "sha256:manifest-scoped")
+	require.NoError(t, db.PutManifestLayers(ctx, got.ID, []string{"sha256:scoped1"}))
+
+	// Blob exists in the repo that references it.
+	exists, err := db.BlobExistsInRepo(ctx, "test/scoped", "sha256:scoped1")
+	require.NoError(t, err)
+	require.True(t, exists)
+
+	// Blob does not exist in a different repo.
+	_, err = db.GetOrCreateRepository(ctx, "test/other", testAliceActor)
+	require.NoError(t, err)
+	exists, err = db.BlobExistsInRepo(ctx, "test/other", "sha256:scoped1")
+	require.NoError(t, err)
+	require.False(t, exists)
+
+	// Non-existent repo returns false.
+	exists, err = db.BlobExistsInRepo(ctx, "test/nonexistent", "sha256:scoped1")
+	require.NoError(t, err)
+	require.False(t, exists)
 }
 
 func TestEnqueueDeliveryIdempotent(t *testing.T) {
