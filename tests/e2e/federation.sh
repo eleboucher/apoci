@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 
-ALICE="http://alice:5000"
-BOB="http://bob:5000"
-CHARLIE="http://charlie:5000"
+ALICE="http://alice.test:5000"
+BOB="http://bob.test:5000"
+CHARLIE="http://charlie.test:5000"
 ALICE_TOKEN="alice-e2e-token"
 BOB_TOKEN="bob-e2e-token"
 CHARLIE_TOKEN="charlie-e2e-token"
@@ -98,9 +98,9 @@ check "bob actor doc"       '"type":"Application"' -H 'Accept: application/activ
 check "charlie actor doc"   '"type":"Application"' -H 'Accept: application/activity+json' "$CHARLIE/ap/actor"
 check "alice actor has key" '"publicKeyPem"'       -H 'Accept: application/activity+json' "$ALICE/ap/actor"
 check "bob actor has key"   '"publicKeyPem"'       -H 'Accept: application/activity+json' "$BOB/ap/actor"
-check "alice webfinger"     '"subject"' "$ALICE/.well-known/webfinger?resource=acct:registry@alice"
-check "bob webfinger"       '"subject"' "$BOB/.well-known/webfinger?resource=acct:registry@bob"
-check "charlie webfinger"   '"subject"' "$CHARLIE/.well-known/webfinger?resource=acct:registry@charlie"
+check "alice webfinger"     '"subject"' "$ALICE/.well-known/webfinger?resource=acct:registry@alice.test"
+check "bob webfinger"       '"subject"' "$BOB/.well-known/webfinger?resource=acct:registry@bob.test"
+check "charlie webfinger"   '"subject"' "$CHARLIE/.well-known/webfinger?resource=acct:registry@charlie.test"
 
 # ==============================================================
 echo "--- Phase 2: Pre-follow ---"
@@ -134,7 +134,7 @@ check_status "registry pull is public" "404" \
 # Unsigned POST to inbox is rejected
 check_status "unsigned inbox post rejected" "401" \
   -X POST -H "Content-Type: application/activity+json" \
-  --data-raw '{"type":"Follow","actor":"http://evil.test/ap/actor","object":"http://alice:5000/ap/actor"}' \
+  --data-raw '{"type":"Follow","actor":"http://evil.test/ap/actor","object":"http://alice.test:5000/ap/actor"}' \
   "$ALICE/ap/inbox"
 
 # ==============================================================
@@ -143,7 +143,7 @@ echo "--- Phase 4: Follow (Alice → Bob, auto-accept) ---"
 follow_resp=$(curl -sf -X POST \
   -H "Authorization: Bearer $ALICE_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"target":"http://bob:5000/ap/actor"}' \
+  -d '{"target":"http://bob.test:5000/ap/actor"}' \
   "$ALICE/api/admin/follows") || { fail "alice follow bob (curl error)"; }
 
 case "$follow_resp" in
@@ -163,7 +163,7 @@ echo "--- Phase 5: Follow (Bob → Alice, auto-accept) ---"
 follow_resp=$(curl -sf -X POST \
   -H "Authorization: Bearer $BOB_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"target":"http://alice:5000/ap/actor"}' \
+  -d '{"target":"http://alice.test:5000/ap/actor"}' \
   "$BOB/api/admin/follows") || { fail "bob follow alice (curl error)"; }
 
 case "$follow_resp" in
@@ -184,7 +184,7 @@ echo "--- Phase 6: Follow + Reject (Alice → Charlie, manual reject) ---"
 follow_resp=$(curl -sf -X POST \
   -H "Authorization: Bearer $ALICE_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"target":"http://charlie:5000/ap/actor"}' \
+  -d '{"target":"http://charlie.test:5000/ap/actor"}' \
   "$ALICE/api/admin/follows") || { fail "alice follow charlie (curl error)"; }
 
 case "$follow_resp" in
@@ -204,7 +204,7 @@ check_absent "charlie has no followers yet" 'alice' \
 reject_resp=$(curl -sf -X POST \
   -H "Authorization: Bearer $CHARLIE_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"target":"http://alice:5000/ap/actor"}' \
+  -d '{"target":"http://alice.test:5000/ap/actor"}' \
   "$CHARLIE/api/admin/follows/reject") || { fail "charlie reject alice (curl error)"; }
 
 case "$reject_resp" in
@@ -223,7 +223,7 @@ echo "--- Phase 7: Follow + Accept (Bob → Charlie, manual accept) ---"
 follow_resp=$(curl -sf -X POST \
   -H "Authorization: Bearer $BOB_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"target":"http://charlie:5000/ap/actor"}' \
+  -d '{"target":"http://charlie.test:5000/ap/actor"}' \
   "$BOB/api/admin/follows") || { fail "bob follow charlie (curl error)"; }
 
 case "$follow_resp" in
@@ -238,7 +238,7 @@ poll_until "charlie has pending from bob" 'bob' 15 \
 accept_resp=$(curl -sf -X POST \
   -H "Authorization: Bearer $CHARLIE_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"target":"http://bob:5000/ap/actor"}' \
+  -d '{"target":"http://bob.test:5000/ap/actor"}' \
   "$CHARLIE/api/admin/follows/accept") || { fail "charlie accept bob (curl error)"; }
 
 case "$accept_resp" in
@@ -257,7 +257,7 @@ poll_until "bob outgoing follow to charlie accepted" 'charlie' 15 \
 # ==============================================================
 echo "--- Phase 8: Manifest federation ---"
 
-REPO="alice/myapp"
+REPO="alice.test/myapp"
 BLOB_CONTENT="e2e-test-blob-content-$(date +%s)"
 BLOB_DIGEST="sha256:$(printf '%s' "$BLOB_CONTENT" | sha256sum | cut -d' ' -f1)"
 
@@ -353,7 +353,7 @@ echo "--- Phase 10: Unfollow + verification ---"
 unfollow_resp=$(curl -sf -X DELETE \
   -H "Authorization: Bearer $ALICE_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"target":"http://bob:5000/ap/actor"}' \
+  -d '{"target":"http://bob.test:5000/ap/actor"}' \
   "$ALICE/api/admin/follows") || { fail "alice unfollow bob (curl error)"; }
 
 case "$unfollow_resp" in
@@ -376,7 +376,7 @@ check_absent "bob followers excludes alice after unfollow" 'alice' \
 unfollow_resp=$(curl -sf -X DELETE \
   -H "Authorization: Bearer $BOB_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"target":"http://alice:5000/ap/actor"}' \
+  -d '{"target":"http://alice.test:5000/ap/actor"}' \
   "$BOB/api/admin/follows") || { fail "bob unfollow alice (curl error)"; }
 
 case "$unfollow_resp" in

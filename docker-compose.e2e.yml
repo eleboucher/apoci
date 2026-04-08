@@ -4,13 +4,17 @@ services:
     volumes:
       - alice-data:/apoci/storage
     environment:
-      APOCI_ENDPOINT: "http://alice:5000"
+      APOCI_ENDPOINT: "http://alice.test:5000"
       APOCI_ADMIN_TOKEN: "alice-e2e-token"
       APOCI_REGISTRY_TOKEN: "alice-registry-token"
       APOCI_LOG_LEVEL: "debug"
       APOCI_LOG_FORMAT: "text"
       APOCI_FEDERATION_AUTO_ACCEPT: "all"
       APOCI_FEDERATION_ALLOW_INSECURE_HTTP: "true"
+    networks:
+      default:
+        aliases:
+          - alice.test
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
       interval: 2s
@@ -22,13 +26,17 @@ services:
     volumes:
       - bob-data:/apoci/storage
     environment:
-      APOCI_ENDPOINT: "http://bob:5000"
+      APOCI_ENDPOINT: "http://bob.test:5000"
       APOCI_ADMIN_TOKEN: "bob-e2e-token"
       APOCI_REGISTRY_TOKEN: "bob-registry-token"
       APOCI_LOG_LEVEL: "debug"
       APOCI_LOG_FORMAT: "text"
       APOCI_FEDERATION_AUTO_ACCEPT: "all"
       APOCI_FEDERATION_ALLOW_INSECURE_HTTP: "true"
+    networks:
+      default:
+        aliases:
+          - bob.test
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
       interval: 2s
@@ -40,7 +48,7 @@ services:
     volumes:
       - charlie-data:/apoci/storage
     environment:
-      APOCI_ENDPOINT: "http://charlie:5000"
+      APOCI_ENDPOINT: "http://charlie.test:5000"
       APOCI_ADMIN_TOKEN: "charlie-e2e-token"
       APOCI_REGISTRY_TOKEN: "charlie-registry-token"
       APOCI_LOG_LEVEL: "debug"
@@ -49,6 +57,10 @@ services:
       APOCI_FEDERATION_ALLOW_INSECURE_HTTP: "true"
       APOCI_FEDERATION_BLOCKED_DOMAINS: "blocked.example.com"
       APOCI_FEDERATION_BLOCKED_ACTORS: "http://blocked-actor.example.com/ap/actor"
+    networks:
+      default:
+        aliases:
+          - charlie.test
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
       interval: 2s

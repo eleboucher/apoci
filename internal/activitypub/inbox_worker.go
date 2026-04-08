@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	inboxQueueSize    = 256
-	inboxWorkerCount  = 4
-	inboxDrainTimeout = 10 * time.Second
+	inboxQueueSize   = 256
+	inboxWorkerCount = 4
+	inboxTaskTimeout = 10 * time.Second
 )
 
 // InboxWorker processes validated ActivityPub activities asynchronously.
@@ -61,7 +61,7 @@ func (w *InboxWorker) run(ctx context.Context) {
 	for {
 		select {
 		case task := <-w.queue:
-			w.process(ctx, task)
+			w.process(task)
 		case <-ctx.Done():
 			w.drain()
 			return
@@ -70,19 +70,19 @@ func (w *InboxWorker) run(ctx context.Context) {
 }
 
 func (w *InboxWorker) drain() {
-	ctx, cancel := context.WithTimeout(context.Background(), inboxDrainTimeout)
-	defer cancel()
 	for {
 		select {
 		case task := <-w.queue:
-			w.process(ctx, task)
+			w.process(task)
 		default:
 			return
 		}
 	}
 }
 
-func (w *InboxWorker) process(ctx context.Context, task InboxTask) {
+func (w *InboxWorker) process(task InboxTask) {
+	ctx, cancel := context.WithTimeout(context.Background(), inboxTaskTimeout)
+	defer cancel()
 	if err := w.handler.dispatch(ctx, task); err != nil {
 		w.logger.Warn("inbox worker: processing failed",
 			"type", task.Activity.Type,
