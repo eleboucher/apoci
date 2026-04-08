@@ -261,10 +261,17 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if existing != nil {
-		metrics.InboxDedupHits.Add(1)
-		h.logger.Debug("inbox: duplicate activity, skipping", "id", activity.ID)
-		w.WriteHeader(http.StatusAccepted)
-		return
+		// Follow uses deterministic IDs (actor#follow-target), so a re-follow
+		// after removal reuses the same ID. Allow reprocessing when the
+		// relationship no longer exists.
+		if activity.Type == ActivityFollow && h.followGone(r.Context(), activity.Actor) {
+			h.logger.Info("inbox: re-processing Follow (previous relationship removed)", "from", activity.Actor)
+		} else {
+			metrics.InboxDedupHits.Add(1)
+			h.logger.Debug("inbox: duplicate activity, skipping", "id", activity.ID)
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
 	}
 
 	metrics.InboxActivities.WithLabelValues(activity.Type).Inc()
@@ -953,6 +960,16 @@ func (h *InboxHandler) actorAllowed(actorURL string) bool {
 func (h *InboxHandler) checkLimiter(cache *ttlcache.Cache[string, *rate.Limiter], key string, r rate.Limit, burst int) bool {
 	item, _ := cache.GetOrSet(key, rate.NewLimiter(r, burst))
 	return item.Value().Allow()
+}
+
+// followGone returns true when actorURL has no follow or pending request.
+func (h *InboxHandler) followGone(ctx context.Context, actorURL string) bool {
+	f, _ := h.db.GetFollow(ctx, actorURL)
+	if f != nil {
+		return false
+	}
+	fr, _ := h.db.GetFollowRequest(ctx, actorURL)
+	return fr == nil
 }
 
 func (h *InboxHandler) shouldAutoAccept(ctx context.Context, actorURL string) bool {

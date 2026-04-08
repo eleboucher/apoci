@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -25,6 +26,17 @@ func signedInboxPost(t *testing.T, sender *Identity, activity any) *http.Request
 	require.NoError(t, err)
 	req := httptest.NewRequest("POST", "/ap/inbox", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/activity+json")
+	require.NoError(t, SignRequest(req, sender.KeyID(), sender.PrivateKey, body))
+	return req
+}
+
+func signedInboxPostWithDate(t *testing.T, sender *Identity, activity any, date time.Time) *http.Request {
+	t.Helper()
+	body, err := json.Marshal(activity)
+	require.NoError(t, err)
+	req := httptest.NewRequest("POST", "/ap/inbox", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/activity+json")
+	req.Header.Set("Date", date.UTC().Format(http.TimeFormat))
 	require.NoError(t, SignRequest(req, sender.KeyID(), sender.PrivateKey, body))
 	return req
 }
@@ -708,10 +720,44 @@ func TestInboxUndoForNonExistentFollow(t *testing.T) {
 }
 
 func TestInboxDuplicateActivityDedup(t *testing.T) {
+	alice, _, inbox, db := setupInboxTest(t)
+	ctx := context.Background()
+
+	alicePEM, _ := alice.PublicKeyPEM()
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+
+	activityID := alice.ActorURL + "#undo-dedup"
+	undo := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       activityID,
+		"type":     "Undo",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type": "Follow",
+		},
+	}
+
+	req := signedInboxPost(t, alice, undo)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	// Verify the activity was stored for dedup.
+	existing, err := db.GetActivity(ctx, activityID)
+	require.NoError(t, err)
+	require.NotNil(t, existing, "activity should be stored for dedup")
+
+	req = signedInboxPostWithDate(t, alice, undo, time.Now().Add(time.Second))
+	rec = httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+}
+
+func TestInboxFollowReprocessedAfterRemoval(t *testing.T) {
 	alice, bob, inbox, db := setupInboxTest(t)
 	ctx := context.Background()
 
-	activityID := alice.ActorURL + "#follow-dedup"
+	activityID := alice.ActorURL + "#follow-" + bob.ActorURL
 	follow := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
 		"id":       activityID,
@@ -729,10 +775,17 @@ func TestInboxDuplicateActivityDedup(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, fr, "first follow should be stored")
 
-	// Verify the activity was stored for dedup.
-	existing, err := db.GetActivity(ctx, activityID)
+	require.NoError(t, db.RejectFollowRequest(ctx, alice.ActorURL))
+
+	// Re-follow with the same activity ID — allowed because the relationship is gone.
+	req = signedInboxPostWithDate(t, alice, follow, time.Now().Add(time.Second))
+	rec = httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	fr, err = db.GetFollowRequest(ctx, alice.ActorURL)
 	require.NoError(t, err)
-	require.NotNil(t, existing, "activity should be stored for dedup")
+	require.NotNil(t, fr, "re-follow after removal should be stored")
 }
 
 func TestInboxFollowSelfRejected(t *testing.T) {
