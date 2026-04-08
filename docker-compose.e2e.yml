@@ -3,8 +3,8 @@ services:
     build: .
     volumes:
       - alice-data:/apoci/storage
-      - ./configs/e2e-alice.yaml:/apoci/e2e.yaml:ro
-    command: ["serve", "-c", "/apoci/e2e.yaml"]
+      - ./configs/e2e-alice.yaml:/etc/apoci.yaml:ro
+    command: ["serve", "-c", "/etc/apoci.yaml"]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
       interval: 2s
@@ -15,8 +15,8 @@ services:
     build: .
     volumes:
       - bob-data:/apoci/storage
-      - ./configs/e2e-bob.yaml:/apoci/e2e.yaml:ro
-    command: ["serve", "-c", "/apoci/e2e.yaml"]
+      - ./configs/e2e-bob.yaml:/etc/apoci.yaml:ro
+    command: ["serve", "-c", "/etc/apoci.yaml"]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
       interval: 2s
@@ -27,8 +27,8 @@ services:
     build: .
     volumes:
       - charlie-data:/apoci/storage
-      - ./configs/e2e-charlie.yaml:/apoci/e2e.yaml:ro
-    command: ["serve", "-c", "/apoci/e2e.yaml"]
+      - ./configs/e2e-charlie.yaml:/etc/apoci.yaml:ro
+    command: ["serve", "-c", "/etc/apoci.yaml"]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
       interval: 2s
