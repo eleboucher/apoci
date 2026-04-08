@@ -62,6 +62,7 @@ type InboxHandler struct {
 type InboxTask struct {
 	Activity  RawActivity
 	PubKeyPEM string
+	RawBody   []byte
 }
 
 type InboxConfig struct {
@@ -271,6 +272,7 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	task := InboxTask{
 		Activity:  activity,
 		PubKeyPEM: pubKeyPEM,
+		RawBody:   body,
 	}
 
 	if h.worker != nil {
@@ -279,7 +281,6 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "busy, retry later", http.StatusServiceUnavailable)
 			return
 		}
-		h.storeActivity(r.Context(), activity.ID, activity.Type, activity.Actor, body)
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}

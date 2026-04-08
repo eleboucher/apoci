@@ -9,7 +9,7 @@ import (
 
 const (
 	inboxQueueSize   = 256
-	inboxWorkerCount = 4
+	inboxWorkerCount = 1
 	inboxTaskTimeout = 10 * time.Second
 )
 
@@ -90,5 +90,7 @@ func (w *InboxWorker) process(task InboxTask) {
 			"actor", task.Activity.Actor,
 			"error", err,
 		)
+		return
 	}
+	w.handler.storeActivity(ctx, task.Activity.ID, task.Activity.Type, task.Activity.Actor, task.RawBody)
 }
