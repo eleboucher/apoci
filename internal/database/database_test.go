@@ -280,14 +280,14 @@ func TestFollowsCRUD(t *testing.T) {
 	ctx := context.Background()
 
 	// AddFollow + GetFollow
-	require.NoError(t, db.AddFollow(ctx, testAliceActor, "pubkey-alice", "https://alice:5000"))
+	require.NoError(t, db.AddFollow(ctx, testAliceActor, "pubkey-alice", "https://alice:5000", nil))
 	f, err := db.GetFollow(ctx, testAliceActor)
 	require.NoError(t, err)
 	require.NotNil(t, f, "expected follow")
 	require.Equal(t, testAliceActor, f.ActorURL)
 
 	// ListFollows
-	require.NoError(t, db.AddFollow(ctx, "https://bob.example.com/ap/actor", "pubkey-bob", "https://bob:5000"))
+	require.NoError(t, db.AddFollow(ctx, "https://bob.example.com/ap/actor", "pubkey-bob", "https://bob:5000", nil))
 	follows, _ := db.ListFollows(ctx)
 	require.Len(t, follows, 2)
 
@@ -306,7 +306,7 @@ func TestFollowRequests(t *testing.T) {
 	ctx := context.Background()
 
 	// Add request
-	require.NoError(t, db.AddFollowRequest(ctx, "https://carol.example.com/ap/actor", "pubkey-carol", "https://carol:5000"))
+	require.NoError(t, db.AddFollowRequest(ctx, "https://carol.example.com/ap/actor", "pubkey-carol", "https://carol:5000", nil))
 	fr, _ := db.GetFollowRequest(ctx, "https://carol.example.com/ap/actor")
 	require.NotNil(t, fr, "expected follow request")
 
@@ -322,7 +322,7 @@ func TestFollowRequests(t *testing.T) {
 	require.NotNil(t, f, "expected follow after accept")
 
 	// Reject
-	require.NoError(t, db.AddFollowRequest(ctx, "https://dave.example.com/ap/actor", "pubkey-dave", "https://dave:5000"))
+	require.NoError(t, db.AddFollowRequest(ctx, "https://dave.example.com/ap/actor", "pubkey-dave", "https://dave:5000", nil))
 	require.NoError(t, db.RejectFollowRequest(ctx, "https://dave.example.com/ap/actor"))
 	fr, _ = db.GetFollowRequest(ctx, "https://dave.example.com/ap/actor")
 	require.Nil(t, fr, "expected request deleted after reject")

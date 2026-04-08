@@ -227,7 +227,7 @@ func followCmd(configPath *string) *cobra.Command {
 }
 
 func runFollowAdd(ctx context.Context, configPath, input string) error {
-	db, identity, err := openAll(configPath)
+	db, identity, _, err := openAll(configPath)
 	if err != nil {
 		return err
 	}
@@ -284,7 +284,7 @@ func runFollowAdd(ctx context.Context, configPath, input string) error {
 }
 
 func runFollowRemove(ctx context.Context, configPath, arg string) error {
-	db, identity, err := openAll(configPath)
+	db, identity, _, err := openAll(configPath)
 	if err != nil {
 		return err
 	}
@@ -309,6 +309,13 @@ func runFollowRemove(ctx context.Context, configPath, arg string) error {
 	return nil
 }
 
+func followDisplayName(actorURL string, alias *string) string {
+	if alias != nil && *alias != "" {
+		return *alias
+	}
+	return actorURL
+}
+
 func printFollows(follows []database.Follow) {
 	if len(follows) == 0 {
 		_, _ = lipgloss.Println(dimStyle.Render("Not following anyone."))
@@ -316,13 +323,13 @@ func printFollows(follows []database.Follow) {
 	}
 	rows := make([][]string, len(follows))
 	for i, f := range follows {
-		rows[i] = []string{f.ActorURL, f.Endpoint, f.ApprovedAt.Format("2006-01-02")}
+		rows[i] = []string{followDisplayName(f.ActorURL, f.Alias), f.Endpoint, f.ApprovedAt.Format("2006-01-02")}
 	}
 	printTable([]string{"ACTOR", "ENDPOINT", "SINCE"}, rows)
 }
 
 func runFollowList(ctx context.Context, configPath string) error {
-	db, _, err := openAll(configPath)
+	db, _, _, err := openAll(configPath)
 	if err != nil {
 		return err
 	}
@@ -343,13 +350,13 @@ func printFollowRequests(requests []database.FollowRequest) {
 	}
 	rows := make([][]string, len(requests))
 	for i, r := range requests {
-		rows[i] = []string{r.ActorURL, r.Endpoint, r.RequestedAt.Format("2006-01-02 15:04")}
+		rows[i] = []string{followDisplayName(r.ActorURL, r.Alias), r.Endpoint, r.RequestedAt.Format("2006-01-02 15:04")}
 	}
 	printTable([]string{"ACTOR", "ENDPOINT", "REQUESTED"}, rows)
 }
 
 func runFollowPending(ctx context.Context, configPath string) error {
-	db, _, err := openAll(configPath)
+	db, _, _, err := openAll(configPath)
 	if err != nil {
 		return err
 	}
@@ -364,7 +371,7 @@ func runFollowPending(ctx context.Context, configPath string) error {
 }
 
 func runFollowAccept(ctx context.Context, configPath, arg string) error {
-	db, identity, err := openAll(configPath)
+	db, identity, cfg, err := openAll(configPath)
 	if err != nil {
 		return err
 	}
@@ -379,11 +386,21 @@ func runFollowAccept(ctx context.Context, configPath, arg string) error {
 		return fmt.Errorf("sending accept: %w", err)
 	}
 	_, _ = lipgloss.Println(successStyle.Render("Accepted follow from " + actorURL))
+
+	if cfg.Federation.AutoAccept == activitypub.AutoAcceptMutual {
+		sent, err := activitypub.SendMutualFollow(ctx, identity, db, actorURL, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: mutual follow-back: %v\n", err)
+		} else if sent {
+			_, _ = lipgloss.Println(successStyle.Render("Mutual follow-back sent to " + actorURL))
+		}
+	}
+
 	return nil
 }
 
 func runFollowReject(ctx context.Context, configPath, arg string) error {
-	db, identity, err := openAll(configPath)
+	db, identity, _, err := openAll(configPath)
 	if err != nil {
 		return err
 	}
@@ -515,26 +532,26 @@ func openDB(cfg *config.Config, logger *slog.Logger) (*database.DB, error) {
 	}
 }
 
-func openAll(configPath string) (*database.DB, *activitypub.Identity, error) {
+func openAll(configPath string) (*database.DB, *activitypub.Identity, *config.Config, error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	logger := nopLogger()
 
 	db, err := openDB(cfg, logger)
 	if err != nil {
-		return nil, nil, fmt.Errorf("opening database: %w", err)
+		return nil, nil, nil, fmt.Errorf("opening database: %w", err)
 	}
 
 	identity, err := activitypub.LoadOrCreateIdentity(cfg.Endpoint, cfg.Domain, cfg.AccountDomain, cfg.KeyPath, logger)
 	if err != nil {
 		_ = db.Close()
-		return nil, nil, fmt.Errorf("loading identity: %w", err)
+		return nil, nil, nil, fmt.Errorf("loading identity: %w", err)
 	}
 
-	return db, identity, nil
+	return db, identity, cfg, nil
 }
 
 var logLevels = map[string]slog.Level{

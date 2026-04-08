@@ -203,9 +203,21 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := VerifyRequest(r, pubKeyPEM, body, h.sigCache); err != nil {
-		h.logger.Warn("inbox: invalid signature", "actor", actorURL, "error", err)
-		http.Error(w, "invalid signature", http.StatusUnauthorized)
-		return
+		// The cached key may be stale (e.g. the remote actor rotated keys).
+		// Re-fetch the actor and retry verification once.
+		freshPEM, fetchErr := h.refetchActorPublicKey(r.Context(), actorURL)
+		if fetchErr != nil || freshPEM == pubKeyPEM {
+			h.logger.Warn("inbox: invalid signature", "actor", actorURL, "error", err)
+			http.Error(w, "invalid signature", http.StatusUnauthorized)
+			return
+		}
+		if err := VerifyRequest(r, freshPEM, body, h.sigCache); err != nil {
+			h.logger.Warn("inbox: invalid signature after key refetch", "actor", actorURL, "error", err)
+			http.Error(w, "invalid signature", http.StatusUnauthorized)
+			return
+		}
+		pubKeyPEM = freshPEM
+		h.logger.Info("inbox: signature verified after key refetch", "actor", actorURL)
 	}
 
 	var activity RawActivity
@@ -339,7 +351,17 @@ func (h *InboxHandler) processFollow(ctx context.Context, activity *RawActivity,
 	}
 
 	actorEndpoint := EndpointFromActorURL(activity.Actor)
-	if err := h.db.AddFollowRequest(ctx, activity.Actor, pubKeyPEM, actorEndpoint); err != nil {
+
+	var alias *string
+	if actor, err := FetchActor(ctx, activity.Actor); err == nil && actor.Name != "" {
+		name := actor.Name
+		if len(name) > 256 {
+			name = name[:256]
+		}
+		alias = &name
+	}
+
+	if err := h.db.AddFollowRequest(ctx, activity.Actor, pubKeyPEM, actorEndpoint, alias); err != nil {
 		return fmt.Errorf("storing follow request: %w", err)
 	}
 
@@ -441,6 +463,40 @@ func (h *InboxHandler) fetchActorPublicKey(ctx context.Context, actorURL string)
 	}
 
 	// Only fetch from domains that are allowed (if an allowlist is configured).
+	if len(h.allowedDomains) > 0 {
+		u, err := url.Parse(actorURL)
+		if err != nil {
+			return "", fmt.Errorf("invalid actor URL: %w", err)
+		}
+		host := u.Hostname()
+		allowed := false
+		for _, d := range h.allowedDomains {
+			if matchesDomain(host, d) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return "", fmt.Errorf("actor domain %q not in allowed list", host)
+		}
+	}
+
+	if h.fetchFailures.Has(actorURL) {
+		return "", fmt.Errorf("actor %s recently failed to fetch (cached)", actorURL)
+	}
+
+	actor, err := FetchActor(ctx, actorURL)
+	if err != nil {
+		h.fetchFailures.Set(actorURL, struct{}{}, ttlcache.DefaultTTL)
+		return "", err
+	}
+	return actor.PublicKey.PublicKeyPEM, nil
+}
+
+// refetchActorPublicKey fetches the actor document from the remote server,
+// bypassing any cached key. Used when signature verification fails with
+// a cached key (the remote actor may have rotated keys).
+func (h *InboxHandler) refetchActorPublicKey(ctx context.Context, actorURL string) (string, error) {
 	if len(h.allowedDomains) > 0 {
 		u, err := url.Parse(actorURL)
 		if err != nil {

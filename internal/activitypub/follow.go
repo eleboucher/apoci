@@ -110,6 +110,59 @@ func SendReject(ctx context.Context, identity *Identity, db *database.DB, follow
 	return nil
 }
 
+// SendMutualFollow sends a Follow back to an actor we just accepted, creating
+// the outgoing follow and peer records. It is a no-op when an outgoing follow
+// already exists. Returns true when a follow-back was sent.
+func SendMutualFollow(ctx context.Context, identity *Identity, db *database.DB, actorURL string, enqueue EnqueueFunc) (bool, error) {
+	existing, err := db.GetOutgoingFollow(ctx, actorURL)
+	if err != nil {
+		return false, fmt.Errorf("checking existing outgoing follow: %w", err)
+	}
+	if existing != nil {
+		return false, nil
+	}
+
+	actor, err := FetchActor(ctx, actorURL)
+	if err != nil {
+		return false, fmt.Errorf("fetching actor %s: %w", actorURL, err)
+	}
+
+	activityID := identity.ActorURL + "#follow-" + uuid.New().String()
+	follow := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       activityID,
+		"type":     "Follow",
+		"actor":    identity.ActorURL,
+		"object":   actor.ID,
+	}
+
+	followJSON, err := json.Marshal(follow)
+	if err != nil {
+		return false, fmt.Errorf("marshaling Follow: %w", err)
+	}
+
+	if err := deliverOrEnqueue(ctx, identity, enqueue, activityID, actor.Inbox, followJSON); err != nil {
+		return false, fmt.Errorf("delivering follow-back to %s: %w", actor.Inbox, err)
+	}
+
+	// Record outgoing follow and peer only after successful delivery.
+	if err := db.AddOutgoingFollow(ctx, actor.ID); err != nil {
+		return false, fmt.Errorf("storing outgoing follow: %w", err)
+	}
+
+	if err := db.UpsertPeer(ctx, &database.Peer{
+		ActorURL:          actor.ID,
+		Endpoint:          EndpointFromActorURL(actor.ID),
+		ReplicationPolicy: "lazy",
+		IsHealthy:         true,
+	}); err != nil {
+		// Follow was sent and outgoing follow recorded; peer upsert is best-effort.
+		return true, fmt.Errorf("upserting peer (follow-back sent): %w", err)
+	}
+
+	return true, nil
+}
+
 // SendUndo delivers an Undo(Follow) to the peer. Best-effort: returns an error
 // but the caller should still proceed with the local unfollow.
 func SendUndo(ctx context.Context, identity *Identity, peerActorURL string, enqueue EnqueueFunc) error {

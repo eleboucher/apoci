@@ -9,15 +9,16 @@ import (
 	"github.com/uptrace/bun"
 )
 
-func (db *DB) AddFollow(ctx context.Context, actorURL, publicKeyPEM, endpoint string) error {
+func (db *DB) AddFollow(ctx context.Context, actorURL, publicKeyPEM, endpoint string, alias *string) error {
 	return db.bun.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewRaw(
-			`INSERT INTO follows (actor_url, public_key_pem, endpoint)
-			 VALUES (?, ?, ?)
+			`INSERT INTO follows (actor_url, public_key_pem, endpoint, alias)
+			 VALUES (?, ?, ?, ?)
 			 ON CONFLICT(actor_url) DO UPDATE SET
 			   public_key_pem = excluded.public_key_pem,
-			   endpoint = excluded.endpoint`,
-			actorURL, publicKeyPEM, endpoint).Exec(ctx); err != nil {
+			   endpoint = excluded.endpoint,
+			   alias = excluded.alias`,
+			actorURL, publicKeyPEM, endpoint, alias).Exec(ctx); err != nil {
 			return fmt.Errorf("adding follow: %w", err)
 		}
 		if _, err := tx.NewRaw("DELETE FROM follow_requests WHERE actor_url = ?", actorURL).Exec(ctx); err != nil {
@@ -61,14 +62,15 @@ func (db *DB) ListFollows(ctx context.Context) ([]Follow, error) {
 	return follows, nil
 }
 
-func (db *DB) AddFollowRequest(ctx context.Context, actorURL, publicKeyPEM, endpoint string) error {
+func (db *DB) AddFollowRequest(ctx context.Context, actorURL, publicKeyPEM, endpoint string, alias *string) error {
 	_, err := db.bun.NewRaw(
-		`INSERT INTO follow_requests (actor_url, public_key_pem, endpoint)
-		 VALUES (?, ?, ?)
+		`INSERT INTO follow_requests (actor_url, public_key_pem, endpoint, alias)
+		 VALUES (?, ?, ?, ?)
 		 ON CONFLICT(actor_url) DO UPDATE SET
 		   public_key_pem = excluded.public_key_pem,
-		   endpoint = excluded.endpoint`,
-		actorURL, publicKeyPEM, endpoint).Exec(ctx)
+		   endpoint = excluded.endpoint,
+		   alias = excluded.alias`,
+		actorURL, publicKeyPEM, endpoint, alias).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("adding follow request: %w", err)
 	}
@@ -139,7 +141,7 @@ func (db *DB) AcceptFollowRequest(ctx context.Context, actorURL string) error {
 	if fr == nil {
 		return fmt.Errorf("no pending follow request from %s", actorURL)
 	}
-	return db.AddFollow(ctx, fr.ActorURL, fr.PublicKeyPEM, fr.Endpoint)
+	return db.AddFollow(ctx, fr.ActorURL, fr.PublicKeyPEM, fr.Endpoint, fr.Alias)
 }
 
 func (db *DB) RejectFollowRequest(ctx context.Context, actorURL string) error {

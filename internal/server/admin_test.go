@@ -22,6 +22,7 @@ type mockAPFederator struct {
 	deliverActivityFn     func(ctx context.Context, inboxURL string, activityJSON []byte) error
 	sendAcceptFn          func(ctx context.Context, followerActorURL string) error
 	sendRejectFn          func(ctx context.Context, followerActorURL string) error
+	sendMutualFollowFn    func(ctx context.Context, actorURL string) (bool, error)
 }
 
 func (m *mockAPFederator) ResolveFollowTarget(ctx context.Context, input string) (string, error) {
@@ -61,6 +62,13 @@ func (m *mockAPFederator) SendReject(ctx context.Context, followerActorURL strin
 
 func (m *mockAPFederator) SendUndo(_ context.Context, _ string) error {
 	return nil
+}
+
+func (m *mockAPFederator) SendMutualFollow(ctx context.Context, actorURL string) (bool, error) {
+	if m.sendMutualFollowFn != nil {
+		return m.sendMutualFollowFn(ctx, actorURL)
+	}
+	return false, nil
 }
 
 func testServerWithMock(t *testing.T, fed apFederator) *Server {
@@ -135,8 +143,8 @@ func TestAdminListFollowsWithData(t *testing.T) {
 	s.cfg.AdminToken = testToken
 	ctx := context.Background()
 
-	require.NoError(t, s.db.AddFollow(ctx, "https://alice.example.com/ap/actor", "pubkey-alice", "https://alice.example.com"))
-	require.NoError(t, s.db.AddFollow(ctx, "https://bob.example.com/ap/actor", "pubkey-bob", "https://bob.example.com"))
+	require.NoError(t, s.db.AddFollow(ctx, "https://alice.example.com/ap/actor", "pubkey-alice", "https://alice.example.com", nil))
+	require.NoError(t, s.db.AddFollow(ctx, "https://bob.example.com/ap/actor", "pubkey-bob", "https://bob.example.com", nil))
 
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
@@ -207,7 +215,7 @@ func TestAdminListPendingWithData(t *testing.T) {
 	s.cfg.AdminToken = testToken
 	ctx := context.Background()
 
-	require.NoError(t, s.db.AddFollowRequest(ctx, "https://carol.example.com/ap/actor", "pubkey-carol", "https://carol.example.com"))
+	require.NoError(t, s.db.AddFollowRequest(ctx, "https://carol.example.com/ap/actor", "pubkey-carol", "https://carol.example.com", nil))
 
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
@@ -419,7 +427,7 @@ func TestAdminAcceptFollowSuccess(t *testing.T) {
 	s := testServerWithMock(t, fed)
 	s.cfg.RegistryToken = testToken
 	s.cfg.AdminToken = testToken
-	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL))
+	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL, nil))
 
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
@@ -446,24 +454,19 @@ func TestAdminAcceptFollowMutualFollowBack(t *testing.T) {
 
 	ctx := context.Background()
 
-	var deliveredInbox string
-	var deliveredJSON []byte
+	var mutualFollowActor string
 	fed := &mockAPFederator{
 		sendAcceptFn: func(_ context.Context, _ string) error { return nil },
-		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
-			return adminActor(actorURL, inboxURL), nil
-		},
-		deliverActivityFn: func(_ context.Context, inbox string, body []byte) error {
-			deliveredInbox = inbox
-			deliveredJSON = body
-			return nil
+		sendMutualFollowFn: func(_ context.Context, actor string) (bool, error) {
+			mutualFollowActor = actor
+			return true, nil
 		},
 	}
 	s := testServerWithMock(t, fed)
 	s.cfg.RegistryToken = testToken
 	s.cfg.AdminToken = testToken
 	s.cfg.Federation.AutoAccept = activitypub.AutoAcceptMutual
-	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL))
+	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL, nil))
 
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
@@ -482,17 +485,7 @@ func TestAdminAcceptFollowMutualFollowBack(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	require.Equal(t, actorURL, result["accepted"])
 	require.Equal(t, actorURL, result["followed_back"])
-
-	// Follow activity should have been delivered to the peer's inbox.
-	require.Equal(t, inboxURL, deliveredInbox)
-	var activity map[string]any
-	require.NoError(t, json.Unmarshal(deliveredJSON, &activity))
-	require.Equal(t, "Follow", activity["type"])
-
-	// Outgoing follow should be recorded.
-	of, err := s.db.GetOutgoingFollow(ctx, actorURL)
-	require.NoError(t, err)
-	require.NotNil(t, of, "outgoing follow should be created by mutual follow-back")
+	require.Equal(t, actorURL, mutualFollowActor, "SendMutualFollow should be called with the accepted actor")
 }
 
 func TestAdminAcceptFollowMutualSkipsExistingOutgoing(t *testing.T) {
@@ -501,19 +494,19 @@ func TestAdminAcceptFollowMutualSkipsExistingOutgoing(t *testing.T) {
 
 	ctx := context.Background()
 
-	delivered := false
+	mutualCalled := false
 	fed := &mockAPFederator{
 		sendAcceptFn: func(_ context.Context, _ string) error { return nil },
-		deliverActivityFn: func(_ context.Context, _ string, _ []byte) error {
-			delivered = true
-			return nil
+		sendMutualFollowFn: func(_ context.Context, _ string) (bool, error) {
+			mutualCalled = true
+			return false, nil
 		},
 	}
 	s := testServerWithMock(t, fed)
 	s.cfg.RegistryToken = testToken
 	s.cfg.AdminToken = testToken
 	s.cfg.Federation.AutoAccept = activitypub.AutoAcceptMutual
-	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL))
+	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL, nil))
 	// Already following this actor.
 	require.NoError(t, s.db.AddOutgoingFollow(ctx, actorURL))
 
@@ -534,7 +527,7 @@ func TestAdminAcceptFollowMutualSkipsExistingOutgoing(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	require.Equal(t, actorURL, result["accepted"])
 	require.Empty(t, result["followed_back"], "should not follow back when outgoing follow already exists")
-	require.False(t, delivered, "should not deliver a Follow activity when outgoing follow already exists")
+	require.True(t, mutualCalled, "SendMutualFollow should still be called even when outgoing follow exists")
 }
 
 func TestAdminRejectFollowMissingTarget(t *testing.T) {
@@ -594,7 +587,7 @@ func TestAdminRejectFollowSuccess(t *testing.T) {
 	s := testServerWithMock(t, fed)
 	s.cfg.RegistryToken = testToken
 	s.cfg.AdminToken = testToken
-	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL))
+	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL, nil))
 
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
@@ -658,7 +651,7 @@ func TestAdminRemoveFollowSuccess(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
 	s.cfg.AdminToken = testToken
-	require.NoError(t, s.db.AddFollow(ctx, actorURL, "pubkey-peer", "https://peer.example.com"))
+	require.NoError(t, s.db.AddFollow(ctx, actorURL, "pubkey-peer", "https://peer.example.com", nil))
 
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
@@ -716,7 +709,7 @@ func TestAdminRemoveFollowBothTables(t *testing.T) {
 	s := testServerWithMock(t, &mockAPFederator{})
 	s.cfg.RegistryToken = testToken
 	s.cfg.AdminToken = testToken
-	require.NoError(t, s.db.AddFollow(ctx, actorURL, "pubkey-peer", "https://peer.example.com"))
+	require.NoError(t, s.db.AddFollow(ctx, actorURL, "pubkey-peer", "https://peer.example.com", nil))
 	require.NoError(t, s.db.AddOutgoingFollow(ctx, actorURL))
 
 	srv := httptest.NewServer(s.routes())

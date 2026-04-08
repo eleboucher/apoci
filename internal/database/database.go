@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
@@ -129,7 +130,19 @@ func (db *DB) migrate(ctx context.Context) error {
 		if _, err := db.bun.ExecContext(ctx, `UPDATE schema_version SET version = 1`); err != nil {
 			return fmt.Errorf("updating schema version to 1: %w", err)
 		}
+		version = 1
 	}
+
+	if version < 2 {
+		if err := db.migrateV2(ctx); err != nil {
+			return fmt.Errorf("migration v2: %w", err)
+		}
+		if _, err := db.bun.ExecContext(ctx, `UPDATE schema_version SET version = 2`); err != nil {
+			return fmt.Errorf("updating schema version to 2: %w", err)
+		}
+		version = 2
+	}
+	_ = version // used by future migrations
 
 	return nil
 }
@@ -198,5 +211,23 @@ func (db *DB) migrateV1(ctx context.Context) error {
 		}
 	}
 
+	return nil
+}
+
+// migrateV2 adds the alias column to follows and follow_requests.
+func (db *DB) migrateV2(ctx context.Context) error {
+	stmts := []string{
+		"ALTER TABLE follows ADD COLUMN alias TEXT",
+		"ALTER TABLE follow_requests ADD COLUMN alias TEXT",
+	}
+	for _, ddl := range stmts {
+		if _, err := db.bun.ExecContext(ctx, ddl); err != nil {
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "duplicate column") || strings.Contains(errMsg, "already exists") {
+				continue
+			}
+			return fmt.Errorf("migrateV2: %w", err)
+		}
+	}
 	return nil
 }

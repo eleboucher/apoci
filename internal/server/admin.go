@@ -24,6 +24,7 @@ type apFederator interface {
 	SendAccept(ctx context.Context, followerActorURL string) error
 	SendReject(ctx context.Context, followerActorURL string) error
 	SendUndo(ctx context.Context, peerActorURL string) error
+	SendMutualFollow(ctx context.Context, actorURL string) (bool, error)
 }
 
 type realAPFederator struct {
@@ -54,6 +55,10 @@ func (f *realAPFederator) SendReject(ctx context.Context, followerActorURL strin
 
 func (f *realAPFederator) SendUndo(ctx context.Context, peerActorURL string) error {
 	return activitypub.SendUndo(ctx, f.identity, peerActorURL, f.enqueue)
+}
+
+func (f *realAPFederator) SendMutualFollow(ctx context.Context, actorURL string) (bool, error) {
+	return activitypub.SendMutualFollow(ctx, f.identity, f.db, actorURL, f.enqueue)
 }
 
 func (s *Server) adminRouter() http.Handler {
@@ -203,29 +208,11 @@ func (s *Server) adminAcceptFollow(w http.ResponseWriter, r *http.Request) {
 	result := map[string]string{"accepted": actorURL}
 
 	if s.cfg.Federation.AutoAccept == activitypub.AutoAcceptMutual {
-		existing, _ := s.db.GetOutgoingFollow(ctx, actorURL)
-		if existing == nil {
-			actor, err := s.apFed.FetchActor(ctx, actorURL)
-			if err != nil {
-				s.logger.Warn("mutual follow-back: could not fetch actor", "actor", actorURL, "error", err)
-			} else if err := s.db.AddOutgoingFollow(ctx, actor.ID); err != nil {
-				s.logger.Warn("mutual follow-back: could not store outgoing follow", "actor", actorURL, "error", err)
-			} else {
-				followActivity := map[string]any{
-					"@context": "https://www.w3.org/ns/activitystreams",
-					"id":       s.identity.ActorURL + "#follow-" + url.QueryEscape(actor.ID),
-					"type":     "Follow",
-					"actor":    s.identity.ActorURL,
-					"object":   actor.ID,
-				}
-				if activityJSON, err := json.Marshal(followActivity); err == nil {
-					if err := s.apFed.DeliverActivity(ctx, actor.Inbox, activityJSON); err != nil {
-						s.logger.Warn("mutual follow-back: delivery failed", "actor", actorURL, "error", err)
-					} else {
-						result["followed_back"] = actorURL
-					}
-				}
-			}
+		sent, err := s.apFed.SendMutualFollow(ctx, actorURL)
+		if err != nil {
+			s.logger.Warn("mutual follow-back failed", "actor", actorURL, "error", err)
+		} else if sent {
+			result["followed_back"] = actorURL
 		}
 	}
 

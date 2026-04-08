@@ -47,7 +47,7 @@ func TestInboxWorkerProcessesTask(t *testing.T) {
 	require.NoError(t, err)
 
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test", nil))
 	handler.SetNamespaceForActor(alice.ActorURL, "alice.test")
 
 	worker.Start(ctx)
@@ -80,7 +80,7 @@ func TestInboxWorkerDrainsOnStop(t *testing.T) {
 	require.NoError(t, err)
 
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollow(context.Background(), alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollow(context.Background(), alice.ActorURL, alicePEM, "https://alice.test", nil))
 	handler.SetNamespaceForActor(alice.ActorURL, "alice.test")
 
 	// Enqueue a task before starting so it's processed during drain.

@@ -188,7 +188,7 @@ func TestInboxRejectCleansUp(t *testing.T) {
 	ctx := context.Background()
 
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollowRequest(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollowRequest(ctx, alice.ActorURL, alicePEM, "https://alice.test", nil))
 
 	reject := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
@@ -215,7 +215,7 @@ func TestInboxUndoRemovesFollow(t *testing.T) {
 	ctx := context.Background()
 
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test", nil))
 
 	undo := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
@@ -242,7 +242,7 @@ func TestInboxCreateManifest(t *testing.T) {
 	ctx := context.Background()
 
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test", nil))
 
 	repo := aliceRepoName(alice, "app")
 	create := map[string]any{
@@ -305,7 +305,7 @@ func TestInboxUpdateTag(t *testing.T) {
 	ctx := context.Background()
 
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test", nil))
 
 	repoName := aliceRepoName(alice, "app")
 	digest := "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd"
@@ -351,7 +351,7 @@ func TestInboxAnnounceBlobRef(t *testing.T) {
 
 	aliceEndpoint := EndpointFromActorURL(alice.ActorURL)
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, aliceEndpoint))
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, aliceEndpoint, nil))
 
 	require.NoError(t, db.UpsertPeer(ctx, &database.Peer{
 		ActorURL:          alice.ActorURL,
@@ -388,7 +388,7 @@ func TestInboxDeleteIsAccepted(t *testing.T) {
 	alice, _, inbox, db := setupInboxTest(t)
 
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollow(context.Background(), alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollow(context.Background(), alice.ActorURL, alicePEM, "https://alice.test", nil))
 
 	del := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
@@ -410,7 +410,7 @@ func TestInboxOwnershipEnforcement(t *testing.T) {
 	ctx := context.Background()
 
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test", nil))
 
 	repoName := aliceRepoName(alice, "repo")
 	otherActor := "https://" + aliceRepoName(alice, "ap/other-actor")
@@ -451,7 +451,7 @@ func TestInboxCreateManifestWithContent_DigestMatch(t *testing.T) {
 	ctx := context.Background()
 
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test", nil))
 
 	content := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`)
 	digest, encoded := manifestDigestAndContent(content)
@@ -492,7 +492,7 @@ func TestInboxCreateManifestWithContent_DigestMismatch(t *testing.T) {
 	ctx := context.Background()
 
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test", nil))
 
 	legitimateContent := []byte(`{"schemaVersion":2}`)
 	digest, _ := manifestDigestAndContent(legitimateContent)
@@ -526,7 +526,7 @@ func TestInboxCreateManifestWrongDomain(t *testing.T) {
 	ctx := context.Background()
 
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test", nil))
 
 	create := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
@@ -670,7 +670,7 @@ func TestInboxRejectCleansBothDirections(t *testing.T) {
 
 	alicePEM, _ := alice.PublicKeyPEM()
 	require.NoError(t, db.AddOutgoingFollow(ctx, alice.ActorURL))
-	require.NoError(t, db.AddFollowRequest(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollowRequest(ctx, alice.ActorURL, alicePEM, "https://alice.test", nil))
 
 	reject := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
@@ -724,7 +724,7 @@ func TestInboxDuplicateActivityDedup(t *testing.T) {
 	ctx := context.Background()
 
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test", nil))
 
 	activityID := alice.ActorURL + "#undo-dedup"
 	undo := map[string]any{
@@ -982,7 +982,7 @@ func TestMutualAcceptAutoAcceptsPendingInboundFollow(t *testing.T) {
 	require.NoError(t, db.AddOutgoingFollow(ctx, alice.ActorURL))
 
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollowRequest(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollowRequest(ctx, alice.ActorURL, alicePEM, "https://alice.test", nil))
 
 	inbox.SetEnqueueFunc(func(_ context.Context, _, _ string, _ []byte) error {
 		return nil
@@ -1113,7 +1113,7 @@ func TestInboxUpdateTagUnknownManifest(t *testing.T) {
 	ctx := context.Background()
 
 	alicePEM, _ := alice.PublicKeyPEM()
-	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, "https://alice.test", nil))
 
 	repoName := aliceRepoName(alice, "app")
 	_, err := db.GetOrCreateRepository(ctx, repoName, alice.ActorURL)
@@ -1183,7 +1183,7 @@ func TestInboxCreateManifestSplitDomainNamespace(t *testing.T) {
 	aliceActor.PublicKey.Owner = alice.ActorURL
 
 	ctx := context.Background()
-	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, actorSrv.URL))
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, actorSrv.URL, nil))
 
 	// Pre-populate the namespace cache to simulate a validated split-domain.
 	// httptest uses 127.0.0.1 which can't pass the parent-domain validation
@@ -1260,7 +1260,7 @@ func TestInboxRejectsSpoofedNamespace(t *testing.T) {
 	evilActor.PublicKey.Owner = evil.ActorURL
 
 	ctx := context.Background()
-	require.NoError(t, db.AddFollow(ctx, evil.ActorURL, evilPEM, actorSrv.URL))
+	require.NoError(t, db.AddFollow(ctx, evil.ActorURL, evilPEM, actorSrv.URL, nil))
 
 	// Evil tries to push a repo under the spoofed namespace.
 	create := map[string]any{
