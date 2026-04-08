@@ -34,8 +34,8 @@ func NewBlobReplicator(db *database.DB, blobs *blobstore.Store, fetcher *Fetcher
 }
 
 // ReplicateBlob fetches a blob from a peer and stores it locally in the background.
-// The repo is derived from manifest layer references, but for eager replication we use
-// a synthetic repo path since the blob is content-addressable.
+// The repo is derived from manifest layer references in the database; if none exist
+// yet, replication is skipped and the blob will be fetched on-demand via pull-through.
 func (r *BlobReplicator) ReplicateBlob(ctx context.Context, peerEndpoint, digest string, size int64) {
 	if r.blobs.Exists(digest) {
 		return
@@ -66,9 +66,11 @@ func (r *BlobReplicator) replicateBlob(ctx context.Context, peerEndpoint, digest
 	// Blobs are served under /v2/{repo}/blobs/{digest}, so we need a valid repo name.
 	repo, _ := r.db.FindRepoForBlob(ctx, digest)
 	if repo == "" {
-		// No repo references this blob yet. Try a direct fetch with a placeholder.
-		// Some registries support cross-repo blob mounts or don't validate the repo prefix.
-		repo = "library/unknown"
+		// No repo references this blob yet (blob announce arrived before the manifest).
+		// Skip eager replication; the blob will be fetched on-demand via pull-through
+		// when a client actually requests it.
+		r.logger.Debug("skipping eager replication: no repo references blob yet", "digest", digest)
+		return
 	}
 
 	stream, err := r.fetcher.FetchBlobStream(ctx, peerEndpoint, repo, digest)

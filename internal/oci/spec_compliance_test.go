@@ -98,7 +98,16 @@ func TestSpecChunkedBlobUpload(t *testing.T) {
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "PUT should return 201 Created")
 	require.NotEmpty(t, resp.Header.Get("Location"), "PUT should return Location header")
 
-	// Step 4: Verify blob is retrievable
+	// Step 4: Push a manifest referencing the blob so it's linked to the repo
+	manifest := fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"%s","size":%d,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`, dig, len(chunk))
+	req, _ = http.NewRequest("PUT", srv.URL+"/v2/test.example.com/test/chunked/manifests/latest", strings.NewReader(manifest))
+	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode, "manifest push should succeed")
+
+	// Step 5: Verify blob is retrievable
 	resp, err = http.Get(srv.URL + "/v2/test.example.com/test/chunked/blobs/" + dig.String())
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()

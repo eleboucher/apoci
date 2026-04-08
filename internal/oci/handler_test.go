@@ -55,14 +55,20 @@ func TestPushAndPullBlob(t *testing.T) {
 	ctx := context.Background()
 
 	blobData := []byte("hello blob content")
+	repo := "test.example.com/test/repo"
 
 	// Push blob
-	desc, err := reg.PushBlob(ctx, "test.example.com/test/repo", descriptorFor(blobData), strings.NewReader(string(blobData)))
+	desc, err := reg.PushBlob(ctx, repo, descriptorFor(blobData), strings.NewReader(string(blobData)))
 	require.NoError(t, err)
 	require.Equal(t, int64(len(blobData)), desc.Size)
 
+	// Push a manifest referencing the blob so it's linked to the repo.
+	manifest := fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"%s","size":%d,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`, desc.Digest, desc.Size)
+	_, err = reg.PushManifest(ctx, repo, "latest", []byte(manifest), testManifestMediaType)
+	require.NoError(t, err)
+
 	// Pull blob
-	reader, err := reg.GetBlob(ctx, "test.example.com/test/repo", desc.Digest)
+	reader, err := reg.GetBlob(ctx, repo, desc.Digest)
 	require.NoError(t, err)
 	defer func() { _ = reader.Close() }()
 
@@ -361,10 +367,7 @@ func TestBlobRangeRequest(t *testing.T) {
 	ctx := context.Background()
 
 	blobData := []byte("0123456789abcdef")
-
-	// Push blob
-	desc, err := reg.PushBlob(ctx, "test.example.com/test/range", descriptorFor(blobData), strings.NewReader(string(blobData)))
-	require.NoError(t, err)
+	desc := pushBlobWithManifest(t, reg, "test.example.com/test/range", blobData)
 
 	// Read a range: bytes 4..10 (offset0=4, offset1=10)
 	reader, err := reg.GetBlobRange(ctx, "test.example.com/test/range", desc.Digest, 4, 10)
@@ -385,11 +388,10 @@ func TestBlobRangeOutOfBounds(t *testing.T) {
 	ctx := context.Background()
 
 	blobData := []byte("short")
-	desc, err := reg.PushBlob(ctx, "test.example.com/test/rangebounds", descriptorFor(blobData), strings.NewReader(string(blobData)))
-	require.NoError(t, err)
+	desc := pushBlobWithManifest(t, reg, "test.example.com/test/rangebounds", blobData)
 
 	// offset0 >= totalSize should return ErrRangeInvalid
-	_, err = reg.GetBlobRange(ctx, "test.example.com/test/rangebounds", desc.Digest, int64(len(blobData)), -1)
+	_, err := reg.GetBlobRange(ctx, "test.example.com/test/rangebounds", desc.Digest, int64(len(blobData)), -1)
 	require.Error(t, err, "expected error for out-of-bounds range")
 }
 
@@ -397,10 +399,9 @@ func TestResolveBlobAndManifest(t *testing.T) {
 	reg, _ := testRegistry(t)
 	ctx := context.Background()
 
-	// Push a blob
+	// Push a blob + manifest so the blob is linked to the repo.
 	blobData := []byte("resolve me")
-	blobDesc, err := reg.PushBlob(ctx, "test.example.com/test/resolve", descriptorFor(blobData), strings.NewReader(string(blobData)))
-	require.NoError(t, err)
+	blobDesc := pushBlobWithManifest(t, reg, "test.example.com/test/resolve", blobData)
 
 	// Resolve the blob
 	resolved, err := reg.ResolveBlob(ctx, "test.example.com/test/resolve", blobDesc.Digest)
@@ -412,7 +413,7 @@ func TestResolveBlobAndManifest(t *testing.T) {
 	_, err = reg.ResolveBlob(ctx, "test.example.com/test/resolve", "sha256:0000000000000000000000000000000000000000000000000000000000000000")
 	require.Error(t, err, "expected error for nonexistent blob")
 
-	// Push a manifest
+	// Push a manifest with a tag
 	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:abc"},"layers":[]}`)
 	mediaType := testManifestMediaType
 	mDesc, err := reg.PushManifest(ctx, "test.example.com/test/resolve", "v1", manifest, mediaType)
@@ -434,13 +435,15 @@ func TestBlobReadRequiresExistingRepo(t *testing.T) {
 	reg, _ := testRegistry(t)
 	ctx := context.Background()
 
-	// Push a blob to repo A.
+	repoA := "test.example.com/test/repoA"
+	repoB := "test.example.com/test/repoB"
+
+	// Push a blob+manifest to repo A.
 	blobData := []byte("scoped blob data")
-	desc, err := reg.PushBlob(ctx, "test.example.com/test/repoA", descriptorFor(blobData), strings.NewReader(string(blobData)))
-	require.NoError(t, err)
+	desc := pushBlobWithManifest(t, reg, repoA, blobData)
 
 	// GetBlob from the same repo works.
-	reader, err := reg.GetBlob(ctx, "test.example.com/test/repoA", desc.Digest)
+	reader, err := reg.GetBlob(ctx, repoA, desc.Digest)
 	require.NoError(t, err)
 	got, _ := io.ReadAll(reader)
 	_ = reader.Close()
@@ -459,9 +462,35 @@ func TestBlobReadRequiresExistingRepo(t *testing.T) {
 	require.Error(t, err, "resolve blob from non-existent repo must fail")
 
 	// ResolveBlob from the same repo works.
-	resolved, err := reg.ResolveBlob(ctx, "test.example.com/test/repoA", desc.Digest)
+	resolved, err := reg.ResolveBlob(ctx, repoA, desc.Digest)
 	require.NoError(t, err)
 	require.Equal(t, desc.Digest, resolved.Digest)
+
+	// Cross-repo isolation: push a different blob+manifest to repo B.
+	blobB := []byte("repo B data")
+	descB := pushBlobWithManifest(t, reg, repoB, blobB)
+
+	// ResolveBlob across repos is rejected.
+	_, err = reg.ResolveBlob(ctx, repoB, desc.Digest)
+	require.Error(t, err, "resolve blob from repoA must not work from repoB")
+
+	_, err = reg.ResolveBlob(ctx, repoA, descB.Digest)
+	require.Error(t, err, "resolve blob from repoB must not work from repoA")
+
+	// Blob from repo A is NOT readable from repo B.
+	_, err = reg.GetBlob(ctx, repoB, desc.Digest)
+	require.Error(t, err, "blob from repoA must not be readable from repoB")
+
+	// Blob from repo B is NOT readable from repo A.
+	_, err = reg.GetBlob(ctx, repoA, descB.Digest)
+	require.Error(t, err, "blob from repoB must not be readable from repoA")
+
+	// Each blob is readable from its own repo.
+	reader, err = reg.GetBlob(ctx, repoB, descB.Digest)
+	require.NoError(t, err)
+	got, _ = io.ReadAll(reader)
+	_ = reader.Close()
+	require.Equal(t, string(blobB), string(got))
 }
 
 func TestBlobSizeLimitEnforced(t *testing.T) {
@@ -636,6 +665,25 @@ func descriptorFor(data []byte) ociregistry.Descriptor {
 		MediaType: "application/octet-stream",
 		Size:      int64(len(data)),
 	}
+}
+
+// pushBlobWithManifest pushes a blob and a manifest that references it as config,
+// so the blob is linked to the repo via manifest_layers.
+func pushBlobWithManifest(t *testing.T, reg *Registry, repo string, blobData []byte) ociregistry.Descriptor {
+	t.Helper()
+	ctx := context.Background()
+
+	desc, err := reg.PushBlob(ctx, repo, descriptorFor(blobData), strings.NewReader(string(blobData)))
+	require.NoError(t, err)
+
+	manifest := fmt.Sprintf(
+		`{"schemaVersion":2,"mediaType":"%s","config":{"digest":"%s","size":%d,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`,
+		testManifestMediaType, desc.Digest, desc.Size,
+	)
+	_, err = reg.PushManifest(ctx, repo, "", []byte(manifest), testManifestMediaType)
+	require.NoError(t, err)
+
+	return desc
 }
 
 func nopLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }

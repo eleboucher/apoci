@@ -3,6 +3,7 @@ package oci_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"testing"
 
@@ -80,6 +81,11 @@ func TestFederatedBlobPull(t *testing.T) {
 	desc, err := reg.PushBlob(ctx, "local.test/test/fedrepo", testDescriptor(blobData, "application/octet-stream"), bytes.NewReader(blobData))
 	require.NoError(t, err)
 
+	// Push a manifest referencing the blob so it's linked to the repo.
+	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"` + string(desc.Digest) + `","size":` + fmt.Sprintf("%d", desc.Size) + `,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`)
+	_, err = reg.PushManifest(ctx, "local.test/test/fedrepo", "v1", manifest, "application/vnd.oci.image.manifest.v1+json")
+	require.NoError(t, err)
+
 	// Delete the local blob file to force federation path
 	require.NoError(t, blobs.Delete(string(desc.Digest)))
 
@@ -110,6 +116,11 @@ func TestBlobPullLocalFirst(t *testing.T) {
 	blobData := []byte("local blob content")
 
 	desc, err := reg.PushBlob(ctx, "local.test/test/local", testDescriptor(blobData, "application/octet-stream"), bytes.NewReader(blobData))
+	require.NoError(t, err)
+
+	// Push a manifest referencing the blob so it's linked to the repo.
+	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"` + string(desc.Digest) + `","size":` + fmt.Sprintf("%d", desc.Size) + `,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`)
+	_, err = reg.PushManifest(ctx, "local.test/test/local", "v1", manifest, "application/vnd.oci.image.manifest.v1+json")
 	require.NoError(t, err)
 
 	reader, err := reg.GetBlob(ctx, "local.test/test/local", desc.Digest)

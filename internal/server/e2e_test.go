@@ -45,14 +45,7 @@ func TestE2EFullBlobAndManifestFlow(t *testing.T) {
 	_ = resp.Body.Close()
 	require.True(t, resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusAccepted, "blob push: expected 201 or 202, got %d", resp.StatusCode)
 
-	// 2. Verify blob exists via HEAD
-	req = mustNewRequest(t, "HEAD", srv.URL+"/v2/test.example.com/e2e/blobs/"+blobDigest, nil)
-	resp, err = http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	_ = resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode, "blob HEAD")
-
-	// 3. Push manifest referencing the blob
+	// 2. Push manifest referencing the blob (links blob to repo via manifest_layers)
 	manifest := fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"%s","size":%d,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`, blobDigest, len(blobData))
 	req = authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/e2e/manifests/v1.0", strings.NewReader(manifest)))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
@@ -61,6 +54,13 @@ func TestE2EFullBlobAndManifestFlow(t *testing.T) {
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "manifest push")
 	manifestDigest := resp.Header.Get("Docker-Content-Digest")
+
+	// 3. Verify blob exists via HEAD (after manifest links it to the repo)
+	req = mustNewRequest(t, "HEAD", srv.URL+"/v2/test.example.com/e2e/blobs/"+blobDigest, nil)
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "blob HEAD")
 
 	// 4. Pull manifest by tag
 	req = mustNewRequest(t, "GET", srv.URL+"/v2/test.example.com/e2e/manifests/v1.0", nil)

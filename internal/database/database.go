@@ -204,6 +204,7 @@ func (db *DB) migrateV1(ctx context.Context) error {
 		"CREATE INDEX IF NOT EXISTS idx_delivery_queue_activity ON delivery_queue (activity_id)",
 		"CREATE INDEX IF NOT EXISTS idx_outgoing_follows_status ON outgoing_follows (status)",
 		"CREATE INDEX IF NOT EXISTS idx_tags_manifest_digest ON tags (manifest_digest)",
+		"CREATE INDEX IF NOT EXISTS idx_manifest_layers_blob_digest ON manifest_layers (blob_digest)",
 	}
 	for _, ddl := range indexes {
 		if _, err := db.bun.ExecContext(ctx, ddl); err != nil {

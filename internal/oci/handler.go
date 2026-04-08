@@ -193,12 +193,12 @@ func (r *Registry) getBlob(ctx context.Context, repo string, digest ociregistry.
 	repo = r.normalizeRepo(repo)
 	metrics.RegistryBlobPulls.Add(1)
 
-	repoObj, err := r.db.GetRepository(ctx, repo)
+	exists, err := r.db.BlobExistsInRepo(ctx, repo, string(digest))
 	if err != nil {
-		return nil, fmt.Errorf("checking repo: %w", err)
+		return nil, fmt.Errorf("checking blob repo scope: %w", err)
 	}
-	if repoObj == nil {
-		return nil, ociregistry.ErrNameUnknown
+	if !exists {
+		return nil, ociregistry.ErrBlobUnknown
 	}
 
 	f, err := r.blobs.Open(string(digest))
@@ -306,12 +306,12 @@ func (r *Registry) fetchBlobFromPeers(ctx context.Context, repo string, digest o
 func (r *Registry) getBlobRange(ctx context.Context, repo string, digest ociregistry.Digest, offset0, offset1 int64) (ociregistry.BlobReader, error) {
 	repo = r.normalizeRepo(repo)
 
-	repoObj, err := r.db.GetRepository(ctx, repo)
+	exists, err := r.db.BlobExistsInRepo(ctx, repo, string(digest))
 	if err != nil {
-		return nil, fmt.Errorf("checking repo: %w", err)
+		return nil, fmt.Errorf("checking blob repo scope: %w", err)
 	}
-	if repoObj == nil {
-		return nil, ociregistry.ErrNameUnknown
+	if !exists {
+		return nil, ociregistry.ErrBlobUnknown
 	}
 
 	f, err := r.blobs.Open(string(digest))
@@ -519,12 +519,12 @@ func (r *Registry) fetchManifestFromSource(ctx context.Context, repo string, m *
 
 func (r *Registry) resolveBlob(ctx context.Context, repo string, digest ociregistry.Digest) (ociregistry.Descriptor, error) {
 	repo = r.normalizeRepo(repo)
-	repoObj, err := r.db.GetRepository(ctx, repo)
+	exists, err := r.db.BlobExistsInRepo(ctx, repo, string(digest))
 	if err != nil {
-		return ociregistry.Descriptor{}, fmt.Errorf("checking repo: %w", err)
+		return ociregistry.Descriptor{}, fmt.Errorf("checking blob repo scope: %w", err)
 	}
-	if repoObj == nil {
-		return ociregistry.Descriptor{}, ociregistry.ErrNameUnknown
+	if !exists {
+		return ociregistry.Descriptor{}, ociregistry.ErrBlobUnknown
 	}
 
 	blob, err := r.db.GetBlob(ctx, string(digest))

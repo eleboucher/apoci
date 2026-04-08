@@ -131,6 +131,20 @@ check_status "registry push wrong token" "401" \
 check_status "registry pull is public" "404" \
   "$ALICE/v2/alice/nonexistent/manifests/latest"
 
+# Registry push to foreign namespace is rejected
+check_status "push to foreign namespace rejected" "403" \
+  -X PUT -H "Authorization: Bearer $ALICE_REGISTRY_TOKEN" \
+  -H "Content-Type: application/vnd.oci.image.manifest.v1+json" \
+  --data-raw '{"schemaVersion":2}' \
+  "$ALICE/v2/bob.test/evil/manifests/latest"
+
+# Registry push without auth is rejected
+check_status "push without auth rejected" "401" \
+  -X PUT \
+  -H "Content-Type: application/vnd.oci.image.manifest.v1+json" \
+  --data-raw '{"schemaVersion":2}' \
+  "$ALICE/v2/alice.test/myapp/manifests/latest"
+
 # Unsigned POST to inbox is rejected
 check_status "unsigned inbox post rejected" "401" \
   -X POST -H "Content-Type: application/activity+json" \
@@ -258,23 +272,43 @@ poll_until "bob outgoing follow to charlie accepted" 'charlie' 15 \
 echo "--- Phase 8: Manifest federation ---"
 
 REPO="alice.test/myapp"
-BLOB_CONTENT="e2e-test-blob-content-$(date +%s)"
-BLOB_DIGEST="sha256:$(printf '%s' "$BLOB_CONTENT" | sha256sum | cut -d' ' -f1)"
+
+# Push config blob
+CONFIG_CONTENT="e2e-test-config-$(date +%s)"
+CONFIG_DIGEST="sha256:$(printf '%s' "$CONFIG_CONTENT" | sha256sum | cut -d' ' -f1)"
 
 blob_body=$(mktemp)
 blob_status=$(curl -s -o "$blob_body" -w '%{http_code}' -X POST \
   -H "Authorization: Bearer $ALICE_REGISTRY_TOKEN" \
   -H "Content-Type: application/octet-stream" \
-  --data-raw "$BLOB_CONTENT" \
-  "$ALICE/v2/$REPO/blobs/uploads/?digest=$BLOB_DIGEST") || true
+  --data-raw "$CONFIG_CONTENT" \
+  "$ALICE/v2/$REPO/blobs/uploads/?digest=$CONFIG_DIGEST") || true
 
 case "$blob_status" in
-  201|202) pass "push blob to alice" ;;
-  *) fail "push blob to alice — HTTP $blob_status: $(cat "$blob_body")" ;;
+  201|202) pass "push config blob to alice" ;;
+  *) fail "push config blob to alice — HTTP $blob_status: $(cat "$blob_body")" ;;
 esac
 rm -f "$blob_body"
 
-MANIFEST="{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"config\":{\"digest\":\"$BLOB_DIGEST\",\"size\":${#BLOB_CONTENT},\"mediaType\":\"application/vnd.oci.image.config.v1+json\"},\"layers\":[]}"
+# Push layer blob
+LAYER_CONTENT="e2e-test-layer-$(date +%s)"
+LAYER_DIGEST="sha256:$(printf '%s' "$LAYER_CONTENT" | sha256sum | cut -d' ' -f1)"
+
+blob_body=$(mktemp)
+blob_status=$(curl -s -o "$blob_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $ALICE_REGISTRY_TOKEN" \
+  -H "Content-Type: application/octet-stream" \
+  --data-raw "$LAYER_CONTENT" \
+  "$ALICE/v2/$REPO/blobs/uploads/?digest=$LAYER_DIGEST") || true
+
+case "$blob_status" in
+  201|202) pass "push layer blob to alice" ;;
+  *) fail "push layer blob to alice — HTTP $blob_status: $(cat "$blob_body")" ;;
+esac
+rm -f "$blob_body"
+
+# Push manifest with config + layer
+MANIFEST="{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"config\":{\"digest\":\"$CONFIG_DIGEST\",\"size\":${#CONFIG_CONTENT},\"mediaType\":\"application/vnd.oci.image.config.v1+json\"},\"layers\":[{\"digest\":\"$LAYER_DIGEST\",\"size\":${#LAYER_CONTENT},\"mediaType\":\"application/vnd.oci.image.layer.v1.tar+gzip\"}]}"
 MANIFEST_DIGEST="sha256:$(printf '%s' "$MANIFEST" | sha256sum | cut -d' ' -f1)"
 
 manifest_body=$(mktemp)
@@ -291,41 +325,88 @@ esac
 rm -f "$manifest_body"
 
 # Bob (follower) should receive the manifest
-poll_until "bob received federated manifest" "$BLOB_DIGEST" 30 \
+poll_until "bob received federated manifest" "$CONFIG_DIGEST" 30 \
   "$BOB/v2/$REPO/manifests/latest"
 
 check_status "bob pull manifest by digest" "200" \
   "$BOB/v2/$REPO/manifests/$MANIFEST_DIGEST"
 
-check_status "bob pull blob via pull-through" "200" \
-  "$BOB/v2/$REPO/blobs/$BLOB_DIGEST"
+check_status "bob pull config blob via pull-through" "200" \
+  "$BOB/v2/$REPO/blobs/$CONFIG_DIGEST"
+
+check_status "bob pull layer blob via pull-through" "200" \
+  "$BOB/v2/$REPO/blobs/$LAYER_DIGEST"
 
 # ==============================================================
 echo "--- Phase 8b: Repo-scoped blob isolation ---"
 
 # Blobs pushed to alice.test/myapp must NOT be readable from non-existent repos.
-check_status "alice blob 404 from nonexistent repo" "404" \
-  "$ALICE/v2/library/unknown/blobs/$BLOB_DIGEST"
+check_status "alice config blob 404 from nonexistent repo" "404" \
+  "$ALICE/v2/library/unknown/blobs/$CONFIG_DIGEST"
+
+check_status "alice layer blob 404 from nonexistent repo" "404" \
+  "$ALICE/v2/library/unknown/blobs/$LAYER_DIGEST"
 
 check_status "alice blob 404 from arbitrary path" "404" \
-  "$ALICE/v2/fake/repo/blobs/$BLOB_DIGEST"
+  "$ALICE/v2/fake/repo/blobs/$CONFIG_DIGEST"
 
 check_status "alice manifest 404 from nonexistent repo" "404" \
   "$ALICE/v2/library/unknown/manifests/$MANIFEST_DIGEST"
 
 # Same checks on Bob (federated copy).
 check_status "bob blob 404 from nonexistent repo" "404" \
-  "$BOB/v2/library/unknown/blobs/$BLOB_DIGEST"
+  "$BOB/v2/library/unknown/blobs/$CONFIG_DIGEST"
 
 check_status "bob blob 404 from arbitrary path" "404" \
-  "$BOB/v2/fake/repo/blobs/$BLOB_DIGEST"
+  "$BOB/v2/fake/repo/blobs/$CONFIG_DIGEST"
 
 # Blobs are still accessible from the correct repo.
-check_status "alice blob 200 from correct repo" "200" \
-  "$ALICE/v2/$REPO/blobs/$BLOB_DIGEST"
+check_status "alice config blob 200 from correct repo" "200" \
+  "$ALICE/v2/$REPO/blobs/$CONFIG_DIGEST"
 
-check_status "bob blob 200 from correct repo" "200" \
-  "$BOB/v2/$REPO/blobs/$BLOB_DIGEST"
+check_status "alice layer blob 200 from correct repo" "200" \
+  "$ALICE/v2/$REPO/blobs/$LAYER_DIGEST"
+
+check_status "bob config blob 200 from correct repo" "200" \
+  "$BOB/v2/$REPO/blobs/$CONFIG_DIGEST"
+
+check_status "bob layer blob 200 from correct repo" "200" \
+  "$BOB/v2/$REPO/blobs/$LAYER_DIGEST"
+
+# Cross-repo isolation: push a second repo on Alice, verify blobs don't leak across.
+REPO_B="alice.test/other"
+BLOB_B_CONTENT="e2e-cross-repo-$(date +%s)"
+BLOB_B_DIGEST="sha256:$(printf '%s' "$BLOB_B_CONTENT" | sha256sum | cut -d' ' -f1)"
+
+blob_body=$(mktemp)
+curl -s -o "$blob_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $ALICE_REGISTRY_TOKEN" \
+  -H "Content-Type: application/octet-stream" \
+  --data-raw "$BLOB_B_CONTENT" \
+  "$ALICE/v2/$REPO_B/blobs/uploads/?digest=$BLOB_B_DIGEST" > /dev/null 2>&1 || true
+rm -f "$blob_body"
+
+MANIFEST_B="{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"config\":{\"digest\":\"$BLOB_B_DIGEST\",\"size\":${#BLOB_B_CONTENT},\"mediaType\":\"application/vnd.oci.image.config.v1+json\"},\"layers\":[]}"
+
+manifest_body=$(mktemp)
+curl -s -o "$manifest_body" -w '%{http_code}' -X PUT \
+  -H "Authorization: Bearer $ALICE_REGISTRY_TOKEN" \
+  -H "Content-Type: application/vnd.oci.image.manifest.v1+json" \
+  --data-raw "$MANIFEST_B" \
+  "$ALICE/v2/$REPO_B/manifests/v1" > /dev/null 2>&1 || true
+rm -f "$manifest_body"
+
+# Blob from repo A should NOT be readable from repo B (both repos exist).
+check_status "alice repoA blob 404 from repoB" "404" \
+  "$ALICE/v2/$REPO_B/blobs/$CONFIG_DIGEST"
+
+# Blob from repo B should NOT be readable from repo A.
+check_status "alice repoB blob 404 from repoA" "404" \
+  "$ALICE/v2/$REPO/blobs/$BLOB_B_DIGEST"
+
+# Each blob is accessible from its own repo.
+check_status "alice repoB blob 200 from repoB" "200" \
+  "$ALICE/v2/$REPO_B/blobs/$BLOB_B_DIGEST"
 
 # ==============================================================
 echo "--- Phase 9: Tag update federation ---"
@@ -374,6 +455,31 @@ check_status "bob still has old manifest by digest" "200" \
   "$BOB/v2/$REPO/manifests/$MANIFEST_DIGEST"
 
 # ==============================================================
+echo "--- Phase 9b: Federation scoping ---"
+
+# Charlie accepted Bob's follow (Phase 7) but rejected Alice's (Phase 6).
+# Alice's manifests should NOT appear on Charlie since Alice is not Charlie's follower.
+check_status "charlie does not have alice manifest" "404" \
+  "$CHARLIE/v2/$REPO/manifests/latest"
+
+check_status "charlie does not have alice manifest by digest" "404" \
+  "$CHARLIE/v2/$REPO/manifests/$MANIFEST_DIGEST"
+
+# ==============================================================
+echo "--- Phase 9c: OCI artifact listing ---"
+
+# Tags list should work on repos that exist.
+check "alice tags list includes latest" '"latest"' \
+  "$ALICE/v2/$REPO/tags/list"
+
+check "bob tags list includes latest" '"latest"' \
+  "$BOB/v2/$REPO/tags/list"
+
+# Tags list on non-existent repo returns 404.
+check_status "alice tags list 404 for nonexistent" "404" \
+  "$ALICE/v2/library/unknown/tags/list"
+
+# ==============================================================
 echo "--- Phase 10: Unfollow + verification ---"
 
 # Alice unfollows Bob
@@ -415,6 +521,19 @@ sleep 2
 
 check_absent "alice followers excludes bob after unfollow" 'bob' \
   -H "Authorization: Bearer $ALICE_TOKEN" "$ALICE/api/admin/follows"
+
+# ==============================================================
+echo "--- Phase 10b: Data preserved after unfollow ---"
+
+# Bob should still have Alice's previously-federated manifests and blobs.
+check_status "bob still has manifest after unfollow" "200" \
+  "$BOB/v2/$REPO/manifests/$MANIFEST_DIGEST"
+
+check_status "bob still has updated manifest after unfollow" "200" \
+  "$BOB/v2/$REPO/manifests/$MANIFEST_DIGEST_V2"
+
+check_status "bob still has tag after unfollow" "200" \
+  "$BOB/v2/$REPO/manifests/latest"
 
 # ==============================================================
 echo ""

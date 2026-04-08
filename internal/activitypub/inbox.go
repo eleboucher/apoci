@@ -798,6 +798,8 @@ func (h *InboxHandler) ingestManifest(ctx context.Context, obj map[string]any, a
 		return fmt.Errorf("storing manifest: %w", err)
 	}
 
+	h.recordLayersAndReplicate(ctx, content, repoObj.ID, digest)
+
 	// Store the tag atomically with the manifest when the sender includes it in
 	// the Create activity. This avoids the race where Update(OCITag) arrives and
 	// is processed before Create(OCIManifest) has committed.
@@ -950,6 +952,71 @@ func (h *InboxHandler) ingestBlobRef(ctx context.Context, obj map[string]any, ac
 
 	h.logger.Debug("inbox: ingested blob ref", "digest", digest, "from", actorURL)
 	return nil
+}
+
+// recordLayersAndReplicate records manifest-layer associations and triggers
+// eager replication for blobs that haven't been fetched yet.
+func (h *InboxHandler) recordLayersAndReplicate(ctx context.Context, content []byte, repoID int64, digest string) {
+	if content == nil {
+		return
+	}
+	layerDigests := extractLayerDigests(content)
+	if len(layerDigests) == 0 {
+		return
+	}
+
+	man, err := h.db.GetManifestByDigest(ctx, repoID, digest)
+	if err != nil {
+		h.logger.Warn("inbox: could not fetch manifest to record layers", "digest", digest, "error", err)
+		return
+	}
+	if man == nil {
+		return
+	}
+	if err := h.db.PutManifestLayers(ctx, man.ID, layerDigests); err != nil {
+		h.logger.Warn("inbox: failed to record manifest layers", "digest", digest, "error", err)
+	}
+
+	if h.blobReplicator == nil {
+		return
+	}
+	for _, ld := range layerDigests {
+		peers, err := h.db.FindPeersWithBlob(ctx, ld)
+		if err != nil || len(peers) == 0 {
+			continue
+		}
+		blob, err := h.db.GetBlob(ctx, ld)
+		if err != nil || blob == nil || blob.StoredLocally {
+			continue
+		}
+		h.blobReplicator.ReplicateBlob(ctx, peers[0].PeerEndpoint, ld, blob.SizeBytes)
+	}
+}
+
+// extractLayerDigests parses an OCI manifest and returns all referenced digests
+// (config + layers) for recording in manifest_layers.
+func extractLayerDigests(content []byte) []string {
+	var parsed struct {
+		Config struct {
+			Digest string `json:"digest"`
+		} `json:"config"`
+		Layers []struct {
+			Digest string `json:"digest"`
+		} `json:"layers"`
+	}
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		return nil
+	}
+	var digests []string
+	if parsed.Config.Digest != "" {
+		digests = append(digests, parsed.Config.Digest)
+	}
+	for _, l := range parsed.Layers {
+		if l.Digest != "" {
+			digests = append(digests, l.Digest)
+		}
+	}
+	return digests
 }
 
 // extractObjectType returns the "type" field from the activity object.
