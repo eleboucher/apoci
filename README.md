@@ -63,7 +63,7 @@ cat ~/apoci/data/registry.token
 Push something:
 
 ```bash
-TOKEN=$(cat ~/apoci/data/registry.token)
+TOKEN=$(cat /apoci/storage/registry.token)
 docker login foo.com -u registry -p "$TOKEN"
 docker push foo.com/foo.com/myapp:v1
 ```
@@ -144,9 +144,19 @@ apoci identity show
 All `follow` and `identity` subcommands can target a remote instance using `--remote` and `--token`:
 
 ```bash
-ADMIN_TOKEN=$(cat ~/apoci/data/admin.token)
+ADMIN_TOKEN=$(cat /apoci/storage/admin.token)
 apoci follow list --remote https://registry.example.com --token "$ADMIN_TOKEN"
 apoci follow add bar.com --remote https://registry.example.com --token "$ADMIN_TOKEN"
+```
+
+Or set `APOCI_REMOTE_URL` and `APOCI_ADMIN_TOKEN` to avoid repeating flags:
+
+```bash
+export APOCI_REMOTE_URL=https://registry.example.com
+export APOCI_ADMIN_TOKEN=$(cat /apoci/storage/admin.token)
+apoci follow list
+apoci follow add bar.com
+apoci identity show
 ```
 
 This hits the admin API (`/api/admin/...`) on the remote node, authenticated with the admin token (separate from the registry push token). Useful for managing headless or containerized instances.
@@ -301,6 +311,13 @@ All settings can be configured via YAML file, environment variables, or both. En
 | `metrics.enabled` | `APOCI_METRICS_ENABLED` | `false` | Expose `/debug/vars` on the metrics port |
 | `metrics.listen` | `APOCI_METRICS_LISTEN` | `:9090` | Metrics bind address |
 | `metrics.token` | `APOCI_METRICS_TOKEN` | | Bearer token for `/debug/vars` (unauthenticated if empty) |
+
+**CLI-only env vars** (no YAML equivalent, used by `follow` and `identity` subcommands):
+
+| Env Var | Description |
+|---------|-------------|
+| `APOCI_REMOTE_URL` | Default `--remote` URL for CLI subcommands |
+| `APOCI_ADMIN_TOKEN` | Default `--token` for CLI subcommands (falls back to the server config value when running locally) |
 
 Config lookup: `config/apoci.yaml` by default, override with `-c <path>` or `APOCI_CONFIG` env var. If the config file is not found, apoci runs purely from environment variables and defaults.
 
