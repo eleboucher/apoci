@@ -16,6 +16,7 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/oci"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/peering"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
 )
 
 type Server struct {
@@ -45,6 +46,12 @@ type Server struct {
 }
 
 func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *activitypub.Identity, version string, logger *slog.Logger) (*Server, error) {
+	if cfg.Federation.AllowInsecureHTTP {
+		activitypub.SetAllowInsecureHTTP(true)
+		validate.AllowPrivateIPs.Store(true)
+		logger.Warn("insecure HTTP federation enabled")
+	}
+
 	registry, err := oci.NewRegistry(db, blobs, identity.ActorURL, cfg.Domain, cfg.ImmutableTags, cfg.Limits.MaxManifestSize, cfg.Limits.MaxBlobSize, logger)
 	if err != nil {
 		return nil, err

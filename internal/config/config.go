@@ -63,10 +63,11 @@ const (
 )
 
 type Federation struct {
-	AutoAccept     string   `yaml:"autoAccept"     env:"AUTO_ACCEPT"`                      // "none" (default), "mutual", "all"
-	AllowedDomains []string `yaml:"allowedDomains" env:"ALLOWED_DOMAINS" envSeparator:","` // always auto-accept from these domains
-	BlockedDomains []string `yaml:"blockedDomains" env:"BLOCKED_DOMAINS" envSeparator:","` // silently drop all activities from these domains
-	BlockedActors  []string `yaml:"blockedActors"  env:"BLOCKED_ACTORS"  envSeparator:","` // silently drop all activities from these actor URLs
+	AutoAccept        string   `yaml:"autoAccept"        env:"AUTO_ACCEPT"`                      // "none" (default), "mutual", "all"
+	AllowInsecureHTTP bool     `yaml:"allowInsecureHTTP" env:"ALLOW_INSECURE_HTTP"`              // allow plain HTTP federation (testing only)
+	AllowedDomains    []string `yaml:"allowedDomains"    env:"ALLOWED_DOMAINS" envSeparator:","` // always auto-accept from these domains
+	BlockedDomains    []string `yaml:"blockedDomains"    env:"BLOCKED_DOMAINS" envSeparator:","` // silently drop all activities from these domains
+	BlockedActors     []string `yaml:"blockedActors"     env:"BLOCKED_ACTORS"  envSeparator:","` // silently drop all activities from these actor URLs
 }
 
 type Limits struct {

@@ -1,0 +1,33 @@
+---
+name: Federation E2E
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  federation-e2e:
+    runs-on: docker
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@v6
+
+      - name: Run federation E2E tests
+        run: |
+          docker compose -f docker-compose.e2e.yml up \
+            --build \
+            --abort-on-container-exit \
+            --exit-code-from e2e
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.e2e.yml logs alice bob
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f docker-compose.e2e.yml down -v

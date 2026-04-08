@@ -29,6 +29,7 @@ endpoint: "https://registry.example.com"
 
 # federation:
 #   autoAccept: none           # none, mutual, or all
+#   allowInsecureHTTP: false   # allow plain HTTP federation (testing only)
 #   allowedDomains: []         # always auto-accept follows from these domains
 #   blockedDomains: []         # silently drop all activities from these domains
 #   blockedActors: []          # silently drop all activities from these actor URLs

@@ -1,4 +1,4 @@
-.PHONY: build test lint clean docker lint-fix fmt tidy up down
+.PHONY: build test lint clean docker lint-fix fmt tidy up down e2e
 
 BINARY := apoci
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -33,3 +33,7 @@ up:
 
 down:
 	docker compose down
+
+e2e:
+	docker compose -f docker-compose.e2e.yml up --build --abort-on-container-exit --exit-code-from e2e
+	docker compose -f docker-compose.e2e.yml down -v
