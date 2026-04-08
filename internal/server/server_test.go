@@ -233,21 +233,6 @@ func TestRegistryAuthMiddlewareAllowsReadWithoutToken(t *testing.T) {
 	}
 }
 
-func TestRegistryAuthMiddlewareRejectsWriteWithoutToken(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	handler := registryAuthMiddleware("secret-token", "https://registry.example.com")(inner)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut, "/v2/test/manifests/latest", nil)
-	handler.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusUnauthorized, rec.Code, "PUT without token should be 401")
-	require.Equal(t, `Bearer realm="https://registry.example.com/v2/token",service="registry"`, rec.Header().Get("WWW-Authenticate"))
-}
-
 func TestRegistryAuthMiddlewareAcceptsValidToken(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -344,4 +329,96 @@ func TestRegistryAuthMiddlewareEmptyTokenBlocksWrites(t *testing.T) {
 	req = httptest.NewRequest(http.MethodGet, "/v2/test/manifests/latest", nil)
 	handler.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code, "empty token config should allow reads")
+}
+
+func TestRegistryAuthMiddlewareRejectsWriteWithoutToken(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := registryAuthMiddleware("secret-token", "https://registry.example.com")(inner)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/v2/test/manifests/latest", nil)
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusUnauthorized, rec.Code, "PUT without token should be 401")
+	require.Equal(t, `Bearer realm="https://registry.example.com/v2/auth",service="registry"`, rec.Header().Get("WWW-Authenticate"))
+}
+
+func TestRegistryAuthEndpointIssuesToken(t *testing.T) {
+	s := testServer(t)
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v2/auth", nil)
+	req.SetBasicAuth("", testRegistryToken)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	require.Equal(t, testRegistryToken, body["token"])
+}
+
+func TestRegistryAuthEndpointRejectsWrongPassword(t *testing.T) {
+	s := testServer(t)
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v2/auth", nil)
+	req.SetBasicAuth("", "wrong-password")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+func TestRegistryAuthEndpointRejectsNoCredentials(t *testing.T) {
+	s := testServer(t)
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/v2/auth")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+func TestRegistryAuthFullFlow(t *testing.T) {
+	s := testServer(t)
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v2/test/blobs/uploads/", nil)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	wwwAuth := resp.Header.Get("WWW-Authenticate")
+	require.Contains(t, wwwAuth, `/v2/auth`)
+
+	tokenReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/v2/auth", nil)
+	tokenReq.SetBasicAuth("", testRegistryToken)
+	tokenResp, err := http.DefaultClient.Do(tokenReq)
+	require.NoError(t, err)
+	defer func() { _ = tokenResp.Body.Close() }()
+	require.Equal(t, http.StatusOK, tokenResp.StatusCode)
+
+	var tokenBody map[string]string
+	require.NoError(t, json.NewDecoder(tokenResp.Body).Decode(&tokenBody))
+	token := tokenBody["token"]
+	require.NotEmpty(t, token)
+
+	req2, _ := http.NewRequest(http.MethodPost, srv.URL+"/v2/test/blobs/uploads/", nil)
+	req2.Header.Set("Authorization", "Bearer "+token)
+	resp2, err := http.DefaultClient.Do(req2)
+	require.NoError(t, err)
+	_ = resp2.Body.Close()
+	require.NotEqual(t, http.StatusUnauthorized, resp2.StatusCode)
 }

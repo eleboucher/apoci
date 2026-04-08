@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/subtle"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -100,7 +101,8 @@ func registryAuthMiddleware(token, endpoint string) func(http.Handler) http.Hand
 			}
 
 			if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
-				w.Header().Set("WWW-Authenticate", `Bearer realm="`+endpoint+`/v2/token",service="registry"`)
+				realm := fmt.Sprintf("%s/v2/auth", endpoint)
+				w.Header().Set("WWW-Authenticate", `Bearer realm="`+realm+`",service="registry"`)
 				http.Error(w, "authentication required", http.StatusUnauthorized)
 				return
 			}

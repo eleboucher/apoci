@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 )
@@ -10,9 +11,17 @@ func (s *Server) routes() http.Handler {
 
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
-
-	mux.Handle("/v2/", registryPushRateLimitMiddleware(s.registryPushLimiter)(registryAuthMiddleware(s.cfg.RegistryToken, s.cfg.Endpoint)(s.ociHandler)))
-
+	mux.HandleFunc("/v2/auth", s.handleRegistryAuth)
+	mux.HandleFunc("/v2/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v2/" || r.URL.Path == "/v2" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		registryPushRateLimitMiddleware(s.registryPushLimiter)(
+			registryAuthMiddleware(s.cfg.RegistryToken, s.cfg.Endpoint)(s.ociHandler),
+		).ServeHTTP(w, r)
+	})
 	mux.Handle("GET /.well-known/webfinger", s.webfingerHandler)
 	mux.Handle("GET /.well-known/nodeinfo", http.HandlerFunc(s.nodeinfoHandler.ServeWellKnown))
 	mux.Handle("GET /ap/nodeinfo/2.1", http.HandlerFunc(s.nodeinfoHandler.ServeNodeInfo))
@@ -48,4 +57,17 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
+}
+
+func (s *Server) handleRegistryAuth(w http.ResponseWriter, r *http.Request) {
+	_, pass, ok := r.BasicAuth()
+	if !ok || subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.RegistryToken)) != 1 {
+		w.Header().Set("WWW-Authenticate", `Basic realm="apoci"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"token": s.cfg.RegistryToken,
+	})
 }
