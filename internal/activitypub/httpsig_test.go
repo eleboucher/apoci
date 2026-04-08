@@ -1,8 +1,12 @@
 package activitypub
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"net/http/httptest"
 	"testing"
 
@@ -10,7 +14,7 @@ import (
 )
 
 func TestSignAndVerifyRequest(t *testing.T) {
-	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 
 	body := []byte(`{"type": "Follow"}`)
@@ -38,7 +42,7 @@ func TestSignAndVerifyRequest(t *testing.T) {
 }
 
 func TestSignAndVerifyRequestNoBody(t *testing.T) {
-	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest("GET", "https://example.com/ap/actor", nil)
@@ -57,8 +61,8 @@ func TestSignAndVerifyRequestNoBody(t *testing.T) {
 }
 
 func TestVerifyRequestWrongKey(t *testing.T) {
-	privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	otherKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	req := httptest.NewRequest("POST", "https://example.com/ap/inbox", nil)
 	require.NoError(t, SignRequest(req, "key1", privKey, []byte("hello")))
@@ -71,7 +75,7 @@ func TestVerifyRequestWrongKey(t *testing.T) {
 }
 
 func TestExtractKeyID(t *testing.T) {
-	privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	req := httptest.NewRequest("POST", "https://example.com/ap/inbox", nil)
 	require.NoError(t, SignRequest(req, "https://alice.example.com/ap/actor#main-key", privKey, []byte("test")))
@@ -84,7 +88,7 @@ func TestExtractKeyID(t *testing.T) {
 func TestExtractRawSignatureMalformedHeader(t *testing.T) {
 	// A header with no signature= field should return empty string, not the raw header.
 	req := httptest.NewRequest("POST", "https://example.com/ap/inbox", nil)
-	req.Header.Set("Signature", `keyId="https://example.com/key",algorithm="rsa-sha256"`)
+	req.Header.Set("Signature", `keyId="https://example.com/key",algorithm="ecdsa-sha256"`)
 	got := extractRawSignature(req)
 	require.Empty(t, got, "expected empty string when no signature= field present")
 }
@@ -97,7 +101,7 @@ func TestExtractRawSignatureFound(t *testing.T) {
 }
 
 func TestReplayDetection(t *testing.T) {
-	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 
 	body := []byte(`{"type": "Follow"}`)
@@ -118,4 +122,42 @@ func TestReplayDetection(t *testing.T) {
 	err = VerifyRequest(req, pubPEM, body, cache)
 	require.Error(t, err, "expected replay to be rejected")
 	require.Contains(t, err.Error(), "replayed signature")
+}
+
+// TestSignAndVerifyRSABackwardCompat ensures that incoming requests signed
+// with RSA keys (from peers that haven't migrated) still verify correctly.
+func TestSignAndVerifyRSABackwardCompat(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	body := []byte(`{"type": "Follow"}`)
+	req := httptest.NewRequest("POST", "https://example.com/ap/inbox", nil)
+
+	err = SignRequest(req, "https://peer.example.com/ap/actor#main-key", rsaKey, body)
+	require.NoError(t, err)
+
+	pubASN1, err := x509.MarshalPKIXPublicKey(&rsaKey.PublicKey)
+	require.NoError(t, err)
+	pubPEM := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubASN1}))
+
+	err = VerifyRequest(req, pubPEM, body, nil)
+	require.NoError(t, err, "RSA-signed request should still verify")
+}
+
+// TestCrossAlgorithmVerifyFails ensures that verifying an ECDSA-signed request
+// with an RSA key (or vice versa) fails cleanly.
+func TestCrossAlgorithmVerifyFails(t *testing.T) {
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+
+	body := []byte(`{"type": "Follow"}`)
+	req := httptest.NewRequest("POST", "https://example.com/ap/inbox", nil)
+	require.NoError(t, SignRequest(req, "key1", ecKey, body))
+
+	// Try to verify ECDSA-signed request with RSA key — should fail.
+	rsaPubASN1, _ := x509.MarshalPKIXPublicKey(&rsaKey.PublicKey)
+	rsaPubPEM := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: rsaPubASN1}))
+
+	err := VerifyRequest(req, rsaPubPEM, body, nil)
+	require.Error(t, err, "ECDSA-signed request verified with RSA key should fail")
 }

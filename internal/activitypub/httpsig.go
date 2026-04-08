@@ -1,6 +1,8 @@
 package activitypub
 
 import (
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -39,7 +41,7 @@ func (sc *SignatureCache) seen(keyID, signature string) bool {
 	return loaded
 }
 
-func SignRequest(req *http.Request, keyID string, privKey *rsa.PrivateKey, body []byte) error {
+func SignRequest(req *http.Request, keyID string, privKey crypto.PrivateKey, body []byte) error {
 	if req.Header.Get("Host") == "" && req.Host != "" {
 		req.Header.Set("Host", req.Host)
 	}
@@ -52,8 +54,10 @@ func SignRequest(req *http.Request, keyID string, privKey *rsa.PrivateKey, body 
 		headers = append(headers, "digest")
 	}
 
+	algo := algorithmForKey(privKey)
+
 	signer, _, err := httpsig.NewSigner(
-		[]httpsig.Algorithm{httpsig.RSA_SHA256},
+		[]httpsig.Algorithm{algo},
 		httpsig.DigestSha256,
 		headers,
 		httpsig.Signature,
@@ -63,6 +67,17 @@ func SignRequest(req *http.Request, keyID string, privKey *rsa.PrivateKey, body 
 		return fmt.Errorf("creating signer: %w", err)
 	}
 	return signer.SignRequest(privKey, keyID, req, body)
+}
+
+func algorithmForKey(key crypto.PrivateKey) httpsig.Algorithm {
+	switch key.(type) {
+	case *ecdsa.PrivateKey:
+		return httpsig.ECDSA_SHA256
+	case *rsa.PrivateKey:
+		return httpsig.RSA_SHA256
+	default:
+		panic(fmt.Sprintf("unsupported private key type: %T", key))
+	}
 }
 
 var requiredSignedHeaders = []string{"(request-target)", "host", "date"}
@@ -124,7 +139,8 @@ func VerifyRequest(req *http.Request, pubKeyPEM string, body []byte, sigCache *S
 		return fmt.Errorf("parsing public key: %w", err)
 	}
 
-	if err := verifier.Verify(pubKey, httpsig.RSA_SHA256); err != nil {
+	algo := algorithmForPublicKey(pubKey)
+	if err := verifier.Verify(pubKey, algo); err != nil {
 		return err
 	}
 
@@ -204,7 +220,7 @@ func verifyBodyDigest(req *http.Request, body []byte) error {
 	return nil
 }
 
-func parsePublicKeyPEM(pemStr string) (*rsa.PublicKey, error) {
+func parsePublicKeyPEM(pemStr string) (crypto.PublicKey, error) {
 	block, _ := pem.Decode([]byte(pemStr))
 	if block == nil {
 		return nil, fmt.Errorf("no PEM block found")
@@ -213,9 +229,21 @@ func parsePublicKeyPEM(pemStr string) (*rsa.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	rsaPub, ok := pub.(*rsa.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("key is not RSA")
+	switch pub.(type) {
+	case *rsa.PublicKey, *ecdsa.PublicKey:
+		return pub, nil
+	default:
+		return nil, fmt.Errorf("unsupported key type: %T", pub)
 	}
-	return rsaPub, nil
+}
+
+func algorithmForPublicKey(key crypto.PublicKey) httpsig.Algorithm {
+	switch key.(type) {
+	case *ecdsa.PublicKey:
+		return httpsig.ECDSA_SHA256
+	case *rsa.PublicKey:
+		return httpsig.RSA_SHA256
+	default:
+		panic(fmt.Sprintf("unsupported public key type: %T", key))
+	}
 }

@@ -34,7 +34,7 @@ func TestLoadOrCreateIdentityPersisted(t *testing.T) {
 	require.NoError(t, err)
 
 	// Keys should match
-	require.Equal(t, 0, id1.PrivateKey.D.Cmp(id2.PrivateKey.D), "loaded key should match generated key")
+	require.True(t, id1.PrivateKey.Equal(id2.PrivateKey), "loaded key should match generated key")
 }
 
 func TestPublicKeyPEM(t *testing.T) {

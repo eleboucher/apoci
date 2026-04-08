@@ -1,8 +1,9 @@
 package activitypub
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -10,13 +11,11 @@ import (
 	"os"
 )
 
-const keyBits = 2048
-
 type Identity struct {
 	ActorURL      string
 	Domain        string
 	AccountDomain string
-	PrivateKey    *rsa.PrivateKey
+	PrivateKey    *ecdsa.PrivateKey
 	Logger        *slog.Logger
 }
 
@@ -42,16 +41,16 @@ func LoadOrCreateIdentity(endpoint, domain, accountDomain, keyPath string, logge
 	}
 	actorURL := endpoint + "/ap/actor"
 
-	var privKey *rsa.PrivateKey
+	var privKey *ecdsa.PrivateKey
 
 	if keyPath != "" {
 		data, err := os.ReadFile(keyPath) //nolint:gosec // keyPath is operator-configured
 		if err == nil {
-			privKey, err = parseRSAPrivateKey(data)
+			privKey, err = parseECPrivateKey(data)
 			if err != nil {
 				return nil, fmt.Errorf("parsing private key from %s: %w", keyPath, err)
 			}
-			logger.Info("loaded existing RSA key", "path", keyPath)
+			logger.Info("loaded existing ECDSA key", "path", keyPath)
 		} else if os.IsNotExist(err) {
 			privKey, err = generateAndSaveKey(keyPath, logger)
 			if err != nil {
@@ -62,7 +61,7 @@ func LoadOrCreateIdentity(endpoint, domain, accountDomain, keyPath string, logge
 		}
 	} else {
 		var err error
-		privKey, err = rsa.GenerateKey(rand.Reader, keyBits)
+		privKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			return nil, fmt.Errorf("generating ephemeral key: %w", err)
 		}
@@ -80,39 +79,44 @@ func LoadOrCreateIdentity(endpoint, domain, accountDomain, keyPath string, logge
 	}, nil
 }
 
-func parseRSAPrivateKey(data []byte) (*rsa.PrivateKey, error) {
+func parseECPrivateKey(data []byte) (*ecdsa.PrivateKey, error) {
 	block, _ := pem.Decode(data)
 	if block == nil {
 		return nil, fmt.Errorf("no PEM block found")
 	}
 
 	switch block.Type {
+	case "EC PRIVATE KEY":
+		return x509.ParseECPrivateKey(block.Bytes)
 	case "RSA PRIVATE KEY":
-		return x509.ParsePKCS1PrivateKey(block.Bytes)
+		return nil, fmt.Errorf("key file contains an RSA key; delete it and restart to generate a new ECDSA key")
 	case "PRIVATE KEY":
 		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 		if err != nil {
 			return nil, err
 		}
-		rsaKey, ok := key.(*rsa.PrivateKey)
+		ecKey, ok := key.(*ecdsa.PrivateKey)
 		if !ok {
-			return nil, fmt.Errorf("PKCS8 key is not RSA")
+			return nil, fmt.Errorf("PKCS8 key is not ECDSA (got %T); delete the key file and restart to generate a new ECDSA key", key)
 		}
-		return rsaKey, nil
+		return ecKey, nil
 	default:
 		return nil, fmt.Errorf("unexpected PEM block type: %s", block.Type)
 	}
 }
 
-func generateAndSaveKey(keyPath string, logger *slog.Logger) (*rsa.PrivateKey, error) {
-	privKey, err := rsa.GenerateKey(rand.Reader, keyBits)
+func generateAndSaveKey(keyPath string, logger *slog.Logger) (*ecdsa.PrivateKey, error) {
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("generating RSA key: %w", err)
+		return nil, fmt.Errorf("generating ECDSA key: %w", err)
 	}
 
-	keyBytes := x509.MarshalPKCS1PrivateKey(privKey)
+	keyBytes, err := x509.MarshalECPrivateKey(privKey)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling ECDSA key: %w", err)
+	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
+		Type:  "EC PRIVATE KEY",
 		Bytes: keyBytes,
 	})
 
@@ -120,6 +124,6 @@ func generateAndSaveKey(keyPath string, logger *slog.Logger) (*rsa.PrivateKey, e
 		return nil, fmt.Errorf("saving key to %s: %w", keyPath, err)
 	}
 
-	logger.Info("generated new RSA key", "path", keyPath)
+	logger.Info("generated new ECDSA P-256 key", "path", keyPath)
 	return privKey, nil
 }
