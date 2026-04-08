@@ -22,6 +22,8 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates wget && \
     rm -rf /var/lib/apt/lists/*
 
+ENV PATH="/apoci:${PATH}"
+
 USER 1000:1000
 
 WORKDIR "/apoci/storage"
@@ -36,5 +38,5 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD wget -q --spider http://localhost:5000/healthz || exit 1
 
-ENTRYPOINT ["/apoci/apoci"]
+ENTRYPOINT ["apoci"]
 CMD ["serve", "-c", "/apoci/config/apoci.yaml"]
