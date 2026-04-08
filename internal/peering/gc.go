@@ -19,12 +19,14 @@ const (
 
 // GarbageCollector periodically cleans up stale data.
 type GarbageCollector struct {
-	db     *database.DB
-	blobs  *blobstore.Store
-	logger *slog.Logger
-	wg     sync.WaitGroup
-	stop   chan struct{}
-	once   sync.Once
+	db      *database.DB
+	blobs   *blobstore.Store
+	logger  *slog.Logger
+	mu      sync.Mutex
+	running bool
+	wg      sync.WaitGroup
+	stop    chan struct{}
+	once    sync.Once
 }
 
 func NewGarbageCollector(db *database.DB, blobs *blobstore.Store, logger *slog.Logger) *GarbageCollector {
@@ -37,6 +39,14 @@ func NewGarbageCollector(db *database.DB, blobs *blobstore.Store, logger *slog.L
 }
 
 func (gc *GarbageCollector) Start(ctx context.Context) {
+	gc.mu.Lock()
+	if gc.running {
+		gc.mu.Unlock()
+		return
+	}
+	gc.running = true
+	gc.mu.Unlock()
+
 	gc.wg.Add(1)
 	go gc.run(ctx)
 }

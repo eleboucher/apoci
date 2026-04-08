@@ -113,22 +113,32 @@ type adminFollowRequest struct {
 	Target string `json:"target"`
 }
 
-func (s *Server) adminAddFollow(w http.ResponseWriter, r *http.Request) {
+// decodeAndResolveTarget reads the follow request body and resolves the actor URL.
+// Returns the actor URL and true on success, or writes an HTTP error and returns false.
+func (s *Server) decodeAndResolveTarget(w http.ResponseWriter, r *http.Request) (string, bool) {
 	var req adminFollowRequest
 	r.Body = http.MaxBytesReader(w, r.Body, adminMaxBody)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Target == "" {
 		http.Error(w, "missing target", http.StatusBadRequest)
+		return "", false
+	}
+
+	actorURL, err := s.apFed.ResolveFollowTarget(r.Context(), req.Target)
+	if err != nil {
+		s.logger.Error("resolving follow target", "target", req.Target, "error", err)
+		http.Error(w, "could not resolve target", http.StatusBadGateway)
+		return "", false
+	}
+	return actorURL, true
+}
+
+func (s *Server) adminAddFollow(w http.ResponseWriter, r *http.Request) {
+	actorURL, ok := s.decodeAndResolveTarget(w, r)
+	if !ok {
 		return
 	}
 
 	ctx := r.Context()
-
-	actorURL, err := s.apFed.ResolveFollowTarget(ctx, req.Target)
-	if err != nil {
-		s.logger.Error("resolving follow target", "target", req.Target, "error", err)
-		http.Error(w, "could not resolve target", http.StatusBadGateway)
-		return
-	}
 
 	actor, err := s.apFed.FetchActor(ctx, actorURL)
 	if err != nil {
@@ -177,21 +187,12 @@ func (s *Server) adminAddFollow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminAcceptFollow(w http.ResponseWriter, r *http.Request) {
-	var req adminFollowRequest
-	r.Body = http.MaxBytesReader(w, r.Body, adminMaxBody)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Target == "" {
-		http.Error(w, "missing target", http.StatusBadRequest)
+	actorURL, ok := s.decodeAndResolveTarget(w, r)
+	if !ok {
 		return
 	}
 
 	ctx := r.Context()
-
-	actorURL, err := s.apFed.ResolveFollowTarget(ctx, req.Target)
-	if err != nil {
-		s.logger.Error("resolving follow target", "target", req.Target, "error", err)
-		http.Error(w, "could not resolve target", http.StatusBadGateway)
-		return
-	}
 
 	if err := s.apFed.SendAccept(ctx, actorURL); err != nil {
 		s.logger.Error("sending accept", "actor_url", actorURL, "error", err)
@@ -232,23 +233,12 @@ func (s *Server) adminAcceptFollow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminRejectFollow(w http.ResponseWriter, r *http.Request) {
-	var req adminFollowRequest
-	r.Body = http.MaxBytesReader(w, r.Body, adminMaxBody)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Target == "" {
-		http.Error(w, "missing target", http.StatusBadRequest)
+	actorURL, ok := s.decodeAndResolveTarget(w, r)
+	if !ok {
 		return
 	}
 
-	ctx := r.Context()
-
-	actorURL, err := s.apFed.ResolveFollowTarget(ctx, req.Target)
-	if err != nil {
-		s.logger.Error("resolving follow target", "target", req.Target, "error", err)
-		http.Error(w, "could not resolve target", http.StatusBadGateway)
-		return
-	}
-
-	if err := s.apFed.SendReject(ctx, actorURL); err != nil {
+	if err := s.apFed.SendReject(r.Context(), actorURL); err != nil {
 		s.logger.Error("sending reject", "actor_url", actorURL, "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -258,21 +248,12 @@ func (s *Server) adminRejectFollow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminRemoveFollow(w http.ResponseWriter, r *http.Request) {
-	var req adminFollowRequest
-	r.Body = http.MaxBytesReader(w, r.Body, adminMaxBody)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Target == "" {
-		http.Error(w, "missing target", http.StatusBadRequest)
+	actorURL, ok := s.decodeAndResolveTarget(w, r)
+	if !ok {
 		return
 	}
 
 	ctx := r.Context()
-
-	actorURL, err := s.apFed.ResolveFollowTarget(ctx, req.Target)
-	if err != nil {
-		s.logger.Error("resolving follow target", "target", req.Target, "error", err)
-		http.Error(w, "could not resolve target", http.StatusBadGateway)
-		return
-	}
 
 	if err := s.apFed.SendUndo(ctx, actorURL); err != nil {
 		s.logger.Warn("failed to send Undo to peer", "actor", actorURL, "error", err)

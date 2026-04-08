@@ -21,8 +21,8 @@ type WebFingerLink struct {
 	Href string `json:"href,omitempty"`
 }
 
-// LookupWebFinger resolves a resource via WebFinger and returns the AP actor URL.
-func LookupWebFinger(ctx context.Context, domain, resource string) (string, error) {
+// lookupWebFinger resolves a resource via WebFinger and returns the AP actor URL.
+func lookupWebFinger(ctx context.Context, domain, resource string) (string, error) {
 	if strings.ContainsAny(domain, "/:@") {
 		return "", fmt.Errorf("invalid domain %q: must be a bare hostname", domain)
 	}
@@ -70,10 +70,10 @@ func ResolveFollowTarget(ctx context.Context, input string) (string, error) {
 
 	input = strings.TrimPrefix(input, "@")
 	if user, domain, ok := strings.Cut(input, "@"); ok {
-		return LookupWebFinger(ctx, domain, fmt.Sprintf("acct:%s@%s", user, domain))
+		return lookupWebFinger(ctx, domain, fmt.Sprintf("acct:%s@%s", user, domain))
 	}
 
-	return LookupWebFinger(ctx, input, fmt.Sprintf("acct:registry@%s", input))
+	return lookupWebFinger(ctx, input, fmt.Sprintf("acct:registry@%s", input))
 }
 
 type WebFingerHandler struct {

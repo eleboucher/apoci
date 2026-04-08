@@ -269,7 +269,7 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case ActivityAnnounce:
 		h.handleAnnounce(r.Context(), w, &activity, body)
 	case ActivityDelete:
-		h.handleDelete(r.Context(), w, &activity)
+		h.handleDelete(r.Context(), w, &activity, body)
 	default:
 		h.logger.Debug("inbox: unhandled activity type", "type", activity.Type)
 		w.WriteHeader(http.StatusAccepted)
@@ -323,16 +323,8 @@ func (h *InboxHandler) handleFollow(ctx context.Context, w http.ResponseWriter, 
 }
 
 func (h *InboxHandler) handleAccept(ctx context.Context, w http.ResponseWriter, activity *RawActivity) {
-	followType := ""
-
-	switch obj := activity.Object.(type) {
-	case map[string]any:
-		followType, _ = obj["type"].(string)
-	case string:
-		// Some implementations send just the Follow activity ID as a string.
-		// Treat it as accepting a Follow.
-		followType = ActivityFollow
-	default:
+	followType, ok := extractObjectType(activity.Object)
+	if !ok {
 		http.Error(w, "invalid Accept object", http.StatusBadRequest)
 		return
 	}
@@ -383,14 +375,8 @@ func (h *InboxHandler) handleAccept(ctx context.Context, w http.ResponseWriter, 
 }
 
 func (h *InboxHandler) handleReject(ctx context.Context, w http.ResponseWriter, activity *RawActivity) {
-	followType := ""
-
-	switch obj := activity.Object.(type) {
-	case map[string]any:
-		followType, _ = obj["type"].(string)
-	case string:
-		followType = ActivityFollow
-	default:
+	followType, ok := extractObjectType(activity.Object)
+	if !ok {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
@@ -473,7 +459,7 @@ func (h *InboxHandler) fetchActorPublicKey(ctx context.Context, actorURL string)
 		host := u.Hostname()
 		allowed := false
 		for _, d := range h.allowedDomains {
-			if host == d || strings.HasSuffix(host, "."+d) {
+			if matchesDomain(host, d) {
 				allowed = true
 				break
 			}
@@ -542,7 +528,7 @@ func (h *InboxHandler) handleCreate(ctx context.Context, w http.ResponseWriter, 
 		rw.WriteHeader(http.StatusAccepted)
 	}
 
-	if rw.status == 0 || rw.status < 400 {
+	if rw.succeeded() {
 		h.storeActivity(ctx, activity.ID, ActivityCreate, activity.Actor, rawBody)
 	}
 }
@@ -576,7 +562,7 @@ func (h *InboxHandler) handleUpdate(ctx context.Context, w http.ResponseWriter, 
 
 	// storeActivity is called unconditionally below for all non-error responses;
 	// the Actor invalidation case calls rw.WriteHeader directly but still reaches it.
-	if rw.status == 0 || rw.status < 400 {
+	if rw.succeeded() {
 		h.storeActivity(ctx, activity.ID, ActivityUpdate, activity.Actor, rawBody)
 	}
 }
@@ -603,12 +589,12 @@ func (h *InboxHandler) handleAnnounce(ctx context.Context, w http.ResponseWriter
 		rw.WriteHeader(http.StatusAccepted)
 	}
 
-	if rw.status == 0 || rw.status < 400 {
+	if rw.succeeded() {
 		h.storeActivity(ctx, activity.ID, ActivityAnnounce, activity.Actor, rawBody)
 	}
 }
 
-func (h *InboxHandler) handleDelete(ctx context.Context, w http.ResponseWriter, activity *RawActivity) {
+func (h *InboxHandler) handleDelete(ctx context.Context, w http.ResponseWriter, activity *RawActivity, rawBody []byte) {
 	if !h.isFollowed(ctx, activity.Actor) {
 		http.Error(w, "not following actor", http.StatusForbidden)
 		return
@@ -634,14 +620,8 @@ func (h *InboxHandler) handleDelete(ctx context.Context, w http.ResponseWriter, 
 		rw.WriteHeader(http.StatusAccepted)
 	}
 
-	if rw.status == 0 || rw.status < 400 {
-		activityJSON, err := json.Marshal(activity)
-		if err != nil {
-			h.logger.Error("inbox: failed to marshal Delete activity", "error", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		h.storeActivity(ctx, activity.ID, ActivityDelete, activity.Actor, activityJSON)
+	if rw.succeeded() {
+		h.storeActivity(ctx, activity.ID, ActivityDelete, activity.Actor, rawBody)
 	}
 }
 
@@ -793,7 +773,7 @@ func (h *InboxHandler) ingestManifest(ctx context.Context, w http.ResponseWriter
 		subjectPtr = &subjectDigest
 	}
 
-	content := []byte{}
+	var content []byte
 	if encoded, _ := obj["ociContent"].(string); encoded != "" {
 		decoded, err := DecodeContent(encoded)
 		if err != nil {
@@ -885,7 +865,7 @@ func (h *InboxHandler) fetchSenderNamespace(ctx context.Context, actorURL string
 // e.g. host "registry.example.com" may claim "example.com" or "registry.example.com",
 // but not "evil.com".
 func validNamespaceForHost(ns, actorHost string) bool {
-	return actorHost == ns || strings.HasSuffix(actorHost, "."+ns)
+	return matchesDomain(actorHost, ns)
 }
 
 func (h *InboxHandler) ingestTag(ctx context.Context, w http.ResponseWriter, obj map[string]any, actorURL string) {
@@ -1006,6 +986,27 @@ func (h *InboxHandler) ingestBlobRef(ctx context.Context, w http.ResponseWriter,
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// extractObjectType returns the "type" field from the activity object.
+// It handles both map objects and bare string references (some implementations
+// send just the activity ID as a string — treated as a Follow).
+// Returns false if the object type is unrecognised.
+func extractObjectType(obj any) (string, bool) {
+	switch v := obj.(type) {
+	case map[string]any:
+		t, _ := v["type"].(string)
+		return t, true
+	case string:
+		return ActivityFollow, true
+	default:
+		return "", false
+	}
+}
+
+// matchesDomain reports whether host equals domain or is a subdomain of it.
+func matchesDomain(host, domain string) bool {
+	return host == domain || strings.HasSuffix(host, "."+domain)
+}
+
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
@@ -1014,6 +1015,10 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) succeeded() bool {
+	return r.status == 0 || r.status < 400
 }
 
 func (h *InboxHandler) storeActivity(ctx context.Context, activityID, activityType, actorURL string, body []byte) {
@@ -1041,7 +1046,7 @@ func (h *InboxHandler) isBlocked(actorURL string) bool {
 	}
 	host := u.Hostname()
 	for blocked := range h.blockedDomains {
-		if host == blocked || strings.HasSuffix(host, "."+blocked) {
+		if matchesDomain(host, blocked) {
 			return true
 		}
 	}
@@ -1086,7 +1091,7 @@ func (h *InboxHandler) shouldAutoAccept(ctx context.Context, actorURL string) bo
 		if err == nil {
 			host := u.Hostname()
 			for _, allowed := range h.allowedDomains {
-				if host == allowed || strings.HasSuffix(host, "."+allowed) {
+				if matchesDomain(host, allowed) {
 					return true
 				}
 			}

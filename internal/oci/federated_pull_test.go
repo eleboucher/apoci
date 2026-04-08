@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"log/slog"
 	"testing"
 
 	"cuelabs.dev/go/oci/ociregistry"
@@ -30,55 +29,45 @@ func (m *mockResolver) FindBlobPeers(_ context.Context, _ string) ([]oci.BlobPee
 }
 
 type mockFetcher struct {
-	result *peering.FetchResult
-	err    error
-}
-
-func (m *mockFetcher) FetchBlob(_ context.Context, _, _, _ string) (*peering.FetchResult, error) {
-	return m.result, m.err
+	data []byte
+	err  error
 }
 
 func (m *mockFetcher) FetchBlobStream(_ context.Context, _, _, _ string) (*peering.BlobStream, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	if m.result == nil {
+	if m.data == nil {
 		return nil, io.ErrUnexpectedEOF
 	}
 	return &peering.BlobStream{
-		Body: io.NopCloser(bytes.NewReader(m.result.Data)),
+		Body: io.NopCloser(bytes.NewReader(m.data)),
 	}, nil
 }
 
 func (m *mockFetcher) FetchManifest(_ context.Context, _, _, _ string) ([]byte, string, error) {
-	if m.result != nil {
-		return m.result.Data, "application/vnd.oci.image.manifest.v1+json", m.err
+	if m.data != nil {
+		return m.data, "application/vnd.oci.image.manifest.v1+json", m.err
 	}
 	return nil, "", m.err
 }
 
-func discardLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
-
 func TestFederatedBlobPull(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, 0, 0, discardLog())
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	blobs, err := blobstore.New(dir, discardLog())
+	blobs, err := blobstore.New(dir, nopLog())
 	require.NoError(t, err)
 
 	blobData := []byte("federated blob content")
 
-	reg, err := oci.NewRegistry(db, blobs, "https://local.test/ap/actor", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, discardLog())
+	reg, err := oci.NewRegistry(db, blobs, "https://local.test/ap/actor", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
 	require.NoError(t, err)
 	reg.SetFederation(
 		&mockResolver{peers: []oci.BlobPeer{{PeerEndpoint: "https://peer.test"}}},
-		&mockFetcher{result: &peering.FetchResult{
-			Data:   blobData,
-			Digest: "sha256:placeholder",
-			Size:   int64(len(blobData)),
-		}},
+		&mockFetcher{data: blobData},
 	)
 
 	ctx := context.Background()
@@ -106,14 +95,14 @@ func TestFederatedBlobPull(t *testing.T) {
 
 func TestBlobPullLocalFirst(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, 0, 0, discardLog())
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	blobs, err := blobstore.New(dir, discardLog())
+	blobs, err := blobstore.New(dir, nopLog())
 	require.NoError(t, err)
 
-	reg, err := oci.NewRegistry(db, blobs, "https://local.test/ap/actor", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, discardLog())
+	reg, err := oci.NewRegistry(db, blobs, "https://local.test/ap/actor", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
 	require.NoError(t, err)
 
 	// No federation configured -- should work for local blobs
@@ -133,18 +122,18 @@ func TestBlobPullLocalFirst(t *testing.T) {
 
 func TestBlobPullNotFound(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.OpenSQLite(dir, 0, 0, discardLog())
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	blobs, err := blobstore.New(dir, discardLog())
+	blobs, err := blobstore.New(dir, nopLog())
 	require.NoError(t, err)
 
-	reg, err := oci.NewRegistry(db, blobs, "https://local.test/ap/actor", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, discardLog())
+	reg, err := oci.NewRegistry(db, blobs, "https://local.test/ap/actor", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
 	require.NoError(t, err)
 	reg.SetFederation(
 		&mockResolver{peers: nil},
-		&mockFetcher{err: nil, result: nil},
+		&mockFetcher{},
 	)
 
 	ctx := context.Background()

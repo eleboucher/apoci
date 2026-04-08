@@ -45,7 +45,6 @@ type ContentResolver interface {
 }
 
 type BlobFetcher interface {
-	FetchBlob(ctx context.Context, peerEndpoint, repo, digest string) (*peering.FetchResult, error)
 	FetchBlobStream(ctx context.Context, peerEndpoint, repo, digest string) (*peering.BlobStream, error)
 	FetchManifest(ctx context.Context, peerEndpoint, repo, reference string) ([]byte, string, error)
 }
@@ -509,7 +508,7 @@ func (r *Registry) resolveBlob(ctx context.Context, _ string, digest ociregistry
 		return ociregistry.Descriptor{}, ociregistry.ErrBlobUnknown
 	}
 
-	mediaType := "application/octet-stream"
+	mediaType := defaultMediaType
 	if blob.MediaType != nil {
 		mediaType = *blob.MediaType
 	}
@@ -829,17 +828,25 @@ func (r *Registry) pushManifest(ctx context.Context, repo string, tag string, co
 	}, nil
 }
 
-func (r *Registry) deleteBlob(ctx context.Context, repo string, digest ociregistry.Digest) error {
-	repo = r.normalizeRepo(repo)
+// getOwnedRepo looks up the repository and verifies the caller owns it.
+func (r *Registry) getOwnedRepo(ctx context.Context, repo string) (*database.Repository, error) {
 	repoObj, err := r.db.GetRepository(ctx, repo)
 	if err != nil {
-		return fmt.Errorf("getting repository: %w", err)
+		return nil, fmt.Errorf("getting repository: %w", err)
 	}
 	if repoObj == nil {
-		return ociregistry.ErrNameUnknown
+		return nil, ociregistry.ErrNameUnknown
 	}
 	if repoObj.OwnerID != r.localID {
-		return ociregistry.ErrDenied
+		return nil, ociregistry.ErrDenied
+	}
+	return repoObj, nil
+}
+
+func (r *Registry) deleteBlob(ctx context.Context, repo string, digest ociregistry.Digest) error {
+	repo = r.normalizeRepo(repo)
+	if _, err := r.getOwnedRepo(ctx, repo); err != nil {
+		return err
 	}
 	// Delete from DB first so that any concurrent reader that opens the file
 	// via the DB index will get a not-found error rather than a dangling open.
@@ -854,30 +861,18 @@ func (r *Registry) deleteBlob(ctx context.Context, repo string, digest ociregist
 
 func (r *Registry) deleteManifest(ctx context.Context, repo string, digest ociregistry.Digest) error {
 	repo = r.normalizeRepo(repo)
-	repoObj, err := r.db.GetRepository(ctx, repo)
+	repoObj, err := r.getOwnedRepo(ctx, repo)
 	if err != nil {
-		return fmt.Errorf("getting repository: %w", err)
-	}
-	if repoObj == nil {
-		return ociregistry.ErrNameUnknown
-	}
-	if repoObj.OwnerID != r.localID {
-		return ociregistry.ErrDenied
+		return err
 	}
 	return r.db.DeleteManifest(ctx, repoObj.ID, string(digest))
 }
 
 func (r *Registry) deleteTag(ctx context.Context, repo string, name string) error {
 	repo = r.normalizeRepo(repo)
-	repoObj, err := r.db.GetRepository(ctx, repo)
+	repoObj, err := r.getOwnedRepo(ctx, repo)
 	if err != nil {
-		return fmt.Errorf("getting repository: %w", err)
-	}
-	if repoObj == nil {
-		return ociregistry.ErrNameUnknown
-	}
-	if repoObj.OwnerID != r.localID {
-		return ociregistry.ErrDenied
+		return err
 	}
 	if err := r.db.DeleteTag(ctx, repoObj.ID, name); err != nil {
 		if errors.Is(err, database.ErrTagImmutable) {

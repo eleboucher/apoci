@@ -12,6 +12,15 @@ import (
 
 type EnqueueFunc func(ctx context.Context, activityID, inboxURL string, activityJSON []byte) error
 
+// deliverOrEnqueue routes delivery through the persistent queue when available,
+// falling back to direct delivery (used by CLI where no queue is running).
+func deliverOrEnqueue(ctx context.Context, identity *Identity, enqueue EnqueueFunc, activityID, inboxURL string, activityJSON []byte) error {
+	if enqueue != nil {
+		return enqueue(ctx, activityID, inboxURL, activityJSON)
+	}
+	return DeliverActivity(ctx, inboxURL, activityJSON, identity)
+}
+
 func SendAccept(ctx context.Context, identity *Identity, db *database.DB, followerActorURL string, enqueue EnqueueFunc) error {
 	fr, err := db.GetFollowRequest(ctx, followerActorURL)
 	if err != nil {
@@ -48,18 +57,8 @@ func SendAccept(ctx context.Context, identity *Identity, db *database.DB, follow
 		return fmt.Errorf("promoting follow: %w", err)
 	}
 
-	// Route delivery through the persistent queue when available, so
-	// transient failures are retried automatically.
-	if enqueue != nil {
-		if err := enqueue(ctx, activityID, actor.Inbox, acceptJSON); err != nil {
-			return fmt.Errorf("enqueuing Accept to %s (accepted locally): %w", actor.Inbox, err)
-		}
-		return nil
-	}
-
-	// Fallback: direct delivery (used by CLI where no queue is running).
-	if err := DeliverActivity(ctx, actor.Inbox, acceptJSON, identity); err != nil {
-		return fmt.Errorf("delivering Accept to %s (accepted locally): %w", actor.Inbox, err)
+	if err := deliverOrEnqueue(ctx, identity, enqueue, activityID, actor.Inbox, acceptJSON); err != nil {
+		return fmt.Errorf("delivering accept to %s (accepted locally): %w", actor.Inbox, err)
 	}
 
 	return nil
@@ -105,17 +104,8 @@ func SendReject(ctx context.Context, identity *Identity, db *database.DB, follow
 		return fmt.Errorf("rejecting follow request: %w", err)
 	}
 
-	// Route delivery through the persistent queue when available.
-	if enqueue != nil {
-		if err := enqueue(ctx, activityID, actor.Inbox, rejectJSON); err != nil {
-			// Already rejected locally, just log the error
-			return fmt.Errorf("enqueuing Reject to %s (rejected locally): %w", actor.Inbox, err)
-		}
-		return nil
-	}
-
-	// Fallback: best-effort direct delivery (used by CLI).
-	_ = DeliverActivity(ctx, actor.Inbox, rejectJSON, identity)
+	// Best-effort delivery — already rejected locally.
+	_ = deliverOrEnqueue(ctx, identity, enqueue, activityID, actor.Inbox, rejectJSON)
 
 	return nil
 }
@@ -146,15 +136,8 @@ func SendUndo(ctx context.Context, identity *Identity, peerActorURL string, enqu
 		return fmt.Errorf("marshaling Undo: %w", err)
 	}
 
-	if enqueue != nil {
-		if err := enqueue(ctx, activityID, actor.Inbox, undoJSON); err != nil {
-			return fmt.Errorf("enqueuing Undo to %s: %w", actor.Inbox, err)
-		}
-		return nil
-	}
-
-	if err := DeliverActivity(ctx, actor.Inbox, undoJSON, identity); err != nil {
-		return fmt.Errorf("delivering Undo to %s: %w", actor.Inbox, err)
+	if err := deliverOrEnqueue(ctx, identity, enqueue, activityID, actor.Inbox, undoJSON); err != nil {
+		return fmt.Errorf("delivering undo to %s: %w", actor.Inbox, err)
 	}
 	return nil
 }

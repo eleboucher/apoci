@@ -6,8 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sync/errgroup"
-
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 )
@@ -98,20 +96,19 @@ func (q *DeliveryQueue) processBatch(ctx context.Context) {
 		return
 	}
 
-	g := new(errgroup.Group)
-	g.SetLimit(maxConcurrentDeliveries)
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxConcurrentDeliveries)
 
 	for _, d := range deliveries {
-		g.Go(func() error {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem; wg.Done() }()
 			q.deliver(ctx, d)
-			return nil
-		})
+		}()
 	}
 
-	err = g.Wait()
-	if err != nil {
-		q.logger.Error("error processing deliveries", "error", err)
-	}
+	wg.Wait()
 }
 
 func (q *DeliveryQueue) deliver(ctx context.Context, d database.Delivery) {
