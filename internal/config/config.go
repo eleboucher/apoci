@@ -17,25 +17,25 @@ import (
 )
 
 type Config struct {
-	Endpoint      string `yaml:"endpoint"      env:"ATOCI_ENDPOINT"`
-	Name          string `yaml:"name"          env:"ATOCI_NAME"`
-	Listen        string `yaml:"listen"        env:"ATOCI_LISTEN"`
-	DataDir       string `yaml:"dataDir"       env:"ATOCI_DATA_DIR"`
-	KeyPath       string `yaml:"keyPath"       env:"ATOCI_KEY_PATH"`
-	LogLevel      string `yaml:"logLevel"      env:"ATOCI_LOG_LEVEL"`
-	LogFormat     string `yaml:"logFormat"     env:"ATOCI_LOG_FORMAT"`
-	ImmutableTags string `yaml:"immutableTags" env:"ATOCI_IMMUTABLE_TAGS"`
-	RegistryToken string `yaml:"registryToken" env:"ATOCI_REGISTRY_TOKEN"`
-	AdminToken    string `yaml:"adminToken"    env:"ATOCI_ADMIN_TOKEN"`
-	AccountDomain string `yaml:"accountDomain" env:"ATOCI_ACCOUNT_DOMAIN"`
+	Endpoint      string `yaml:"endpoint"      env:"APOCI_ENDPOINT"`
+	Name          string `yaml:"name"          env:"APOCI_NAME"`
+	Listen        string `yaml:"listen"        env:"APOCI_LISTEN"`
+	DataDir       string `yaml:"dataDir"       env:"APOCI_DATA_DIR"`
+	KeyPath       string `yaml:"keyPath"       env:"APOCI_KEY_PATH"`
+	LogLevel      string `yaml:"logLevel"      env:"APOCI_LOG_LEVEL"`
+	LogFormat     string `yaml:"logFormat"     env:"APOCI_LOG_FORMAT"`
+	ImmutableTags string `yaml:"immutableTags" env:"APOCI_IMMUTABLE_TAGS"`
+	RegistryToken string `yaml:"registryToken" env:"APOCI_REGISTRY_TOKEN"`
+	AdminToken    string `yaml:"adminToken"    env:"APOCI_ADMIN_TOKEN"`
+	AccountDomain string `yaml:"accountDomain" env:"APOCI_ACCOUNT_DOMAIN"`
 
-	Database Database `yaml:"database"   envPrefix:"ATOCI_DB_"`
+	Database Database `yaml:"database"   envPrefix:"APOCI_DB_"`
 	TLS      *TLS     `yaml:"tls,omitempty"`
 
-	Peering    Peering    `yaml:"peering"    envPrefix:"ATOCI_PEERING_"`
-	Federation Federation `yaml:"federation" envPrefix:"ATOCI_FEDERATION_"`
-	Limits     Limits     `yaml:"limits"     envPrefix:"ATOCI_"`
-	Metrics    Metrics    `yaml:"metrics"    envPrefix:"ATOCI_METRICS_"`
+	Peering    Peering    `yaml:"peering"    envPrefix:"APOCI_PEERING_"`
+	Federation Federation `yaml:"federation" envPrefix:"APOCI_FEDERATION_"`
+	Limits     Limits     `yaml:"limits"     envPrefix:"APOCI_"`
+	Metrics    Metrics    `yaml:"metrics"    envPrefix:"APOCI_METRICS_"`
 
 	Domain string `yaml:"-" env:"-"`
 }
@@ -48,8 +48,8 @@ type Database struct {
 }
 
 type TLS struct {
-	Cert string `yaml:"cert" env:"ATOCI_TLS_CERT"`
-	Key  string `yaml:"key"  env:"ATOCI_TLS_KEY"`
+	Cert string `yaml:"cert" env:"APOCI_TLS_CERT"`
+	Key  string `yaml:"key"  env:"APOCI_TLS_KEY"`
 }
 
 type Peering struct {
@@ -102,7 +102,7 @@ func Load(path string) (*Config, error) {
 
 	// Handle TLS env vars — the pointer may be nil from YAML.
 	if cfg.TLS == nil {
-		if os.Getenv("ATOCI_TLS_CERT") != "" || os.Getenv("ATOCI_TLS_KEY") != "" {
+		if os.Getenv("APOCI_TLS_CERT") != "" || os.Getenv("APOCI_TLS_KEY") != "" {
 			cfg.TLS = &TLS{}
 			if err := cenv.Parse(cfg.TLS); err != nil {
 				return nil, fmt.Errorf("parsing TLS environment variables: %w", err)

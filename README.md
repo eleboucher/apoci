@@ -273,34 +273,34 @@ All settings can be configured via YAML file, environment variables, or both. En
 
 | Field | Env Var | Default | Description |
 |-------|---------|---------|-------------|
-| `endpoint` | `ATOCI_ENDPOINT` | *(required)* | Public URL; determines domain and namespace |
-| `name` | `ATOCI_NAME` | domain | Display name (AP actor name) |
-| `listen` | `ATOCI_LISTEN` | `:5000` | Bind address |
-| `dataDir` | `ATOCI_DATA_DIR` | `/apoci/storage` | Database and blob storage |
-| `database.driver` | `ATOCI_DB_DRIVER` | `sqlite` | `sqlite` or `postgres` |
-| `database.dsn` | `ATOCI_DB_DSN` | | Postgres connection string (required when driver is `postgres`) |
-| `database.maxOpenConns` | `ATOCI_DB_MAX_OPEN_CONNS` | `4`/`25` | Max open DB connections (default: 4 for sqlite, 25 for postgres) |
-| `database.maxIdleConns` | `ATOCI_DB_MAX_IDLE_CONNS` | `4`/`10` | Max idle DB connections (default: 4 for sqlite, 10 for postgres) |
-| `keyPath` | `ATOCI_KEY_PATH` | `{dataDir}/ap.key` | RSA key, generated on first run |
-| `registryToken` | `ATOCI_REGISTRY_TOKEN` | *(auto-generated)* | Bearer token for push; saved to `{dataDir}/registry.token`. Reads are unauthenticated. |
-| `adminToken` | `ATOCI_ADMIN_TOKEN` | *(auto-generated)* | Bearer token for admin API; saved to `{dataDir}/admin.token`. Separate from registry token. |
-| `accountDomain` | `ATOCI_ACCOUNT_DOMAIN` | endpoint domain | Vanity domain for `@registry@<domain>` handle |
-| `immutableTags` | `ATOCI_IMMUTABLE_TAGS` | `^v[0-9]` | Regex, matching tags can't be overwritten |
-| `logLevel` | `ATOCI_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| `logFormat` | `ATOCI_LOG_FORMAT` | `json` | `json` / `text` |
-| `tls.cert` | `ATOCI_TLS_CERT` | | TLS cert path |
-| `tls.key` | `ATOCI_TLS_KEY` | | TLS key path |
-| `peering.healthCheckInterval` | `ATOCI_PEERING_HEALTH_CHECK_INTERVAL` | `30s` | Peer health poll interval |
-| `peering.fetchTimeout` | `ATOCI_PEERING_FETCH_TIMEOUT` | `60s` | Blob fetch timeout |
-| `limits.maxManifestSize` | `ATOCI_MAX_MANIFEST_SIZE` | `10485760` | Max manifest size in bytes (10 MB) |
-| `limits.maxBlobSize` | `ATOCI_MAX_BLOB_SIZE` | `536870912` | Max blob size in bytes (512 MB) |
-| `federation.autoAccept` | `ATOCI_FEDERATION_AUTO_ACCEPT` | `none` | `none`, `mutual` (peers you follow), or `all` (public) |
-| `federation.allowedDomains` | `ATOCI_FEDERATION_ALLOWED_DOMAINS` | `[]` | Always auto-accept follows from these domains (comma-separated in env) |
-| `federation.blockedDomains` | `ATOCI_FEDERATION_BLOCKED_DOMAINS` | `[]` | Silently drop all activities from these domains (comma-separated in env) |
-| `federation.blockedActors` | `ATOCI_FEDERATION_BLOCKED_ACTORS` | `[]` | Silently drop all activities from these actor URLs (comma-separated in env) |
-| `metrics.enabled` | `ATOCI_METRICS_ENABLED` | `false` | Expose `/debug/vars` on the metrics port |
-| `metrics.listen` | `ATOCI_METRICS_LISTEN` | `:9090` | Metrics bind address |
-| `metrics.token` | `ATOCI_METRICS_TOKEN` | | Bearer token for `/debug/vars` (unauthenticated if empty) |
+| `endpoint` | `APOCI_ENDPOINT` | *(required)* | Public URL; determines domain and namespace |
+| `name` | `APOCI_NAME` | domain | Display name (AP actor name) |
+| `listen` | `APOCI_LISTEN` | `:5000` | Bind address |
+| `dataDir` | `APOCI_DATA_DIR` | `/apoci/storage` | Database and blob storage |
+| `database.driver` | `APOCI_DB_DRIVER` | `sqlite` | `sqlite` or `postgres` |
+| `database.dsn` | `APOCI_DB_DSN` | | Postgres connection string (required when driver is `postgres`) |
+| `database.maxOpenConns` | `APOCI_DB_MAX_OPEN_CONNS` | `4`/`25` | Max open DB connections (default: 4 for sqlite, 25 for postgres) |
+| `database.maxIdleConns` | `APOCI_DB_MAX_IDLE_CONNS` | `4`/`10` | Max idle DB connections (default: 4 for sqlite, 10 for postgres) |
+| `keyPath` | `APOCI_KEY_PATH` | `{dataDir}/ap.key` | RSA key, generated on first run |
+| `registryToken` | `APOCI_REGISTRY_TOKEN` | *(auto-generated)* | Bearer token for push; saved to `{dataDir}/registry.token`. Reads are unauthenticated. |
+| `adminToken` | `APOCI_ADMIN_TOKEN` | *(auto-generated)* | Bearer token for admin API; saved to `{dataDir}/admin.token`. Separate from registry token. |
+| `accountDomain` | `APOCI_ACCOUNT_DOMAIN` | endpoint domain | Vanity domain for `@registry@<domain>` handle |
+| `immutableTags` | `APOCI_IMMUTABLE_TAGS` | `^v[0-9]` | Regex, matching tags can't be overwritten |
+| `logLevel` | `APOCI_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+| `logFormat` | `APOCI_LOG_FORMAT` | `json` | `json` / `text` |
+| `tls.cert` | `APOCI_TLS_CERT` | | TLS cert path |
+| `tls.key` | `APOCI_TLS_KEY` | | TLS key path |
+| `peering.healthCheckInterval` | `APOCI_PEERING_HEALTH_CHECK_INTERVAL` | `30s` | Peer health poll interval |
+| `peering.fetchTimeout` | `APOCI_PEERING_FETCH_TIMEOUT` | `60s` | Blob fetch timeout |
+| `limits.maxManifestSize` | `APOCI_MAX_MANIFEST_SIZE` | `10485760` | Max manifest size in bytes (10 MB) |
+| `limits.maxBlobSize` | `APOCI_MAX_BLOB_SIZE` | `536870912` | Max blob size in bytes (512 MB) |
+| `federation.autoAccept` | `APOCI_FEDERATION_AUTO_ACCEPT` | `none` | `none`, `mutual` (peers you follow), or `all` (public) |
+| `federation.allowedDomains` | `APOCI_FEDERATION_ALLOWED_DOMAINS` | `[]` | Always auto-accept follows from these domains (comma-separated in env) |
+| `federation.blockedDomains` | `APOCI_FEDERATION_BLOCKED_DOMAINS` | `[]` | Silently drop all activities from these domains (comma-separated in env) |
+| `federation.blockedActors` | `APOCI_FEDERATION_BLOCKED_ACTORS` | `[]` | Silently drop all activities from these actor URLs (comma-separated in env) |
+| `metrics.enabled` | `APOCI_METRICS_ENABLED` | `false` | Expose `/debug/vars` on the metrics port |
+| `metrics.listen` | `APOCI_METRICS_LISTEN` | `:9090` | Metrics bind address |
+| `metrics.token` | `APOCI_METRICS_TOKEN` | | Bearer token for `/debug/vars` (unauthenticated if empty) |
 
 Config lookup: `config/apoci.yaml` by default, override with `-c <path>` or `APOCI_CONFIG` env var. If the config file is not found, apoci runs purely from environment variables and defaults.
 
