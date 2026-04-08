@@ -25,6 +25,7 @@ type OCIManifest struct {
 	Size          int64    `json:"ociSize"`
 	Content       string   `json:"ociContent,omitempty"`
 	SubjectDigest string   `json:"ociSubjectDigest,omitempty"`
+	Tag           string   `json:"ociTag,omitempty"`
 }
 
 // EncodeContent base64-encodes manifest bytes for AP transport.

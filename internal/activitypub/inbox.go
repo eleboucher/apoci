@@ -640,6 +640,7 @@ func (h *InboxHandler) ingestManifest(ctx context.Context, obj map[string]any, a
 	digest, _ := obj["ociDigest"].(string)
 	mediaType, _ := obj["ociMediaType"].(string)
 	size, _ := obj["ociSize"].(float64)
+	tag, _ := obj["ociTag"].(string)
 
 	if repo == "" || digest == "" {
 		return fmt.Errorf("missing ociRepository or ociDigest")
@@ -655,6 +656,11 @@ func (h *InboxHandler) ingestManifest(ctx context.Context, obj map[string]any, a
 	}
 	if size <= 0 || size > float64(h.maxManifestSize) {
 		return fmt.Errorf("invalid manifest size")
+	}
+	if tag != "" {
+		if err := validate.Tag(tag); err != nil {
+			return fmt.Errorf("invalid tag: %w", err)
+		}
 	}
 
 	senderNS, err := h.fetchSenderNamespace(ctx, actorURL)
@@ -721,6 +727,17 @@ func (h *InboxHandler) ingestManifest(ctx context.Context, obj map[string]any, a
 
 	if err := h.db.PutManifest(ctx, m); err != nil {
 		return fmt.Errorf("storing manifest: %w", err)
+	}
+
+	// Store the tag atomically with the manifest when the sender includes it in
+	// the Create activity. This avoids the race where Update(OCITag) arrives and
+	// is processed before Create(OCIManifest) has committed.
+	if tag != "" {
+		if err := h.db.PutTag(ctx, repoObj.ID, tag, digest); err != nil {
+			return fmt.Errorf("storing tag: %w", err)
+		}
+		h.logger.Info("inbox: ingested manifest", "repo", repo, "tag", tag, "digest", digest, "from", actorURL)
+		return nil
 	}
 
 	h.logger.Info("inbox: ingested manifest", "repo", repo, "digest", digest, "from", actorURL)

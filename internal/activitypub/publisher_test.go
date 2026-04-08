@@ -22,7 +22,7 @@ func TestPublishManifestCreatesActivity(t *testing.T) {
 
 	ctx := context.Background()
 	manifest := []byte(`{"schemaVersion":2}`)
-	err = pub.PublishManifest(ctx, "test/repo", "sha256:abc123", "application/vnd.oci.image.manifest.v1+json", int64(len(manifest)), manifest, nil)
+	err = pub.PublishManifest(ctx, "test/repo", "latest", "sha256:abc123", "application/vnd.oci.image.manifest.v1+json", int64(len(manifest)), manifest, nil)
 	require.NoError(t, err)
 
 	activities, err := db.ListActivitiesPage(ctx, id.ActorURL, 0, 10)

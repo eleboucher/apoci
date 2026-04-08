@@ -50,7 +50,7 @@ func NewAPPublisher(identity *Identity, db *database.DB, endpoint string, logger
 	}
 }
 
-func (p *APPublisher) PublishManifest(ctx context.Context, repo, digest, mediaType string, size int64, content []byte, subjectDigest *string) error {
+func (p *APPublisher) PublishManifest(ctx context.Context, repo, tag, digest, mediaType string, size int64, content []byte, subjectDigest *string) error {
 	objectID := p.objectURL("manifest", digest)
 
 	object := OCIManifest{
@@ -64,6 +64,7 @@ func (p *APPublisher) PublishManifest(ctx context.Context, repo, digest, mediaTy
 		MediaType:    mediaType,
 		Size:         size,
 		Content:      EncodeContent(content),
+		Tag:          tag,
 	}
 	if subjectDigest != nil {
 		object.SubjectDigest = *subjectDigest

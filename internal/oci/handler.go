@@ -31,7 +31,7 @@ import (
 )
 
 type Publisher interface {
-	PublishManifest(ctx context.Context, repo, digest, mediaType string, size int64, content []byte, subjectDigest *string) error
+	PublishManifest(ctx context.Context, repo, tag, digest, mediaType string, size int64, content []byte, subjectDigest *string) error
 	PublishTag(ctx context.Context, repo, tag, digest string) error
 	PublishBlobRef(ctx context.Context, digest string, size int64) error
 }
@@ -811,7 +811,7 @@ func (r *Registry) pushManifest(ctx context.Context, repo string, tag string, co
 		"size", int64(len(contents)))
 
 	if r.publisher != nil {
-		if err := r.publisher.PublishManifest(ctx, repo, digest, mediaType, int64(len(contents)), contents, meta.subjectDigest); err != nil {
+		if err := r.publisher.PublishManifest(ctx, repo, tag, digest, mediaType, int64(len(contents)), contents, meta.subjectDigest); err != nil {
 			r.logger.Warn("failed to publish manifest to federation", "error", err)
 		}
 		if tag != "" {
