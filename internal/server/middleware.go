@@ -57,6 +57,10 @@ func loggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(rw, r)
 
+			if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+				return
+			}
+
 			logger.Info("request",
 				"method", r.Method,
 				"path", r.URL.Path,
