@@ -16,6 +16,7 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/federation"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/oci"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/peering"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
@@ -55,18 +56,20 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 		return nil, err
 	}
 
+	notifier := notify.New(cfg.Name, cfg.Notifications.URLs, cfg.Notifications.Events, logger)
+
 	apPublisher := activitypub.NewAPPublisher(identity, db, cfg.Endpoint, logger)
 	apResolver := activitypub.NewAPResolver(db, logger)
 	deliveryQueue := activitypub.NewDeliveryQueue(db, identity, logger)
 	fetcher := peering.NewFetcher(cfg.Peering.FetchTimeout, cfg.Limits.MaxBlobSize, cfg.Limits.MaxManifestSize, logger)
-	healthChecker := peering.NewHealthChecker(db, fetcher, cfg.Peering.HealthCheckInterval, logger)
+	healthChecker := peering.NewHealthChecker(db, fetcher, cfg.Peering.HealthCheckInterval, notifier, logger)
 
-	blobReplicator := peering.NewBlobReplicator(db, blobs, fetcher, logger)
+	blobReplicator := peering.NewBlobReplicator(db, blobs, fetcher, notifier, logger)
 	gc := peering.NewGarbageCollector(peering.GCConfig{
 		Interval:         cfg.GC.Interval,
 		StalePeerBlobAge: cfg.GC.StalePeerBlobAge,
 		OrphanBatchSize:  cfg.GC.OrphanBatchSize,
-	}, db, blobs, logger)
+	}, db, blobs, notifier, logger)
 
 	apPublisher.SetNotifyFunc(deliveryQueue.Notify)
 
@@ -92,6 +95,7 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 	inboxHandler.SetBlobReplicator(blobReplicator)
 	inboxHandler.SetEnqueueFunc(enqueueFunc)
 	inboxHandler.SetActorCache(apPublisher.ActorCache())
+	inboxHandler.SetNotifier(notifier)
 
 	inboxWorker := activitypub.NewInboxWorker(inboxHandler, logger)
 	inboxHandler.SetWorker(inboxWorker)
@@ -108,7 +112,6 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 			}
 		},
 	})
-
 	services := []workers.Service{healthChecker, scheduler}
 	if *cfg.GC.Enabled {
 		services = append(services, gc)
@@ -118,7 +121,7 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 		Services:   services,
 		Waiters:    []workers.Waiter{blobReplicator},
 		Drainables: []workers.Service{inboxWorker, deliveryQueue},
-		Cleanup:    []workers.Stoppable{inboxHandler, inboxLimiter, registryPushLimiter, apPublisher},
+		Cleanup:    []workers.Stoppable{notifier, inboxHandler, inboxLimiter, registryPushLimiter, apPublisher},
 		Logger:     logger,
 	}
 
@@ -147,6 +150,11 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 		logger:              logger,
 	}
 
+	scheduler.Add(workers.PeriodicTask{
+		Interval: 24 * time.Hour,
+		Fn:       s.fedSvc.RefreshActors,
+	})
+
 	s.httpServer = &http.Server{
 		Handler:           s.routes(),
 		ReadTimeout:       30 * time.Second,
@@ -166,6 +174,8 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	s.workers.Start(ctx)
+
+	go s.fedSvc.RefreshActors(ctx) //nolint:gosec // initial refresh on startup before first periodic run
 
 	if s.cfg.Metrics.Enabled {
 		metricsMux := http.NewServeMux()
@@ -220,13 +230,11 @@ func (s *Server) Start(ctx context.Context) error {
 		defer close(shutdownDone)
 		<-ctx.Done()
 
-		// 1. Stop accepting new requests.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		s.logger.Info("shutting down HTTP server")
 		_ = s.httpServer.Shutdown(shutdownCtx)
 
-		// 2. Stop all background workers (ordered phases handled internally).
 		s.workers.Stop()
 	}()
 
@@ -236,7 +244,6 @@ func (s *Server) Start(ctx context.Context) error {
 	} else {
 		serveErr = s.httpServer.Serve(ln)
 	}
-	// Wait for shutdown goroutine to finish before returning.
 	<-shutdownDone
 	return serveErr
 }

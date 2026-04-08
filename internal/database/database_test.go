@@ -334,6 +334,58 @@ func TestFollowRequests(t *testing.T) {
 	require.Error(t, err, "expected error")
 }
 
+func TestRefreshFollow(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, db.AddFollow(ctx, testAliceActor, "old-pubkey", "https://old.example.com", nil))
+
+	alias := "Alice"
+	require.NoError(t, db.RefreshFollow(ctx, testAliceActor, "new-pubkey", "https://new.example.com", &alias))
+
+	f, err := db.GetFollow(ctx, testAliceActor)
+	require.NoError(t, err)
+	require.Equal(t, "new-pubkey", f.PublicKeyPEM)
+	require.Equal(t, "https://new.example.com", f.Endpoint)
+	require.NotNil(t, f.Alias)
+	require.Equal(t, "Alice", *f.Alias)
+}
+
+func TestRefreshFollowRequest(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, db.AddFollowRequest(ctx, "https://carol.example.com/ap/actor", "old-pubkey", "https://old.example.com", nil))
+
+	alias := "Carol"
+	require.NoError(t, db.RefreshFollowRequest(ctx, "https://carol.example.com/ap/actor", "new-pubkey", "https://new.example.com", &alias))
+
+	fr, err := db.GetFollowRequest(ctx, "https://carol.example.com/ap/actor")
+	require.NoError(t, err)
+	require.Equal(t, "new-pubkey", fr.PublicKeyPEM)
+	require.Equal(t, "https://new.example.com", fr.Endpoint)
+	require.NotNil(t, fr.Alias)
+	require.Equal(t, "Carol", *fr.Alias)
+}
+
+func TestRefreshFollowNotFound(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	err := db.RefreshFollow(ctx, "https://nobody.example.com/ap/actor", "key", "https://nobody.example.com", nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no follow found")
+}
+
+func TestRefreshFollowRequestNotFound(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	err := db.RefreshFollowRequest(ctx, "https://nobody.example.com/ap/actor", "key", "https://nobody.example.com", nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no follow request found")
+}
+
 func TestBlobPutDoesNotOverwriteSizeFromPeerAnnouncement(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()

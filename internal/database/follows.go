@@ -133,6 +133,34 @@ func (db *DB) ListFollowsBatch(ctx context.Context, afterID int64, limit int) ([
 	return follows, nil
 }
 
+// RefreshFollow updates all actor-derived fields (public key, endpoint, alias) for an existing follow.
+func (db *DB) RefreshFollow(ctx context.Context, actorURL, publicKeyPEM, endpoint string, alias *string) error {
+	res, err := db.bun.NewRaw(
+		"UPDATE follows SET public_key_pem = ?, endpoint = ?, alias = ? WHERE actor_url = ?",
+		publicKeyPEM, endpoint, alias, actorURL).Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("refreshing follow: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("no follow found for %q", actorURL)
+	}
+	return nil
+}
+
+// RefreshFollowRequest updates all actor-derived fields (public key, endpoint, alias) for an existing follow request.
+func (db *DB) RefreshFollowRequest(ctx context.Context, actorURL, publicKeyPEM, endpoint string, alias *string) error {
+	res, err := db.bun.NewRaw(
+		"UPDATE follow_requests SET public_key_pem = ?, endpoint = ?, alias = ? WHERE actor_url = ?",
+		publicKeyPEM, endpoint, alias, actorURL).Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("refreshing follow request: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("no follow request found for %q", actorURL)
+	}
+	return nil
+}
+
 func (db *DB) AcceptFollowRequest(ctx context.Context, actorURL string) error {
 	fr, err := db.GetFollowRequest(ctx, actorURL)
 	if err != nil {

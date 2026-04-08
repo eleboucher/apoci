@@ -219,6 +219,67 @@ func (s *Service) RejectFollow(ctx context.Context, input string) (string, error
 	return actorURL, nil
 }
 
+// RefreshActors re-fetches all known follower and follow-request actor documents
+// and updates their public key, endpoint, and alias. It is intended to be called
+// periodically so that key rotations, renames, and endpoint changes are picked up.
+// Failures for individual actors are logged and skipped.
+func (s *Service) RefreshActors(ctx context.Context) {
+	follows, err := s.DB.ListFollows(ctx)
+	if err != nil {
+		s.Logger.Warn("actor refresh: failed to list follows", "error", err)
+		return
+	}
+	for _, f := range follows {
+		if ctx.Err() != nil {
+			return
+		}
+		actor, err := s.Fed.FetchActor(ctx, f.ActorURL)
+		if err != nil {
+			s.Logger.Warn("actor refresh: failed to fetch actor", "actor", f.ActorURL, "error", err)
+			continue
+		}
+		alias := actorAlias(actor)
+		endpoint := activitypub.EndpointFromActorURL(f.ActorURL)
+		if err := s.DB.RefreshFollow(ctx, f.ActorURL, actor.PublicKey.PublicKeyPEM, endpoint, alias); err != nil {
+			s.Logger.Warn("actor refresh: failed to update follow", "actor", f.ActorURL, "error", err)
+		}
+	}
+
+	requests, err := s.DB.ListFollowRequests(ctx)
+	if err != nil {
+		s.Logger.Warn("actor refresh: failed to list follow requests", "error", err)
+		return
+	}
+	for _, fr := range requests {
+		if ctx.Err() != nil {
+			return
+		}
+		actor, err := s.Fed.FetchActor(ctx, fr.ActorURL)
+		if err != nil {
+			s.Logger.Warn("actor refresh: failed to fetch actor", "actor", fr.ActorURL, "error", err)
+			continue
+		}
+		alias := actorAlias(actor)
+		endpoint := activitypub.EndpointFromActorURL(fr.ActorURL)
+		if err := s.DB.RefreshFollowRequest(ctx, fr.ActorURL, actor.PublicKey.PublicKeyPEM, endpoint, alias); err != nil {
+			s.Logger.Warn("actor refresh: failed to update follow request", "actor", fr.ActorURL, "error", err)
+		}
+	}
+}
+
+// actorAlias returns the actor's display name capped at 256 runes, or nil
+// when the actor has no name set.
+func actorAlias(actor *activitypub.Actor) *string {
+	if actor.Name == "" {
+		return nil
+	}
+	name := actor.Name
+	if runes := []rune(name); len(runes) > 256 {
+		name = string(runes[:256])
+	}
+	return &name
+}
+
 // sendMutualFollowBack sends a Follow back to an actor we just accepted,
 // recording the outgoing follow and peer. It is a no-op when an outgoing
 // follow already exists. Returns true when a follow-back was sent.

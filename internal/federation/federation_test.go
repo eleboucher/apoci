@@ -13,10 +13,6 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
 
-// ---------------------------------------------------------------------------
-// mock Federator
-// ---------------------------------------------------------------------------
-
 type mockFed struct {
 	resolveFollowTargetFn func(ctx context.Context, input string) (string, error)
 	fetchActorFn          func(ctx context.Context, actorURL string) (*activitypub.Actor, error)
@@ -79,10 +75,6 @@ func (m *mockFed) SendFollow(ctx context.Context, targetActorURL string) (string
 	return targetActorURL, nil
 }
 
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-
 func nopLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func testDB(t *testing.T) *database.DB {
@@ -95,9 +87,14 @@ func testDB(t *testing.T) *database.DB {
 
 func testService(t *testing.T, fed *mockFed) *Service {
 	t.Helper()
+	return testServiceWithDB(t, fed, testDB(t))
+}
+
+func testServiceWithDB(t *testing.T, fed *mockFed, db *database.DB) *Service {
+	t.Helper()
 	return &Service{
 		Fed:      fed,
-		DB:       testDB(t),
+		DB:       db,
 		ActorURL: "https://local.test/ap/actor",
 		Logger:   nopLogger(),
 	}
@@ -114,10 +111,6 @@ func peerActor() *activitypub.Actor {
 		Inbox: peerInboxURL,
 	}
 }
-
-// ---------------------------------------------------------------------------
-// AddFollow
-// ---------------------------------------------------------------------------
 
 func TestAddFollowSuccess(t *testing.T) {
 	var deliveredInbox string
@@ -221,10 +214,6 @@ func TestAddFollowDeliveryError(t *testing.T) {
 	require.Contains(t, err.Error(), "delivering follow")
 }
 
-// ---------------------------------------------------------------------------
-// RemoveFollow
-// ---------------------------------------------------------------------------
-
 func TestRemoveFollowWithInboundFollow(t *testing.T) {
 	fed := &mockFed{}
 	svc := testService(t, fed)
@@ -315,10 +304,6 @@ func TestRemoveFollowResolveError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "resolving target")
 }
-
-// ---------------------------------------------------------------------------
-// AcceptFollow
-// ---------------------------------------------------------------------------
 
 func TestAcceptFollowSuccess(t *testing.T) {
 	var acceptedActor string
@@ -462,10 +447,6 @@ func TestAcceptFollowResolveError(t *testing.T) {
 	require.Contains(t, err.Error(), "resolving target")
 }
 
-// ---------------------------------------------------------------------------
-// RejectFollow
-// ---------------------------------------------------------------------------
-
 func TestRejectFollowSuccess(t *testing.T) {
 	var rejectedActor string
 	fed := &mockFed{
@@ -531,4 +512,93 @@ func TestRejectFollowResolveError(t *testing.T) {
 	_, err := svc.RejectFollow(context.Background(), "bad")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "resolving target")
+}
+
+func TestRefreshActorsUpdatesFollows(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	fed := &mockFed{
+		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
+			return &activitypub.Actor{
+				ID:        peerActorURL,
+				Name:      "Peer Node",
+				PublicKey: activitypub.ActorPublicKey{PublicKeyPEM: "new-key"},
+			}, nil
+		},
+	}
+	svc := testServiceWithDB(t, fed, db)
+
+	require.NoError(t, db.AddFollow(ctx, peerActorURL, "old-key", "https://old.example.com", nil))
+	svc.RefreshActors(ctx)
+
+	f, err := db.GetFollow(ctx, peerActorURL)
+	require.NoError(t, err)
+	require.Equal(t, "new-key", f.PublicKeyPEM)
+	require.NotNil(t, f.Alias)
+	require.Equal(t, "Peer Node", *f.Alias)
+}
+
+func TestRefreshActorsUpdatesFollowRequests(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	fed := &mockFed{
+		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
+			return &activitypub.Actor{
+				ID:        peerActorURL,
+				Name:      "Peer Node",
+				PublicKey: activitypub.ActorPublicKey{PublicKeyPEM: "new-key"},
+			}, nil
+		},
+	}
+	svc := testServiceWithDB(t, fed, db)
+
+	require.NoError(t, db.AddFollowRequest(ctx, peerActorURL, "old-key", "https://old.example.com", nil))
+	svc.RefreshActors(ctx)
+
+	fr, err := db.GetFollowRequest(ctx, peerActorURL)
+	require.NoError(t, err)
+	require.Equal(t, "new-key", fr.PublicKeyPEM)
+	require.NotNil(t, fr.Alias)
+	require.Equal(t, "Peer Node", *fr.Alias)
+}
+
+func TestRefreshActorsSkipsOnFetchError(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	fed := &mockFed{
+		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
+			return nil, errors.New("unreachable")
+		},
+	}
+	svc := testServiceWithDB(t, fed, db)
+
+	require.NoError(t, db.AddFollow(ctx, peerActorURL, "original-key", "https://peer.example.com", nil))
+	svc.RefreshActors(ctx)
+
+	// Original data must be untouched.
+	f, err := db.GetFollow(ctx, peerActorURL)
+	require.NoError(t, err)
+	require.Equal(t, "original-key", f.PublicKeyPEM)
+}
+
+func TestRefreshActorsNoNameLeavesAliasNil(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	fed := &mockFed{
+		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
+			return &activitypub.Actor{
+				ID:        peerActorURL,
+				PublicKey: activitypub.ActorPublicKey{PublicKeyPEM: "new-key"},
+			}, nil
+		},
+	}
+	svc := testServiceWithDB(t, fed, db)
+
+	require.NoError(t, db.AddFollow(ctx, peerActorURL, "old-key", "https://old.example.com", nil))
+	svc.RefreshActors(ctx)
+
+	f, err := db.GetFollow(ctx, peerActorURL)
+	require.NoError(t, err)
+	require.Equal(t, "new-key", f.PublicKeyPEM)
+	require.Nil(t, f.Alias)
 }
