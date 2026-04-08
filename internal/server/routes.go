@@ -11,7 +11,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 
-	mux.Handle("/v2/", registryPushRateLimitMiddleware(s.registryPushLimiter)(registryAuthMiddleware(s.cfg.RegistryToken)(s.ociHandler)))
+	mux.Handle("/v2/", registryPushRateLimitMiddleware(s.registryPushLimiter)(registryAuthMiddleware(s.cfg.RegistryToken, s.cfg.Endpoint)(s.ociHandler)))
 
 	mux.Handle("GET /.well-known/webfinger", s.webfingerHandler)
 	mux.Handle("GET /.well-known/nodeinfo", http.HandlerFunc(s.nodeinfoHandler.ServeWellKnown))

@@ -223,7 +223,7 @@ func TestRegistryAuthMiddlewareAllowsReadWithoutToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := registryAuthMiddleware("secret-token")(inner)
+	handler := registryAuthMiddleware("secret-token", "https://registry.example.com")(inner)
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		rec := httptest.NewRecorder()
@@ -238,14 +238,14 @@ func TestRegistryAuthMiddlewareRejectsWriteWithoutToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := registryAuthMiddleware("secret-token")(inner)
+	handler := registryAuthMiddleware("secret-token", "https://registry.example.com")(inner)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/v2/test/manifests/latest", nil)
 	handler.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusUnauthorized, rec.Code, "PUT without token should be 401")
-	require.NotEmpty(t, rec.Header().Get("WWW-Authenticate"), "expected WWW-Authenticate header on 401")
+	require.Equal(t, `Bearer realm="https://registry.example.com/v2/token",service="registry"`, rec.Header().Get("WWW-Authenticate"))
 }
 
 func TestRegistryAuthMiddlewareAcceptsValidToken(t *testing.T) {
@@ -253,7 +253,7 @@ func TestRegistryAuthMiddlewareAcceptsValidToken(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 	})
 
-	handler := registryAuthMiddleware("secret-token")(inner)
+	handler := registryAuthMiddleware("secret-token", "https://registry.example.com")(inner)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/v2/test/manifests/latest", nil)
@@ -268,7 +268,7 @@ func TestRegistryAuthMiddlewareRejectsInvalidToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := registryAuthMiddleware("secret-token")(inner)
+	handler := registryAuthMiddleware("secret-token", "https://registry.example.com")(inner)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v2/test/blobs/uploads/", nil)
@@ -331,7 +331,7 @@ func TestRegistryAuthMiddlewareEmptyTokenBlocksWrites(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := registryAuthMiddleware("")(inner)
+	handler := registryAuthMiddleware("", "https://registry.example.com")(inner)
 
 	// Writes should be blocked when no token is configured
 	rec := httptest.NewRecorder()

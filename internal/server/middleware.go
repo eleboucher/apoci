@@ -79,7 +79,7 @@ func loggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 // to support anonymous image pulls from public registries.
 // Basic auth is also accepted, with the password treated as the token, to support
 // OCI clients (e.g. flux) that only support Basic auth.
-func registryAuthMiddleware(token string) func(http.Handler) http.Handler {
+func registryAuthMiddleware(token, endpoint string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet || r.Method == http.MethodHead {
@@ -100,7 +100,7 @@ func registryAuthMiddleware(token string) func(http.Handler) http.Handler {
 			}
 
 			if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
-				w.Header().Set("WWW-Authenticate", `Bearer realm="apoci",service="registry"`)
+				w.Header().Set("WWW-Authenticate", `Bearer realm="`+endpoint+`/v2/token",service="registry"`)
 				http.Error(w, "authentication required", http.StatusUnauthorized)
 				return
 			}

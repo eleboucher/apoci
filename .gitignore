@@ -3,4 +3,3 @@ bin/
 *.db-wal
 *.db-shm
 dist/
-apoci
