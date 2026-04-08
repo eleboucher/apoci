@@ -9,7 +9,7 @@ import (
 )
 
 func TestLoadOrCreateIdentityEphemeral(t *testing.T) {
-	id, err := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, err := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	require.NoError(t, err)
 
 	require.Equal(t, testActorURL, id.ActorURL)
@@ -22,7 +22,7 @@ func TestLoadOrCreateIdentityPersisted(t *testing.T) {
 	keyPath := filepath.Join(dir, "key.pem")
 
 	// First call: generate and save
-	id1, err := LoadOrCreateIdentity("test.example.com", "", keyPath, discardLogger())
+	id1, err := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", keyPath, discardLogger())
 	require.NoError(t, err)
 
 	// File should exist
@@ -30,7 +30,7 @@ func TestLoadOrCreateIdentityPersisted(t *testing.T) {
 	require.NoError(t, err, "key file should exist")
 
 	// Second call: load existing
-	id2, err := LoadOrCreateIdentity("test.example.com", "", keyPath, discardLogger())
+	id2, err := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", keyPath, discardLogger())
 	require.NoError(t, err)
 
 	// Keys should match
@@ -38,7 +38,7 @@ func TestLoadOrCreateIdentityPersisted(t *testing.T) {
 }
 
 func TestPublicKeyPEM(t *testing.T) {
-	id, err := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, err := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	require.NoError(t, err)
 
 	pem, err := id.PublicKeyPEM()
@@ -49,7 +49,7 @@ func TestPublicKeyPEM(t *testing.T) {
 }
 
 func TestKeyID(t *testing.T) {
-	id, err := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, err := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	require.NoError(t, err)
 
 	expected := "https://test.example.com/ap/actor#main-key"

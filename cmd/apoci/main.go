@@ -80,7 +80,7 @@ func serveCmd(configPath *string) *cobra.Command {
 				return fmt.Errorf("creating blobstore: %w", err)
 			}
 
-			identity, err := activitypub.LoadOrCreateIdentity(cfg.Domain, cfg.AccountDomain, cfg.KeyPath, logger)
+			identity, err := activitypub.LoadOrCreateIdentity(cfg.Endpoint, cfg.Domain, cfg.AccountDomain, cfg.KeyPath, logger)
 			if err != nil {
 				return fmt.Errorf("loading identity: %w", err)
 			}
@@ -430,7 +430,9 @@ func identityCmd(configPath *string) *cobra.Command {
 				return err
 			}
 
-			identity, err := activitypub.LoadOrCreateIdentity(cfg.Domain, cfg.AccountDomain, cfg.KeyPath, nopLogger())
+			identity, err := activitypub.LoadOrCreateIdentity(
+				cfg.Endpoint, cfg.Domain, cfg.AccountDomain, cfg.KeyPath, nopLogger(),
+			)
 			if err != nil {
 				return err
 			}
@@ -526,7 +528,7 @@ func openAll(configPath string) (*database.DB, *activitypub.Identity, error) {
 		return nil, nil, fmt.Errorf("opening database: %w", err)
 	}
 
-	identity, err := activitypub.LoadOrCreateIdentity(cfg.Domain, cfg.AccountDomain, cfg.KeyPath, logger)
+	identity, err := activitypub.LoadOrCreateIdentity(cfg.Endpoint, cfg.Domain, cfg.AccountDomain, cfg.KeyPath, logger)
 	if err != nil {
 		_ = db.Close()
 		return nil, nil, fmt.Errorf("loading identity: %w", err)

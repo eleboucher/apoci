@@ -36,11 +36,11 @@ func (id *Identity) KeyID() string {
 	return id.ActorURL + "#main-key"
 }
 
-func LoadOrCreateIdentity(domain, accountDomain, keyPath string, logger *slog.Logger) (*Identity, error) {
+func LoadOrCreateIdentity(endpoint, domain, accountDomain, keyPath string, logger *slog.Logger) (*Identity, error) {
 	if accountDomain == "" {
 		accountDomain = domain
 	}
-	actorURL := "https://" + domain + "/ap/actor"
+	actorURL := endpoint + "/ap/actor"
 
 	var privKey *rsa.PrivateKey
 

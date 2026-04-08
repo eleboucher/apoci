@@ -29,7 +29,7 @@ func testRegistryWithFederation(t *testing.T) (*oci.Registry, *database.DB) {
 	blobs, err := blobstore.New(dir, nopLog())
 	require.NoError(t, err)
 
-	identity, err := activitypub.LoadOrCreateIdentity("test.example.com", "", "", nopLog())
+	identity, err := activitypub.LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", nopLog())
 	require.NoError(t, err)
 
 	reg, err := oci.NewRegistry(db, blobs, identity.ActorURL, "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())

@@ -28,7 +28,7 @@ func openTestDB(t *testing.T) *database.DB {
 
 func testIdentity(t *testing.T) *Identity {
 	t.Helper()
-	id, err := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, err := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	require.NoError(t, err, "creating test identity")
 	return id
 }

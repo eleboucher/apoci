@@ -40,10 +40,10 @@ func setupInboxTest(t *testing.T) (alice *Identity, bob *Identity, inbox *InboxH
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	alice, err = LoadOrCreateIdentity("alice.test", "", "", discardLogger())
+	alice, err = LoadOrCreateIdentity("https://alice.test", "alice.test", "", "", discardLogger())
 	require.NoError(t, err)
 
-	bob, err = LoadOrCreateIdentity("bob.test", "", "", discardLogger())
+	bob, err = LoadOrCreateIdentity("https://bob.test", "bob.test", "", "", discardLogger())
 	require.NoError(t, err)
 
 	inbox = NewInboxHandler(bob, db, InboxConfig{
@@ -864,7 +864,7 @@ func TestMutualAutoAcceptDoesNotTriggerWithoutOutgoingFollow(t *testing.T) {
 	inbox.autoAccept = AutoAcceptMutual
 
 	// Create a different identity for a stranger.
-	stranger, err := LoadOrCreateIdentity("stranger.test", "", "", discardLogger())
+	stranger, err := LoadOrCreateIdentity("https://stranger.test", "stranger.test", "", "", discardLogger())
 	require.NoError(t, err)
 
 	strangerPEM, _ := stranger.PublicKeyPEM()

@@ -10,7 +10,7 @@ import (
 )
 
 func TestWebFingerWithAcctResource(t *testing.T) {
-	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	handler := NewWebFingerHandler(id)
 
 	rec := httptest.NewRecorder()
@@ -30,7 +30,7 @@ func TestWebFingerWithAcctResource(t *testing.T) {
 }
 
 func TestWebFingerWithActorURL(t *testing.T) {
-	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	handler := NewWebFingerHandler(id)
 
 	rec := httptest.NewRecorder()
@@ -41,7 +41,7 @@ func TestWebFingerWithActorURL(t *testing.T) {
 }
 
 func TestWebFingerMissingResource(t *testing.T) {
-	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	handler := NewWebFingerHandler(id)
 
 	rec := httptest.NewRecorder()
@@ -52,7 +52,7 @@ func TestWebFingerMissingResource(t *testing.T) {
 }
 
 func TestWebFingerWrongDomain(t *testing.T) {
-	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	handler := NewWebFingerHandler(id)
 
 	rec := httptest.NewRecorder()
@@ -63,7 +63,7 @@ func TestWebFingerWrongDomain(t *testing.T) {
 }
 
 func TestWebFingerWithAccountDomain(t *testing.T) {
-	id, _ := LoadOrCreateIdentity("registry.example.com", "example.com", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://registry.example.com", "registry.example.com", "example.com", "", discardLogger())
 	handler := NewWebFingerHandler(id)
 
 	rec := httptest.NewRecorder()
@@ -82,7 +82,7 @@ func TestWebFingerWithAccountDomain(t *testing.T) {
 }
 
 func TestWebFingerSplitDomainBothWork(t *testing.T) {
-	id, _ := LoadOrCreateIdentity("registry.example.com", "example.com", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://registry.example.com", "registry.example.com", "example.com", "", discardLogger())
 	handler := NewWebFingerHandler(id)
 
 	rec1 := httptest.NewRecorder()

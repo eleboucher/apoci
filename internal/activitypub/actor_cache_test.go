@@ -51,7 +51,7 @@ func newTestActorServer(t *testing.T) (*httptest.Server, *atomic.Int64) {
 func newTestIdentity(t *testing.T) *Identity {
 	t.Helper()
 
-	identity, err := LoadOrCreateIdentity("test.local", "", "", discardLogger())
+	identity, err := LoadOrCreateIdentity("https://test.local", "test.local", "", "", discardLogger())
 	require.NoError(t, err, "creating identity")
 	return identity
 }

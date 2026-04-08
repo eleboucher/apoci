@@ -3,7 +3,8 @@ services:
     build: .
     volumes:
       - alice-data:/apoci/storage
-      - ./configs/e2e-alice.yaml:/apoci/config/apoci.yaml:ro
+      - ./configs/e2e-alice.yaml:/apoci/e2e.yaml:ro
+    command: ["serve", "-c", "/apoci/e2e.yaml"]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
       interval: 2s
@@ -14,7 +15,8 @@ services:
     build: .
     volumes:
       - bob-data:/apoci/storage
-      - ./configs/e2e-bob.yaml:/apoci/config/apoci.yaml:ro
+      - ./configs/e2e-bob.yaml:/apoci/e2e.yaml:ro
+    command: ["serve", "-c", "/apoci/e2e.yaml"]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
       interval: 2s

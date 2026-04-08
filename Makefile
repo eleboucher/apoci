@@ -35,5 +35,6 @@ down:
 	docker compose down
 
 e2e:
+	docker compose -f docker-compose.e2e.yml down -v
 	docker compose -f docker-compose.e2e.yml up --build --abort-on-container-exit --exit-code-from e2e
 	docker compose -f docker-compose.e2e.yml down -v

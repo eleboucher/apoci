@@ -32,7 +32,7 @@ func testServer(t *testing.T) *Server {
 	blobs, err := blobstore.New(dir, nopLog())
 	require.NoError(t, err)
 
-	identity, err := activitypub.LoadOrCreateIdentity("test.example.com", "", "", nopLog())
+	identity, err := activitypub.LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", nopLog())
 	require.NoError(t, err)
 
 	cfg := &config.Config{

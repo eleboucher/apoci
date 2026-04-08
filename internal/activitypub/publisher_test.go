@@ -16,7 +16,7 @@ func TestPublishManifestCreatesActivity(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	pub := NewAPPublisher(context.Background(), id, db, "https://test.example.com", discardLogger())
 
 	ctx := context.Background()
@@ -45,7 +45,7 @@ func TestPublishTagCreatesUpdateActivity(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	pub := NewAPPublisher(context.Background(), id, db, "https://test.example.com", discardLogger())
 
 	ctx := context.Background()
@@ -64,7 +64,7 @@ func TestPublishBlobRefCreatesAnnounceActivity(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	pub := NewAPPublisher(context.Background(), id, db, "https://test.example.com", discardLogger())
 
 	ctx := context.Background()

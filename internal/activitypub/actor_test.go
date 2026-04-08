@@ -10,7 +10,7 @@ import (
 )
 
 func TestActorHandler(t *testing.T) {
-	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	handler := NewActorHandler(id, "Test Registry", "https://test.example.com")
 
 	rec := httptest.NewRecorder()
@@ -33,7 +33,7 @@ func TestActorHandler(t *testing.T) {
 }
 
 func TestActorHandlerRejectsPost(t *testing.T) {
-	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	handler := NewActorHandler(id, "Test", "https://test.example.com")
 
 	rec := httptest.NewRecorder()

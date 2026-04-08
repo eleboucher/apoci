@@ -72,10 +72,10 @@ check "bob webfinger"       '"subject"' "$BOB/.well-known/webfinger?resource=acc
 
 # --- Pre-follow state ---
 echo "--- Phase 2: Pre-follow ---"
-check "alice no followers" '[]' -H "Authorization: Bearer $ALICE_TOKEN" "$ALICE/api/admin/follows"
-check "bob no followers"   '[]' -H "Authorization: Bearer $BOB_TOKEN"   "$BOB/api/admin/follows"
-check "alice no pending"   '[]' -H "Authorization: Bearer $ALICE_TOKEN" "$ALICE/api/admin/follows/pending"
-check "bob no pending"     '[]' -H "Authorization: Bearer $BOB_TOKEN"   "$BOB/api/admin/follows/pending"
+check "alice no followers" 'null' -H "Authorization: Bearer $ALICE_TOKEN" "$ALICE/api/admin/follows"
+check "bob no followers"   'null' -H "Authorization: Bearer $BOB_TOKEN"   "$BOB/api/admin/follows"
+check "alice no pending"   'null' -H "Authorization: Bearer $ALICE_TOKEN" "$ALICE/api/admin/follows/pending"
+check "bob no pending"     'null' -H "Authorization: Bearer $BOB_TOKEN"   "$BOB/api/admin/follows/pending"
 
 # --- Alice follows Bob (signed Follow → signature verification → auto-Accept) ---
 echo "--- Phase 3: Follow (Alice → Bob) ---"
@@ -125,7 +125,8 @@ REPO="alice/myapp"
 BLOB_CONTENT="e2e-test-blob-content-$(date +%s)"
 BLOB_DIGEST="sha256:$(printf '%s' "$BLOB_CONTENT" | sha256sum | cut -d' ' -f1)"
 
-blob_status=$(curl -so /dev/null -w '%{http_code}' -X POST \
+blob_body=$(mktemp)
+blob_status=$(curl -s -o "$blob_body" -w '%{http_code}' -X POST \
   -H "Authorization: Bearer $ALICE_REGISTRY_TOKEN" \
   -H "Content-Type: application/octet-stream" \
   --data-raw "$BLOB_CONTENT" \
@@ -133,13 +134,15 @@ blob_status=$(curl -so /dev/null -w '%{http_code}' -X POST \
 
 case "$blob_status" in
   201|202) pass "push blob to alice" ;;
-  *) fail "push blob to alice — HTTP $blob_status" ;;
+  *) fail "push blob to alice — HTTP $blob_status: $(cat "$blob_body")" ;;
 esac
+rm -f "$blob_body"
 
 MANIFEST="{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"config\":{\"digest\":\"$BLOB_DIGEST\",\"size\":${#BLOB_CONTENT},\"mediaType\":\"application/vnd.oci.image.config.v1+json\"},\"layers\":[]}"
 MANIFEST_DIGEST="sha256:$(printf '%s' "$MANIFEST" | sha256sum | cut -d' ' -f1)"
 
-manifest_status=$(curl -so /dev/null -w '%{http_code}' -X PUT \
+manifest_body=$(mktemp)
+manifest_status=$(curl -s -o "$manifest_body" -w '%{http_code}' -X PUT \
   -H "Authorization: Bearer $ALICE_REGISTRY_TOKEN" \
   -H "Content-Type: application/vnd.oci.image.manifest.v1+json" \
   --data-raw "$MANIFEST" \
@@ -147,10 +150,13 @@ manifest_status=$(curl -so /dev/null -w '%{http_code}' -X PUT \
 
 case "$manifest_status" in
   201) pass "push manifest to alice" ;;
-  *) fail "push manifest to alice — HTTP $manifest_status" ;;
+  *) fail "push manifest to alice — HTTP $manifest_status: $(cat "$manifest_body")" ;;
 esac
+rm -f "$manifest_body"
 
-poll_until "bob received federated manifest" "$MANIFEST_DIGEST" 30 \
+# Poll for the manifest by checking for the blob digest inside the manifest body.
+# The manifest itself doesn't contain its own digest.
+poll_until "bob received federated manifest" "$BLOB_DIGEST" 30 \
   "$BOB/v2/$REPO/manifests/latest"
 
 check_status "bob pull manifest by digest" "200" \

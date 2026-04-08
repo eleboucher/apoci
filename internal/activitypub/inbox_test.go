@@ -23,7 +23,7 @@ func testInboxSetup(t *testing.T) *InboxHandler {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	id, err := LoadOrCreateIdentity("bob.example.com", "", "", discardLogger())
+	id, err := LoadOrCreateIdentity("https://bob.example.com", "bob.example.com", "", "", discardLogger())
 	require.NoError(t, err)
 
 	handler := NewInboxHandler(id, db, InboxConfig{
@@ -98,7 +98,7 @@ func TestOutboxHandler(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	handler := NewOutboxHandler(id, db)
 
 	rec := httptest.NewRecorder()
@@ -118,7 +118,7 @@ func TestFollowingHandler(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	handler := NewFollowingHandler(id, db)
 
 	rec := httptest.NewRecorder()
@@ -140,7 +140,7 @@ func TestFollowingHandlerRejectsPost(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	handler := NewFollowingHandler(id, db)
 
 	rec := httptest.NewRecorder()
@@ -156,7 +156,7 @@ func TestFollowersHandler(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	id, _ := LoadOrCreateIdentity("test.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
 	handler := NewFollowersHandler(id, db)
 
 	rec := httptest.NewRecorder()
@@ -185,7 +185,7 @@ func TestShouldAutoAcceptMutualPending(t *testing.T) {
 	// Add outgoing follow in pending state (we sent Follow, they haven't accepted yet).
 	require.NoError(t, db.AddOutgoingFollow(ctx, peerActor))
 
-	id, _ := LoadOrCreateIdentity("bob.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://bob.example.com", "bob.example.com", "", "", discardLogger())
 	handler := NewInboxHandler(id, db, InboxConfig{
 		MaxManifestSize: 1 << 20,
 		MaxBlobSize:     1 << 20,
@@ -211,7 +211,7 @@ func TestShouldAutoAcceptMutualAccepted(t *testing.T) {
 	require.NoError(t, db.AddOutgoingFollow(ctx, peerActor))
 	require.NoError(t, db.AcceptOutgoingFollow(ctx, peerActor))
 
-	id, _ := LoadOrCreateIdentity("bob.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://bob.example.com", "bob.example.com", "", "", discardLogger())
 	handler := NewInboxHandler(id, db, InboxConfig{
 		MaxManifestSize: 1 << 20,
 		MaxBlobSize:     1 << 20,
@@ -232,7 +232,7 @@ func TestShouldAutoAcceptMutualNone(t *testing.T) {
 
 	ctx := context.Background()
 
-	id, _ := LoadOrCreateIdentity("bob.example.com", "", "", discardLogger())
+	id, _ := LoadOrCreateIdentity("https://bob.example.com", "bob.example.com", "", "", discardLogger())
 	handler := NewInboxHandler(id, db, InboxConfig{
 		MaxManifestSize: 1 << 20,
 		MaxBlobSize:     1 << 20,

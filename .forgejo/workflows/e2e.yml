@@ -17,6 +17,9 @@ jobs:
     steps:
       - uses: https://data.forgejo.org/actions/checkout@v6
 
+      - name: Clean previous state
+        run: docker compose -f docker-compose.e2e.yml down -v
+
       - name: Run federation E2E tests
         run: |
           docker compose -f docker-compose.e2e.yml up \
