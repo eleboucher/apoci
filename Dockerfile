@@ -1,4 +1,4 @@
-FROM golang:1.26-bookworm AS builder
+FROM public.ecr.aws/docker/library/golang:1.26-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
 
@@ -16,7 +16,7 @@ RUN CGO_ENABLED=1 go build \
     -o /apoci \
     ./cmd/apoci
 
-FROM debian:bookworm-slim
+FROM public.ecr.aws/docker/library/debian:bookworm-slim
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates wget && \

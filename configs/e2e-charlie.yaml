@@ -1,0 +1,13 @@
+endpoint: "http://charlie:5000"
+adminToken: "charlie-e2e-token"
+registryToken: "charlie-registry-token"
+logLevel: debug
+logFormat: text
+
+federation:
+  autoAccept: none
+  allowInsecureHTTP: true
+  blockedDomains:
+    - "blocked.example.com"
+  blockedActors:
+    - "http://blocked-actor.example.com/ap/actor"

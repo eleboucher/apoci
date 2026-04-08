@@ -23,12 +23,26 @@ services:
       timeout: 3s
       retries: 10
 
+  charlie:
+    build: .
+    volumes:
+      - charlie-data:/apoci/storage
+      - ./configs/e2e-charlie.yaml:/apoci/e2e.yaml:ro
+    command: ["serve", "-c", "/apoci/e2e.yaml"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
   e2e:
-    image: alpine:3.21
+    image: public.ecr.aws/docker/library/alpine:3.21
     depends_on:
       alice:
         condition: service_healthy
       bob:
+        condition: service_healthy
+      charlie:
         condition: service_healthy
     volumes:
       - ./tests/e2e:/tests:ro
@@ -37,3 +51,4 @@ services:
 volumes:
   alice-data:
   bob-data:
+  charlie-data:
