@@ -25,12 +25,20 @@ jobs:
           username: ${{ vars.USERNAME }}
           password: ${{ secrets.OWNER_PACKAGE_SECRET }}
 
+      - name: Login to registry.erwanleboucher.dev
+        uses: https://data.forgejo.org/docker/login-action@v3
+        with:
+          registry: registry.erwanleboucher.dev
+          username: ${{ vars.USERNAME }}
+          password: ${{ secrets.APOCI_REGISTRY_TOKEN }}
+
       - name: Compute image metadata
         id: meta
         uses: https://data.forgejo.org/docker/metadata-action@v6
         with:
           images: |
             git.erwanleboucher.dev/${{ vars.USERNAME }}/apoci
+            registry.erwanleboucher.dev/${{ vars.USERNAME }}/apoci
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=long
