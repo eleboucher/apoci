@@ -21,6 +21,7 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/config"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/federation"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/server"
 )
 
@@ -227,83 +228,31 @@ func followCmd(configPath *string) *cobra.Command {
 }
 
 func runFollowAdd(ctx context.Context, configPath, input string) error {
-	db, identity, _, err := openAll(configPath)
+	svc, cleanup, err := openFedService(configPath)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = db.Close() }()
+	defer cleanup()
 
-	_, _ = lipgloss.Println(dimStyle.Render("Resolving " + input + "..."))
-	targetActorURL, err := activitypub.ResolveFollowTarget(ctx, input)
+	_, _ = lipgloss.Println(dimStyle.Render("Sending Follow to " + input + "..."))
+	result, err := svc.AddFollow(ctx, input)
 	if err != nil {
-		return fmt.Errorf("resolving target: %w", err)
+		return err
 	}
-	if targetActorURL != input {
-		_, _ = lipgloss.Println(dimStyle.Render("Resolved to " + targetActorURL))
-	}
-
-	_, _ = lipgloss.Println(dimStyle.Render("Fetching actor " + targetActorURL + "..."))
-	actor, err := activitypub.FetchActor(ctx, targetActorURL)
-	if err != nil {
-		return fmt.Errorf("fetching actor: %w", err)
-	}
-
-	followActivity := map[string]any{
-		"@context": "https://www.w3.org/ns/activitystreams",
-		"id":       identity.ActorURL + "#follow-" + actor.ID,
-		"type":     "Follow",
-		"actor":    identity.ActorURL,
-		"object":   actor.ID,
-	}
-	activityJSON, err := json.Marshal(followActivity)
-	if err != nil {
-		return fmt.Errorf("marshaling follow: %w", err)
-	}
-
-	_, _ = lipgloss.Println(dimStyle.Render("Sending Follow to " + actor.Inbox + "..."))
-	if err := activitypub.DeliverActivity(ctx, actor.Inbox, activityJSON, identity); err != nil {
-		return fmt.Errorf("sending follow: %w", err)
-	}
-	_, _ = lipgloss.Println(successStyle.Render("Follow sent to " + actor.ID))
-
-	// Record the outgoing follow so handleAccept can match the Accept(Follow)
-	// back to this request when the peer responds.
-	if err := db.AddOutgoingFollow(ctx, actor.ID); err != nil {
-		return fmt.Errorf("storing outgoing follow: %w", err)
-	}
-
-	if err := db.UpsertPeer(ctx, &database.Peer{
-		ActorURL:          actor.ID,
-		Endpoint:          activitypub.EndpointFromActorURL(actor.ID),
-		ReplicationPolicy: "lazy",
-		IsHealthy:         true,
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to upsert peer record: %v\n", err)
-	}
+	_, _ = lipgloss.Println(successStyle.Render("Follow sent to " + result.ActorID))
 	return nil
 }
 
 func runFollowRemove(ctx context.Context, configPath, arg string) error {
-	db, identity, _, err := openAll(configPath)
+	svc, cleanup, err := openFedService(configPath)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = db.Close() }()
+	defer cleanup()
 
-	actorURL, err := activitypub.ResolveFollowTarget(ctx, arg)
+	actorURL, err := svc.RemoveFollow(ctx, arg)
 	if err != nil {
-		return fmt.Errorf("resolving target: %w", err)
-	}
-
-	if err := activitypub.SendUndo(ctx, identity, actorURL, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
-	}
-
-	if err := db.RemoveFollow(ctx, actorURL); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: removing follow: %v\n", err)
-	}
-	if err := db.RemoveOutgoingFollow(ctx, actorURL); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: removing outgoing follow: %v\n", err)
+		return err
 	}
 	_, _ = lipgloss.Println(successStyle.Render("Unfollowed " + actorURL))
 	return nil
@@ -377,40 +326,34 @@ func runFollowAccept(ctx context.Context, configPath, arg string) error {
 	}
 	defer func() { _ = db.Close() }()
 
-	actorURL, err := activitypub.ResolveFollowTarget(ctx, arg)
+	svc := &federation.Service{
+		Fed:      &federation.RealFederator{Identity: identity, Enqueue: nil},
+		DB:       db,
+		ActorURL: identity.ActorURL,
+		Logger:   nopLogger(),
+	}
+
+	_, _ = lipgloss.Println(dimStyle.Render("Accepting follow from " + arg + "..."))
+	result, err := svc.AcceptFollow(ctx, arg, cfg.Federation.AutoAccept)
 	if err != nil {
-		return fmt.Errorf("resolving target: %w", err)
+		return err
 	}
-	_, _ = lipgloss.Println(dimStyle.Render("Accepting follow from " + actorURL + "..."))
-	if err := activitypub.SendAccept(ctx, identity, db, actorURL, nil); err != nil {
-		return fmt.Errorf("sending accept: %w", err)
+	_, _ = lipgloss.Println(successStyle.Render("Accepted follow from " + result.ActorURL))
+	if result.FollowedBack {
+		_, _ = lipgloss.Println(successStyle.Render("Mutual follow-back sent to " + result.ActorURL))
 	}
-	_, _ = lipgloss.Println(successStyle.Render("Accepted follow from " + actorURL))
-
-	if cfg.Federation.AutoAccept == activitypub.AutoAcceptMutual {
-		sent, err := activitypub.SendMutualFollow(ctx, identity, db, actorURL, nil)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: mutual follow-back: %v\n", err)
-		} else if sent {
-			_, _ = lipgloss.Println(successStyle.Render("Mutual follow-back sent to " + actorURL))
-		}
-	}
-
 	return nil
 }
 
 func runFollowReject(ctx context.Context, configPath, arg string) error {
-	db, identity, _, err := openAll(configPath)
+	svc, cleanup, err := openFedService(configPath)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = db.Close() }()
+	defer cleanup()
 
-	actorURL, err := activitypub.ResolveFollowTarget(ctx, arg)
+	actorURL, err := svc.RejectFollow(ctx, arg)
 	if err != nil {
-		return fmt.Errorf("resolving target: %w", err)
-	}
-	if err := activitypub.SendReject(ctx, identity, db, actorURL, nil); err != nil {
 		return err
 	}
 	_, _ = lipgloss.Println(successStyle.Render("Rejected follow from " + actorURL))
@@ -552,6 +495,20 @@ func openAll(configPath string) (*database.DB, *activitypub.Identity, *config.Co
 	}
 
 	return db, identity, cfg, nil
+}
+
+func openFedService(configPath string) (*federation.Service, func(), error) {
+	db, identity, _, err := openAll(configPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	svc := &federation.Service{
+		Fed:      &federation.RealFederator{Identity: identity, Enqueue: nil},
+		DB:       db,
+		ActorURL: identity.ActorURL,
+		Logger:   nopLogger(),
+	}
+	return svc, func() { _ = db.Close() }, nil
 }
 
 var logLevels = map[string]slog.Level{

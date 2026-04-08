@@ -366,8 +366,11 @@ func (h *InboxHandler) processFollow(ctx context.Context, activity *RawActivity,
 	}
 
 	if h.shouldAutoAccept(ctx, activity.Actor) {
-		if err := SendAccept(ctx, h.identity, h.db, activity.Actor, h.enqueue); err != nil {
-			h.logger.Warn("inbox: auto-accept failed, request remains pending", "from", activity.Actor, "error", err)
+		if err := h.db.AcceptFollowRequest(ctx, activity.Actor); err != nil {
+			h.logger.Warn("inbox: auto-accept DB promotion failed, request remains pending", "from", activity.Actor, "error", err)
+		} else if err := SendAccept(ctx, h.identity, activity.Actor, h.enqueue); err != nil {
+			h.logger.Warn("inbox: auto-accept delivery failed (accepted locally)", "from", activity.Actor, "error", err)
+			return nil
 		} else {
 			h.logger.Info("inbox: auto-accepted follow request", "from", activity.Actor)
 			return nil
@@ -403,8 +406,10 @@ func (h *InboxHandler) processAccept(ctx context.Context, activity *RawActivity)
 	if h.autoAccept == AutoAcceptMutual {
 		fr, err := h.db.GetFollowRequest(ctx, activity.Actor)
 		if err == nil && fr != nil {
-			if err := SendAccept(ctx, h.identity, h.db, activity.Actor, h.enqueue); err != nil {
-				h.logger.Warn("inbox: mutual auto-accept of pending inbound follow failed", "from", activity.Actor, "error", err)
+			if err := h.db.AcceptFollowRequest(ctx, activity.Actor); err != nil {
+				h.logger.Warn("inbox: mutual auto-accept DB promotion failed", "from", activity.Actor, "error", err)
+			} else if err := SendAccept(ctx, h.identity, activity.Actor, h.enqueue); err != nil {
+				h.logger.Warn("inbox: mutual auto-accept delivery failed (accepted locally)", "from", activity.Actor, "error", err)
 			} else {
 				h.logger.Info("inbox: mutual auto-accepted pending inbound follow", "from", activity.Actor)
 			}

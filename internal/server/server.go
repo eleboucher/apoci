@@ -14,6 +14,7 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/config"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/federation"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/oci"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/peering"
@@ -25,7 +26,7 @@ type Server struct {
 	cfg                 *config.Config
 	db                  *database.DB
 	identity            *activitypub.Identity
-	apFed               apFederator
+	fedSvc              *federation.Service
 	registry            *oci.Registry
 	workers             *workers.Workers
 	ociHandler          http.Handler
@@ -116,7 +117,12 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 		cfg:                 cfg,
 		db:                  db,
 		identity:            identity,
-		apFed:               &realAPFederator{identity: identity, db: db, enqueue: enqueueFunc},
+		fedSvc: &federation.Service{
+			Fed:      &federation.RealFederator{Identity: identity, Enqueue: enqueueFunc},
+			DB:       db,
+			ActorURL: identity.ActorURL,
+			Logger:   logger,
+		},
 		registry:            registry,
 		workers:             w,
 		ociHandler:          registry.Handler(),

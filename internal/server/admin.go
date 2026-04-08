@@ -1,65 +1,15 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"net/url"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
-
-	"git.erwanleboucher.dev/eleboucher/apoci/internal/activitypub"
-	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
 
 const adminMaxBody int64 = 4 * 1024 // 4 KB
-
-// apFederator abstracts the ActivityPub network operations used by admin
-// handlers, enabling injection of test doubles.
-type apFederator interface {
-	ResolveFollowTarget(ctx context.Context, input string) (string, error)
-	FetchActor(ctx context.Context, actorURL string) (*activitypub.Actor, error)
-	DeliverActivity(ctx context.Context, inboxURL string, activityJSON []byte) error
-	SendAccept(ctx context.Context, followerActorURL string) error
-	SendReject(ctx context.Context, followerActorURL string) error
-	SendUndo(ctx context.Context, peerActorURL string) error
-	SendMutualFollow(ctx context.Context, actorURL string) (bool, error)
-}
-
-type realAPFederator struct {
-	identity *activitypub.Identity
-	db       *database.DB
-	enqueue  activitypub.EnqueueFunc
-}
-
-func (f *realAPFederator) ResolveFollowTarget(ctx context.Context, input string) (string, error) {
-	return activitypub.ResolveFollowTarget(ctx, input)
-}
-
-func (f *realAPFederator) FetchActor(ctx context.Context, actorURL string) (*activitypub.Actor, error) {
-	return activitypub.FetchActor(ctx, actorURL)
-}
-
-func (f *realAPFederator) DeliverActivity(ctx context.Context, inboxURL string, activityJSON []byte) error {
-	return activitypub.DeliverActivity(ctx, inboxURL, activityJSON, f.identity)
-}
-
-func (f *realAPFederator) SendAccept(ctx context.Context, followerActorURL string) error {
-	return activitypub.SendAccept(ctx, f.identity, f.db, followerActorURL, f.enqueue)
-}
-
-func (f *realAPFederator) SendReject(ctx context.Context, followerActorURL string) error {
-	return activitypub.SendReject(ctx, f.identity, f.db, followerActorURL, f.enqueue)
-}
-
-func (f *realAPFederator) SendUndo(ctx context.Context, peerActorURL string) error {
-	return activitypub.SendUndo(ctx, f.identity, peerActorURL, f.enqueue)
-}
-
-func (f *realAPFederator) SendMutualFollow(ctx context.Context, actorURL string) (bool, error) {
-	return activitypub.SendMutualFollow(ctx, f.identity, f.db, actorURL, f.enqueue)
-}
 
 func (s *Server) adminRouter() http.Handler {
 	r := chi.NewRouter()
@@ -118,115 +68,62 @@ type adminFollowRequest struct {
 	Target string `json:"target"`
 }
 
-// decodeAndResolveTarget reads the follow request body and resolves the actor URL.
-// Returns the actor URL and true on success, or writes an HTTP error and returns false.
-func (s *Server) decodeAndResolveTarget(w http.ResponseWriter, r *http.Request) (string, bool) {
+// decodeTarget reads the follow request body and returns the raw target string.
+func decodeTarget(w http.ResponseWriter, r *http.Request) (string, bool) {
 	var req adminFollowRequest
 	r.Body = http.MaxBytesReader(w, r.Body, adminMaxBody)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Target == "" {
 		http.Error(w, "missing target", http.StatusBadRequest)
 		return "", false
 	}
-
-	actorURL, err := s.apFed.ResolveFollowTarget(r.Context(), req.Target)
-	if err != nil {
-		s.logger.Error("resolving follow target", "target", req.Target, "error", err)
-		http.Error(w, "could not resolve target", http.StatusBadGateway)
-		return "", false
-	}
-	return actorURL, true
+	return req.Target, true
 }
 
 func (s *Server) adminAddFollow(w http.ResponseWriter, r *http.Request) {
-	actorURL, ok := s.decodeAndResolveTarget(w, r)
+	target, ok := decodeTarget(w, r)
 	if !ok {
 		return
 	}
 
-	ctx := r.Context()
-
-	actor, err := s.apFed.FetchActor(ctx, actorURL)
+	result, err := s.fedSvc.AddFollow(r.Context(), target)
 	if err != nil {
-		s.logger.Error("fetching actor", "actor_url", actorURL, "error", err)
-		http.Error(w, "could not fetch actor", http.StatusBadGateway)
+		s.logger.Error("adding follow", "target", target, "error", err)
+		http.Error(w, "could not add follow", classifyError(err))
 		return
 	}
 
-	if err := s.db.AddOutgoingFollow(ctx, actor.ID); err != nil {
-		s.logger.Error("storing outgoing follow", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	followActivity := map[string]any{
-		"@context": "https://www.w3.org/ns/activitystreams",
-		"id":       s.identity.ActorURL + "#follow-" + url.QueryEscape(actor.ID),
-		"type":     "Follow",
-		"actor":    s.identity.ActorURL,
-		"object":   actor.ID,
-	}
-
-	activityJSON, err := json.Marshal(followActivity)
-	if err != nil {
-		s.logger.Error("marshaling follow activity", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := s.apFed.DeliverActivity(ctx, actor.Inbox, activityJSON); err != nil {
-		s.logger.Error("delivering follow activity", "inbox", actor.Inbox, "error", err)
-		http.Error(w, "could not deliver follow activity", http.StatusBadGateway)
-		return
-	}
-
-	if err := s.db.UpsertPeer(ctx, &database.Peer{
-		ActorURL:          actor.ID,
-		Endpoint:          activitypub.EndpointFromActorURL(actor.ID),
-		ReplicationPolicy: "lazy",
-		IsHealthy:         true,
-	}); err != nil {
-		s.logger.Warn("recording peer after follow", "actor", actor.ID, "error", err)
-	}
-
-	writeJSON(w, map[string]string{"followed": actor.ID})
+	writeJSON(w, map[string]string{"followed": result.ActorID})
 }
 
 func (s *Server) adminAcceptFollow(w http.ResponseWriter, r *http.Request) {
-	actorURL, ok := s.decodeAndResolveTarget(w, r)
+	target, ok := decodeTarget(w, r)
 	if !ok {
 		return
 	}
 
-	ctx := r.Context()
-
-	if err := s.apFed.SendAccept(ctx, actorURL); err != nil {
-		s.logger.Error("sending accept", "actor_url", actorURL, "error", err)
+	result, err := s.fedSvc.AcceptFollow(r.Context(), target, s.cfg.Federation.AutoAccept)
+	if err != nil {
+		s.logger.Error("accepting follow", "target", target, "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	result := map[string]string{"accepted": actorURL}
-
-	if s.cfg.Federation.AutoAccept == activitypub.AutoAcceptMutual {
-		sent, err := s.apFed.SendMutualFollow(ctx, actorURL)
-		if err != nil {
-			s.logger.Warn("mutual follow-back failed", "actor", actorURL, "error", err)
-		} else if sent {
-			result["followed_back"] = actorURL
-		}
+	resp := map[string]string{"accepted": result.ActorURL}
+	if result.FollowedBack {
+		resp["followed_back"] = result.ActorURL
 	}
-
-	writeJSON(w, result)
+	writeJSON(w, resp)
 }
 
 func (s *Server) adminRejectFollow(w http.ResponseWriter, r *http.Request) {
-	actorURL, ok := s.decodeAndResolveTarget(w, r)
+	target, ok := decodeTarget(w, r)
 	if !ok {
 		return
 	}
 
-	if err := s.apFed.SendReject(r.Context(), actorURL); err != nil {
-		s.logger.Error("sending reject", "actor_url", actorURL, "error", err)
+	actorURL, err := s.fedSvc.RejectFollow(r.Context(), target)
+	if err != nil {
+		s.logger.Error("rejecting follow", "target", target, "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -235,29 +132,32 @@ func (s *Server) adminRejectFollow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminRemoveFollow(w http.ResponseWriter, r *http.Request) {
-	actorURL, ok := s.decodeAndResolveTarget(w, r)
+	target, ok := decodeTarget(w, r)
 	if !ok {
 		return
 	}
 
-	ctx := r.Context()
-
-	if err := s.apFed.SendUndo(ctx, actorURL); err != nil {
-		s.logger.Warn("failed to send Undo to peer", "actor", actorURL, "error", err)
-	}
-
-	// Clean up both inbound follow (if they followed us back) and outgoing follow record.
-	errFollow := s.db.RemoveFollow(ctx, actorURL)
-	errOutgoing := s.db.RemoveOutgoingFollow(ctx, actorURL)
-
-	// If neither table had a record, report the error.
-	if errFollow != nil && errOutgoing != nil {
-		s.logger.Error("removing follow", "actor_url", actorURL, "error_follow", errFollow, "error_outgoing", errOutgoing)
+	actorURL, err := s.fedSvc.RemoveFollow(r.Context(), target)
+	if err != nil {
+		s.logger.Error("removing follow", "target", target, "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
 	writeJSON(w, map[string]string{"removed": actorURL})
+}
+
+// classifyError maps service errors to HTTP status codes.
+// Errors from resolving or fetching remote actors are gateway errors;
+// everything else is an internal error.
+func classifyError(err error) int {
+	msg := err.Error()
+	for _, prefix := range []string{"resolving target:", "fetching actor:", "delivering follow:"} {
+		if strings.HasPrefix(msg, prefix) {
+			return http.StatusBadGateway
+		}
+	}
+	return http.StatusInternalServerError
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

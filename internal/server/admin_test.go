@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/activitypub"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/federation"
 )
 
 const testToken = "test-token"
@@ -22,7 +23,7 @@ type mockAPFederator struct {
 	deliverActivityFn     func(ctx context.Context, inboxURL string, activityJSON []byte) error
 	sendAcceptFn          func(ctx context.Context, followerActorURL string) error
 	sendRejectFn          func(ctx context.Context, followerActorURL string) error
-	sendMutualFollowFn    func(ctx context.Context, actorURL string) (bool, error)
+	sendFollowFn          func(ctx context.Context, targetActorURL string) (string, error)
 }
 
 func (m *mockAPFederator) ResolveFollowTarget(ctx context.Context, input string) (string, error) {
@@ -64,17 +65,22 @@ func (m *mockAPFederator) SendUndo(_ context.Context, _ string) error {
 	return nil
 }
 
-func (m *mockAPFederator) SendMutualFollow(ctx context.Context, actorURL string) (bool, error) {
-	if m.sendMutualFollowFn != nil {
-		return m.sendMutualFollowFn(ctx, actorURL)
+func (m *mockAPFederator) SendFollow(ctx context.Context, targetActorURL string) (string, error) {
+	if m.sendFollowFn != nil {
+		return m.sendFollowFn(ctx, targetActorURL)
 	}
-	return false, nil
+	return targetActorURL, nil
 }
 
-func testServerWithMock(t *testing.T, fed apFederator) *Server {
+func testServerWithMock(t *testing.T, fed federation.Federator) *Server {
 	t.Helper()
 	s := testServer(t)
-	s.apFed = fed
+	s.fedSvc = &federation.Service{
+		Fed:      fed,
+		DB:       s.db,
+		ActorURL: s.identity.ActorURL,
+		Logger:   s.logger,
+	}
 	return s
 }
 
@@ -454,12 +460,12 @@ func TestAdminAcceptFollowMutualFollowBack(t *testing.T) {
 
 	ctx := context.Background()
 
-	var mutualFollowActor string
+	var followBackActor string
 	fed := &mockAPFederator{
 		sendAcceptFn: func(_ context.Context, _ string) error { return nil },
-		sendMutualFollowFn: func(_ context.Context, actor string) (bool, error) {
-			mutualFollowActor = actor
-			return true, nil
+		sendFollowFn: func(_ context.Context, actor string) (string, error) {
+			followBackActor = actor
+			return actor, nil
 		},
 	}
 	s := testServerWithMock(t, fed)
@@ -485,7 +491,7 @@ func TestAdminAcceptFollowMutualFollowBack(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	require.Equal(t, actorURL, result["accepted"])
 	require.Equal(t, actorURL, result["followed_back"])
-	require.Equal(t, actorURL, mutualFollowActor, "SendMutualFollow should be called with the accepted actor")
+	require.Equal(t, actorURL, followBackActor, "SendFollow should be called with the accepted actor")
 }
 
 func TestAdminAcceptFollowMutualSkipsExistingOutgoing(t *testing.T) {
@@ -494,12 +500,12 @@ func TestAdminAcceptFollowMutualSkipsExistingOutgoing(t *testing.T) {
 
 	ctx := context.Background()
 
-	mutualCalled := false
+	followCalled := false
 	fed := &mockAPFederator{
 		sendAcceptFn: func(_ context.Context, _ string) error { return nil },
-		sendMutualFollowFn: func(_ context.Context, _ string) (bool, error) {
-			mutualCalled = true
-			return false, nil
+		sendFollowFn: func(_ context.Context, _ string) (string, error) {
+			followCalled = true
+			return "", nil
 		},
 	}
 	s := testServerWithMock(t, fed)
@@ -527,7 +533,7 @@ func TestAdminAcceptFollowMutualSkipsExistingOutgoing(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	require.Equal(t, actorURL, result["accepted"])
 	require.Empty(t, result["followed_back"], "should not follow back when outgoing follow already exists")
-	require.True(t, mutualCalled, "SendMutualFollow should still be called even when outgoing follow exists")
+	require.False(t, followCalled, "SendFollow should not be called when outgoing follow already exists")
 }
 
 func TestAdminRejectFollowMissingTarget(t *testing.T) {
