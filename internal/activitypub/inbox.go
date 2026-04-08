@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,12 +29,18 @@ type ActorInvalidator interface {
 	Invalidate(actorURL string)
 }
 
+// ActivityEnqueuer pushes validated activities for async processing.
+type ActivityEnqueuer interface {
+	Enqueue(task InboxTask) bool
+}
+
 type InboxHandler struct {
 	identity       *Identity
 	db             *database.DB
 	blobReplicator BlobReplicator
 	actorCache     ActorInvalidator
 	enqueue        EnqueueFunc
+	worker         ActivityEnqueuer
 
 	maxManifestSize int64
 	maxBlobSize     int64
@@ -51,6 +56,12 @@ type InboxHandler struct {
 	sigCache       *SignatureCache
 
 	logger *slog.Logger
+}
+
+// InboxTask is a validated activity ready for processing.
+type InboxTask struct {
+	Activity  RawActivity
+	PubKeyPEM string
 }
 
 type InboxConfig struct {
@@ -128,6 +139,10 @@ func (h *InboxHandler) SetActorCache(c ActorInvalidator) {
 
 func (h *InboxHandler) SetEnqueueFunc(fn EnqueueFunc) {
 	h.enqueue = fn
+}
+
+func (h *InboxHandler) SetWorker(w ActivityEnqueuer) {
+	h.worker = w
 }
 
 // SetNamespaceForActor pre-populates the namespace cache for a given actor,
@@ -253,95 +268,100 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	metrics.InboxActivities.WithLabelValues(activity.Type).Inc()
 
-	switch activity.Type {
-	case ActivityFollow:
-		h.handleFollow(r.Context(), w, &activity, pubKeyPEM)
-	case ActivityAccept:
-		h.handleAccept(r.Context(), w, &activity)
-	case ActivityReject:
-		h.handleReject(r.Context(), w, &activity)
-	case ActivityUndo:
-		h.handleUndo(r.Context(), w, &activity)
-	case ActivityCreate:
-		h.handleCreate(r.Context(), w, &activity, body)
-	case ActivityUpdate:
-		h.handleUpdate(r.Context(), w, &activity, body)
-	case ActivityAnnounce:
-		h.handleAnnounce(r.Context(), w, &activity, body)
-	case ActivityDelete:
-		h.handleDelete(r.Context(), w, &activity, body)
-	default:
-		h.logger.Debug("inbox: unhandled activity type", "type", activity.Type)
+	task := InboxTask{
+		Activity:  activity,
+		PubKeyPEM: pubKeyPEM,
+	}
+
+	if h.worker != nil {
+		if !h.worker.Enqueue(task) {
+			h.logger.Warn("inbox: worker queue full", "id", activity.ID)
+			http.Error(w, "busy, retry later", http.StatusServiceUnavailable)
+			return
+		}
+		h.storeActivity(r.Context(), activity.ID, activity.Type, activity.Actor, body)
 		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	// No async worker configured, process synchronously.
+	h.storeActivity(r.Context(), activity.ID, activity.Type, activity.Actor, body)
+	if err := h.dispatch(r.Context(), task); err != nil {
+		h.logger.Warn("inbox: processing failed", "type", activity.Type, "id", activity.ID, "error", err)
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *InboxHandler) dispatch(ctx context.Context, task InboxTask) error {
+	switch task.Activity.Type {
+	case ActivityFollow:
+		return h.processFollow(ctx, &task.Activity, task.PubKeyPEM)
+	case ActivityAccept:
+		return h.processAccept(ctx, &task.Activity)
+	case ActivityReject:
+		return h.processReject(ctx, &task.Activity)
+	case ActivityUndo:
+		return h.processUndo(ctx, &task.Activity)
+	case ActivityCreate:
+		return h.processCreate(ctx, &task.Activity)
+	case ActivityUpdate:
+		return h.processUpdate(ctx, &task.Activity)
+	case ActivityAnnounce:
+		return h.processAnnounce(ctx, &task.Activity)
+	case ActivityDelete:
+		return h.processDelete(ctx, &task.Activity)
+	default:
+		h.logger.Debug("inbox: unhandled activity type", "type", task.Activity.Type)
+		return nil
 	}
 }
 
-func (h *InboxHandler) handleFollow(ctx context.Context, w http.ResponseWriter, activity *RawActivity, pubKeyPEM string) {
+func (h *InboxHandler) processFollow(ctx context.Context, activity *RawActivity, pubKeyPEM string) error {
 	target, ok := activity.Object.(string)
 	if !ok {
-		http.Error(w, "invalid Follow object", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid Follow object")
 	}
 
 	if target != h.identity.ActorURL {
-		http.Error(w, "follow target mismatch", http.StatusBadRequest)
-		return
+		return fmt.Errorf("follow target mismatch")
 	}
 
 	if activity.Actor == h.identity.ActorURL {
-		http.Error(w, "cannot follow yourself", http.StatusBadRequest)
-		return
+		return fmt.Errorf("cannot follow yourself")
 	}
 
 	actorEndpoint := EndpointFromActorURL(activity.Actor)
 	if err := h.db.AddFollowRequest(ctx, activity.Actor, pubKeyPEM, actorEndpoint); err != nil {
-		h.logger.Error("inbox: failed to store follow request", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("storing follow request: %w", err)
 	}
-
-	activityJSON, err := json.Marshal(activity)
-	if err != nil {
-		h.logger.Error("inbox: failed to marshal Follow activity", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	h.storeActivity(ctx, activity.ID, ActivityFollow, activity.Actor, activityJSON)
 
 	if h.shouldAutoAccept(ctx, activity.Actor) {
 		if err := SendAccept(ctx, h.identity, h.db, activity.Actor, h.enqueue); err != nil {
 			h.logger.Warn("inbox: auto-accept failed, request remains pending", "from", activity.Actor, "error", err)
 		} else {
 			h.logger.Info("inbox: auto-accepted follow request", "from", activity.Actor)
-			w.WriteHeader(http.StatusAccepted)
-			return
+			return nil
 		}
 	}
 
 	h.logger.Info("inbox: received follow request (pending operator approval)", "from", activity.Actor)
-	w.WriteHeader(http.StatusAccepted)
+	return nil
 }
 
-func (h *InboxHandler) handleAccept(ctx context.Context, w http.ResponseWriter, activity *RawActivity) {
+func (h *InboxHandler) processAccept(ctx context.Context, activity *RawActivity) error {
 	followType, ok := extractObjectType(activity.Object)
 	if !ok {
-		http.Error(w, "invalid Accept object", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid Accept object")
 	}
 
 	if followType != ActivityFollow {
-		w.WriteHeader(http.StatusAccepted)
-		return
+		return nil
 	}
 
-	// Verify we actually have a pending outgoing follow to this actor before
-	// accepting. Without this check, a spurious Accept(Follow) from any actor
-	// with a valid signature would create an unauthorized follow relationship.
 	outgoing, err := h.db.GetOutgoingFollow(ctx, activity.Actor)
 	if err != nil || outgoing == nil || outgoing.Status != "pending" {
 		h.logger.Warn("inbox: Accept(Follow) from actor we have no pending follow to", "actor", activity.Actor)
-		w.WriteHeader(http.StatusAccepted) // silent accept per AP convention
-		return
+		return nil
 	}
 
 	if err := h.db.AcceptOutgoingFollow(ctx, activity.Actor); err != nil {
@@ -350,8 +370,6 @@ func (h *InboxHandler) handleAccept(ctx context.Context, w http.ResponseWriter, 
 		h.logger.Info("inbox: outgoing follow accepted", "by", activity.Actor)
 	}
 
-	// In mutual mode, auto-accept any pending inbound follow request from this
-	// actor now that our outgoing follow has been accepted.
 	if h.autoAccept == AutoAcceptMutual {
 		fr, err := h.db.GetFollowRequest(ctx, activity.Actor)
 		if err == nil && fr != nil {
@@ -363,80 +381,44 @@ func (h *InboxHandler) handleAccept(ctx context.Context, w http.ResponseWriter, 
 		}
 	}
 
-	activityJSON, err := json.Marshal(activity)
-	if err != nil {
-		h.logger.Error("inbox: failed to marshal Accept activity", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	h.storeActivity(ctx, activity.ID, ActivityAccept, activity.Actor, activityJSON)
-
-	w.WriteHeader(http.StatusAccepted)
+	return nil
 }
 
-func (h *InboxHandler) handleReject(ctx context.Context, w http.ResponseWriter, activity *RawActivity) {
+func (h *InboxHandler) processReject(ctx context.Context, activity *RawActivity) error {
 	followType, ok := extractObjectType(activity.Object)
-	if !ok {
-		w.WriteHeader(http.StatusAccepted)
-		return
+	if !ok || followType != ActivityFollow {
+		return nil
 	}
 
-	if followType != ActivityFollow {
-		w.WriteHeader(http.StatusAccepted)
-		return
-	}
-
-	// Peer rejected our outgoing follow.
 	if err := h.db.RejectOutgoingFollow(ctx, activity.Actor); err != nil {
 		h.logger.Warn("inbox: failed to record outgoing follow rejection", "by", activity.Actor, "error", err)
 	}
 
-	// Also reject any pending inbound request from them (best-effort, no-op if none exists).
 	if err := h.db.RejectFollowRequest(ctx, activity.Actor); err != nil {
 		h.logger.Debug("inbox: no pending inbound follow request to reject", "actor", activity.Actor, "error", err)
 	}
 
-	activityJSON, err := json.Marshal(activity)
-	if err != nil {
-		h.logger.Error("inbox: failed to marshal Reject activity", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	h.storeActivity(ctx, activity.ID, ActivityReject, activity.Actor, activityJSON)
-
 	h.logger.Info("inbox: follow rejected", "by", activity.Actor)
-	w.WriteHeader(http.StatusAccepted)
+	return nil
 }
 
-func (h *InboxHandler) handleUndo(ctx context.Context, w http.ResponseWriter, activity *RawActivity) {
+func (h *InboxHandler) processUndo(ctx context.Context, activity *RawActivity) error {
 	objectMap, ok := activity.Object.(map[string]any)
 	if !ok {
-		w.WriteHeader(http.StatusAccepted)
-		return
+		return nil
 	}
 
 	undoType, _ := objectMap["type"].(string)
 	if undoType != ActivityFollow {
-		w.WriteHeader(http.StatusAccepted)
-		return
+		return nil
 	}
 
 	if err := h.db.RemoveFollow(ctx, activity.Actor); err != nil {
-		// Not-found is expected when the follow was never accepted or already undone.
-		// AP convention: acknowledge the Undo regardless.
 		h.logger.Debug("inbox: Undo(Follow) no-op", "actor", activity.Actor, "error", err)
 	}
 
-	activityJSON, err := json.Marshal(activity)
-	if err != nil {
-		h.logger.Error("inbox: failed to marshal Undo activity", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	h.storeActivity(ctx, activity.ID, ActivityUndo, activity.Actor, activityJSON)
-
 	h.logger.Info("inbox: follow undone", "by", activity.Actor)
-	w.WriteHeader(http.StatusAccepted)
+	return nil
 }
 
 func (h *InboxHandler) fetchActorPublicKey(ctx context.Context, actorURL string) (string, error) {
@@ -505,265 +487,201 @@ func normaliseActorURL(raw string) (string, error) {
 	return strings.TrimRight(u.String(), "/"), nil
 }
 
-func (h *InboxHandler) handleCreate(ctx context.Context, w http.ResponseWriter, activity *RawActivity, rawBody []byte) {
+func (h *InboxHandler) processCreate(ctx context.Context, activity *RawActivity) error {
 	if !h.isFollowed(ctx, activity.Actor) {
-		h.logger.Warn("inbox: Create from non-followed actor", "actor", activity.Actor)
-		http.Error(w, "not following actor", http.StatusForbidden)
-		return
+		return fmt.Errorf("not following actor %s", activity.Actor)
 	}
 
 	objectMap, ok := activity.Object.(map[string]any)
 	if !ok {
-		http.Error(w, "invalid Create object", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid Create object")
 	}
 
-	rw := &statusRecorder{ResponseWriter: w}
 	objType, _ := objectMap["type"].(string)
 	switch objType {
 	case "OCIManifest":
-		h.ingestManifest(ctx, rw, objectMap, activity.Actor)
+		return h.ingestManifest(ctx, objectMap, activity.Actor)
 	default:
 		h.logger.Debug("inbox: unhandled Create object type", "type", objType)
-		rw.WriteHeader(http.StatusAccepted)
-	}
-
-	if rw.succeeded() {
-		h.storeActivity(ctx, activity.ID, ActivityCreate, activity.Actor, rawBody)
+		return nil
 	}
 }
 
-func (h *InboxHandler) handleUpdate(ctx context.Context, w http.ResponseWriter, activity *RawActivity, rawBody []byte) {
+func (h *InboxHandler) processUpdate(ctx context.Context, activity *RawActivity) error {
 	if !h.isFollowed(ctx, activity.Actor) {
-		http.Error(w, "not following actor", http.StatusForbidden)
-		return
+		return fmt.Errorf("not following actor %s", activity.Actor)
 	}
 
 	objectMap, ok := activity.Object.(map[string]any)
 	if !ok {
-		http.Error(w, "invalid Update object", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid Update object")
 	}
 
-	rw := &statusRecorder{ResponseWriter: w}
 	objType, _ := objectMap["type"].(string)
 	switch objType {
 	case "OCITag":
-		h.ingestTag(ctx, rw, objectMap, activity.Actor)
+		return h.ingestTag(ctx, objectMap, activity.Actor)
 	case "Actor", "Person", "Service", "Application":
 		if h.actorCache != nil {
 			h.actorCache.Invalidate(activity.Actor)
 		}
-		rw.WriteHeader(http.StatusAccepted)
+		return nil
 	default:
 		h.logger.Debug("inbox: unhandled Update object type", "type", objType)
-		rw.WriteHeader(http.StatusAccepted)
-	}
-
-	// storeActivity is called unconditionally below for all non-error responses;
-	// the Actor invalidation case calls rw.WriteHeader directly but still reaches it.
-	if rw.succeeded() {
-		h.storeActivity(ctx, activity.ID, ActivityUpdate, activity.Actor, rawBody)
+		return nil
 	}
 }
 
-func (h *InboxHandler) handleAnnounce(ctx context.Context, w http.ResponseWriter, activity *RawActivity, rawBody []byte) {
+func (h *InboxHandler) processAnnounce(ctx context.Context, activity *RawActivity) error {
 	if !h.isFollowed(ctx, activity.Actor) {
-		http.Error(w, "not following actor", http.StatusForbidden)
-		return
+		return fmt.Errorf("not following actor %s", activity.Actor)
 	}
 
 	objectMap, ok := activity.Object.(map[string]any)
 	if !ok {
-		w.WriteHeader(http.StatusAccepted)
-		return
+		return nil
 	}
 
-	rw := &statusRecorder{ResponseWriter: w}
 	objType, _ := objectMap["type"].(string)
 	switch objType {
 	case "OCIBlob":
-		h.ingestBlobRef(ctx, rw, objectMap, activity.Actor)
+		return h.ingestBlobRef(ctx, objectMap, activity.Actor)
 	default:
 		h.logger.Debug("inbox: unhandled Announce object type", "type", objType)
-		rw.WriteHeader(http.StatusAccepted)
-	}
-
-	if rw.succeeded() {
-		h.storeActivity(ctx, activity.ID, ActivityAnnounce, activity.Actor, rawBody)
+		return nil
 	}
 }
 
-func (h *InboxHandler) handleDelete(ctx context.Context, w http.ResponseWriter, activity *RawActivity, rawBody []byte) {
+func (h *InboxHandler) processDelete(ctx context.Context, activity *RawActivity) error {
 	if !h.isFollowed(ctx, activity.Actor) {
-		http.Error(w, "not following actor", http.StatusForbidden)
-		return
+		return fmt.Errorf("not following actor %s", activity.Actor)
 	}
 
 	objectMap, ok := activity.Object.(map[string]any)
 	if !ok {
-		// Object might be just the ID string of the deleted object.
 		h.logger.Info("inbox: received Delete (id-only)", "from", activity.Actor)
-		w.WriteHeader(http.StatusAccepted)
-		return
+		return nil
 	}
 
-	rw := &statusRecorder{ResponseWriter: w}
 	objType, _ := objectMap["type"].(string)
 	switch objType {
 	case "OCIManifest":
-		h.deleteManifest(ctx, rw, objectMap, activity.Actor)
+		return h.deleteManifest(ctx, objectMap, activity.Actor)
 	case "OCITag":
-		h.deleteTag(ctx, rw, objectMap, activity.Actor)
+		return h.deleteTag(ctx, objectMap, activity.Actor)
 	default:
 		h.logger.Debug("inbox: unhandled Delete object type", "type", objType)
-		rw.WriteHeader(http.StatusAccepted)
-	}
-
-	if rw.succeeded() {
-		h.storeActivity(ctx, activity.ID, ActivityDelete, activity.Actor, rawBody)
+		return nil
 	}
 }
 
-func (h *InboxHandler) deleteManifest(ctx context.Context, w http.ResponseWriter, obj map[string]any, actorURL string) {
+func (h *InboxHandler) requireRepoOwner(ctx context.Context, repo, actorURL string) (*database.Repository, error) {
+	repoObj, err := h.db.GetRepository(ctx, repo)
+	if err != nil || repoObj == nil {
+		return nil, nil // repo doesn't exist yet, not an error
+	}
+	isOwner, err := h.db.IsRepositoryOwner(ctx, repoObj.ID, actorURL)
+	if err != nil || !isOwner {
+		return nil, fmt.Errorf("not authorized for repository %s", repo)
+	}
+	return repoObj, nil
+}
+
+func (h *InboxHandler) deleteManifest(ctx context.Context, obj map[string]any, actorURL string) error {
 	repo, _ := obj["ociRepository"].(string)
 	digest, _ := obj["ociDigest"].(string)
 
 	if repo == "" || digest == "" {
-		http.Error(w, "missing ociRepository or ociDigest", http.StatusBadRequest)
-		return
+		return fmt.Errorf("missing ociRepository or ociDigest")
 	}
 
-	repoObj, err := h.db.GetRepository(ctx, repo)
-	if err != nil || repoObj == nil {
-		w.WriteHeader(http.StatusAccepted)
-		return
+	repoObj, err := h.requireRepoOwner(ctx, repo, actorURL)
+	if err != nil {
+		return err
 	}
-
-	isOwner, err := h.db.IsRepositoryOwner(ctx, repoObj.ID, actorURL)
-	if err != nil || !isOwner {
-		h.logger.Warn("inbox: rejected Delete manifest from non-owner", "repo", repo, "actor", actorURL)
-		http.Error(w, "not authorized for repository", http.StatusForbidden)
-		return
+	if repoObj == nil {
+		return nil
 	}
 
 	if err := h.db.DeleteManifest(ctx, repoObj.ID, digest); err != nil {
-		h.logger.Error("inbox: failed to delete manifest", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("deleting manifest: %w", err)
 	}
 
 	h.logger.Info("inbox: deleted manifest", "repo", repo, "digest", digest, "from", actorURL)
-	w.WriteHeader(http.StatusAccepted)
+	return nil
 }
 
-func (h *InboxHandler) deleteTag(ctx context.Context, w http.ResponseWriter, obj map[string]any, actorURL string) {
+func (h *InboxHandler) deleteTag(ctx context.Context, obj map[string]any, actorURL string) error {
 	repo, _ := obj["ociRepository"].(string)
 	tag, _ := obj["ociTag"].(string)
 
 	if repo == "" || tag == "" {
-		http.Error(w, "missing ociRepository or ociTag", http.StatusBadRequest)
-		return
+		return fmt.Errorf("missing ociRepository or ociTag")
 	}
 
-	repoObj, err := h.db.GetRepository(ctx, repo)
-	if err != nil || repoObj == nil {
-		w.WriteHeader(http.StatusAccepted)
-		return
+	repoObj, err := h.requireRepoOwner(ctx, repo, actorURL)
+	if err != nil {
+		return err
 	}
-
-	isOwner, err := h.db.IsRepositoryOwner(ctx, repoObj.ID, actorURL)
-	if err != nil || !isOwner {
-		h.logger.Warn("inbox: rejected Delete tag from non-owner", "repo", repo, "actor", actorURL)
-		http.Error(w, "not authorized for repository", http.StatusForbidden)
-		return
+	if repoObj == nil {
+		return nil
 	}
 
 	if err := h.db.DeleteTag(ctx, repoObj.ID, tag); err != nil {
-		if errors.Is(err, database.ErrTagImmutable) {
-			h.logger.Warn("inbox: rejected delete of immutable tag", "repo", repo, "tag", tag, "actor", actorURL)
-			http.Error(w, "tag is immutable", http.StatusForbidden)
-			return
-		}
-		h.logger.Error("inbox: failed to delete tag", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("deleting tag: %w", err)
 	}
 
 	h.logger.Info("inbox: deleted tag", "repo", repo, "tag", tag, "from", actorURL)
-	w.WriteHeader(http.StatusAccepted)
+	return nil
 }
 
-func (h *InboxHandler) ingestManifest(ctx context.Context, w http.ResponseWriter, obj map[string]any, actorURL string) {
+func (h *InboxHandler) ingestManifest(ctx context.Context, obj map[string]any, actorURL string) error {
 	repo, _ := obj["ociRepository"].(string)
 	digest, _ := obj["ociDigest"].(string)
 	mediaType, _ := obj["ociMediaType"].(string)
 	size, _ := obj["ociSize"].(float64)
 
 	if repo == "" || digest == "" {
-		http.Error(w, "missing ociRepository or ociDigest", http.StatusBadRequest)
-		return
+		return fmt.Errorf("missing ociRepository or ociDigest")
 	}
-
 	if err := validate.RepoName(repo); err != nil {
-		http.Error(w, "invalid repository name", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid repository name: %w", err)
 	}
-
 	if err := validate.Digest(digest); err != nil {
-		http.Error(w, "invalid digest", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid digest: %w", err)
 	}
-
 	if mediaType == "" || !validate.MediaType(mediaType) {
-		http.Error(w, "invalid or missing ociMediaType", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid or missing ociMediaType")
 	}
-
 	if size <= 0 || size > float64(h.maxManifestSize) {
-		http.Error(w, "invalid manifest size", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid manifest size")
 	}
 
-	// Enforce that the repository name is scoped to the sender's namespace.
-	// The namespace comes from the actor's ociNamespace field (split-domain),
-	// falling back to the actor URL hostname for older nodes.
 	senderNS, err := h.fetchSenderNamespace(ctx, actorURL)
 	if err != nil {
-		h.logger.Warn("inbox: cannot derive namespace from actor", "actor", actorURL, "error", err)
-		http.Error(w, "invalid actor URL", http.StatusBadRequest)
-		return
+		return fmt.Errorf("cannot derive namespace from actor: %w", err)
 	}
 	if !repoOwnedBySender(repo, senderNS) {
-		h.logger.Warn("inbox: repo name does not match sender namespace",
-			"repo", repo, "sender_namespace", senderNS, "actor", actorURL)
-		http.Error(w, "repository name must be scoped to sender's domain", http.StatusForbidden)
-		return
+		return fmt.Errorf("repository %s not scoped to sender namespace %s", repo, senderNS)
 	}
 
 	repoObj, err := h.db.GetRepository(ctx, repo)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("looking up repository: %w", err)
 	}
 
 	if repoObj != nil {
 		isOwner, err := h.db.IsRepositoryOwner(ctx, repoObj.ID, actorURL)
 		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
+			return fmt.Errorf("checking repo ownership: %w", err)
 		}
 		if !isOwner {
-			h.logger.Warn("inbox: rejected manifest from non-owner",
-				"repo", repo, "actor", actorURL, "owner", repoObj.OwnerID)
-			http.Error(w, "not authorized for repository", http.StatusForbidden)
-			return
+			return fmt.Errorf("not authorized for repository %s", repo)
 		}
 	} else {
 		repoObj, err = h.db.GetOrCreateRepository(ctx, repo, actorURL)
 		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
+			return fmt.Errorf("creating repository: %w", err)
 		}
 	}
 
@@ -780,16 +698,12 @@ func (h *InboxHandler) ingestManifest(ctx context.Context, w http.ResponseWriter
 			h.logger.Warn("inbox: invalid manifest content encoding", "error", err)
 		} else {
 			if int64(len(decoded)) > h.maxManifestSize {
-				http.Error(w, "manifest content exceeds size limit", http.StatusBadRequest)
-				return
+				return fmt.Errorf("manifest content exceeds size limit")
 			}
 			h256 := sha256.Sum256(decoded)
 			computed := "sha256:" + hex.EncodeToString(h256[:])
 			if computed != digest {
-				h.logger.Warn("inbox: manifest content digest mismatch",
-					"claimed", digest, "computed", computed, "actor", actorURL)
-				http.Error(w, "manifest content digest mismatch", http.StatusBadRequest)
-				return
+				return fmt.Errorf("manifest content digest mismatch: claimed %s, computed %s", digest, computed)
 			}
 			content = decoded
 		}
@@ -806,13 +720,11 @@ func (h *InboxHandler) ingestManifest(ctx context.Context, w http.ResponseWriter
 	}
 
 	if err := h.db.PutManifest(ctx, m); err != nil {
-		h.logger.Error("inbox: failed to store manifest", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("storing manifest: %w", err)
 	}
 
 	h.logger.Info("inbox: ingested manifest", "repo", repo, "digest", digest, "from", actorURL)
-	w.WriteHeader(http.StatusAccepted)
+	return nil
 }
 
 func senderDomainFromActorURL(actorURL string) (string, error) {
@@ -868,114 +780,82 @@ func validNamespaceForHost(ns, actorHost string) bool {
 	return matchesDomain(actorHost, ns)
 }
 
-func (h *InboxHandler) ingestTag(ctx context.Context, w http.ResponseWriter, obj map[string]any, actorURL string) {
+func (h *InboxHandler) ingestTag(ctx context.Context, obj map[string]any, actorURL string) error {
 	repo, _ := obj["ociRepository"].(string)
 	tag, _ := obj["ociTag"].(string)
 	digest, _ := obj["ociDigest"].(string)
 
 	if repo == "" || tag == "" || digest == "" {
-		http.Error(w, "missing ociRepository, ociTag, or ociDigest", http.StatusBadRequest)
-		return
+		return fmt.Errorf("missing ociRepository, ociTag, or ociDigest")
 	}
-
 	if err := validate.RepoName(repo); err != nil {
-		http.Error(w, "invalid repository name", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid repository name: %w", err)
 	}
-
 	if err := validate.Tag(tag); err != nil {
-		http.Error(w, "invalid tag name", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid tag name: %w", err)
 	}
-
 	if err := validate.Digest(digest); err != nil {
-		http.Error(w, "invalid digest", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid digest: %w", err)
 	}
 
-	repoObj, err := h.db.GetRepository(ctx, repo)
-	if err != nil || repoObj == nil {
-		w.WriteHeader(http.StatusAccepted) // ignore tag for unknown repo
-		return
+	repoObj, err := h.requireRepoOwner(ctx, repo, actorURL)
+	if err != nil {
+		return err
 	}
-
-	isOwner, err := h.db.IsRepositoryOwner(ctx, repoObj.ID, actorURL)
-	if err != nil || !isOwner {
-		h.logger.Warn("inbox: rejected tag from non-owner", "repo", repo, "actor", actorURL)
-		http.Error(w, "not authorized for repository", http.StatusForbidden)
-		return
+	if repoObj == nil {
+		return nil
 	}
 
 	manifest, err := h.db.GetManifestByDigest(ctx, repoObj.ID, digest)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("looking up manifest: %w", err)
 	}
 	if manifest == nil {
-		h.logger.Warn("inbox: rejected tag pointing to unknown manifest", "repo", repo, "digest", digest, "actor", actorURL)
-		http.Error(w, "manifest not found", http.StatusBadRequest)
-		return
+		return fmt.Errorf("manifest %s not found in repo %s", digest, repo)
 	}
 
 	if err := h.db.PutTag(ctx, repoObj.ID, tag, digest); err != nil {
-		h.logger.Error("inbox: failed to store tag", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("storing tag: %w", err)
 	}
 
 	h.logger.Info("inbox: ingested tag", "repo", repo, "tag", tag, "from", actorURL)
-	w.WriteHeader(http.StatusAccepted)
+	return nil
 }
 
-func (h *InboxHandler) ingestBlobRef(ctx context.Context, w http.ResponseWriter, obj map[string]any, actorURL string) {
+func (h *InboxHandler) ingestBlobRef(ctx context.Context, obj map[string]any, actorURL string) error {
 	digest, _ := obj["ociDigest"].(string)
 	size, _ := obj["ociSize"].(float64)
 	endpoint, _ := obj["ociEndpoint"].(string)
 
 	if digest == "" || endpoint == "" {
-		http.Error(w, "missing ociDigest or ociEndpoint", http.StatusBadRequest)
-		return
+		return fmt.Errorf("missing ociDigest or ociEndpoint")
 	}
-
 	if err := validate.Digest(digest); err != nil {
-		http.Error(w, "invalid digest", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid digest: %w", err)
 	}
-
 	if err := validate.PeerEndpoint(endpoint); err != nil {
-		http.Error(w, "invalid peer endpoint", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid peer endpoint: %w", err)
 	}
 
-	// Endpoint must match the sender's domain.
 	senderDomain, err := senderDomainFromActorURL(actorURL)
 	if err != nil {
-		http.Error(w, "invalid actor URL", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid actor URL: %w", err)
 	}
 	endpointURL, err := url.Parse(endpoint)
 	if err != nil || strings.ToLower(endpointURL.Hostname()) != senderDomain {
-		h.logger.Warn("inbox: blob endpoint does not match sender domain",
-			"endpoint", endpoint, "sender_domain", senderDomain, "actor", actorURL)
-		http.Error(w, "endpoint must match sender domain", http.StatusForbidden)
-		return
+		return fmt.Errorf("endpoint %s does not match sender domain %s", endpoint, senderDomain)
 	}
 
 	if size < 0 || size > float64(h.maxBlobSize) {
-		http.Error(w, "invalid blob size", http.StatusBadRequest)
-		return
+		return fmt.Errorf("invalid blob size")
 	}
 
 	if err := h.db.PutPeerBlob(ctx, actorURL, digest, endpoint); err != nil {
-		h.logger.Error("inbox: failed to store peer blob", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("storing peer blob: %w", err)
 	}
 
 	if err := h.db.PutBlob(ctx, digest, int64(size), nil, false); err != nil {
-		h.logger.Error("inbox: failed to store blob metadata", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("storing blob metadata: %w", err)
 	}
 
 	if h.blobReplicator != nil {
@@ -983,7 +863,7 @@ func (h *InboxHandler) ingestBlobRef(ctx context.Context, w http.ResponseWriter,
 	}
 
 	h.logger.Debug("inbox: ingested blob ref", "digest", digest, "from", actorURL)
-	w.WriteHeader(http.StatusAccepted)
+	return nil
 }
 
 // extractObjectType returns the "type" field from the activity object.
@@ -1005,20 +885,6 @@ func extractObjectType(obj any) (string, bool) {
 // matchesDomain reports whether host equals domain or is a subdomain of it.
 func matchesDomain(host, domain string) bool {
 	return host == domain || strings.HasSuffix(host, "."+domain)
-}
-
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *statusRecorder) WriteHeader(code int) {
-	r.status = code
-	r.ResponseWriter.WriteHeader(code)
-}
-
-func (r *statusRecorder) succeeded() bool {
-	return r.status == 0 || r.status < 400
 }
 
 func (h *InboxHandler) storeActivity(ctx context.Context, activityID, activityType, actorURL string, body []byte) {

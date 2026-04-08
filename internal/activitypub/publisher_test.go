@@ -17,7 +17,8 @@ func TestPublishManifestCreatesActivity(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
-	pub := NewAPPublisher(context.Background(), id, db, "https://test.example.com", discardLogger())
+	pub := NewAPPublisher(id, db, "https://test.example.com", discardLogger())
+	t.Cleanup(pub.Stop)
 
 	ctx := context.Background()
 	manifest := []byte(`{"schemaVersion":2}`)
@@ -46,7 +47,8 @@ func TestPublishTagCreatesUpdateActivity(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
-	pub := NewAPPublisher(context.Background(), id, db, "https://test.example.com", discardLogger())
+	pub := NewAPPublisher(id, db, "https://test.example.com", discardLogger())
+	t.Cleanup(pub.Stop)
 
 	ctx := context.Background()
 	err = pub.PublishTag(ctx, "test/repo", "v1.0", "sha256:abc123")
@@ -65,7 +67,8 @@ func TestPublishBlobRefCreatesAnnounceActivity(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
-	pub := NewAPPublisher(context.Background(), id, db, "https://test.example.com", discardLogger())
+	pub := NewAPPublisher(id, db, "https://test.example.com", discardLogger())
+	t.Cleanup(pub.Stop)
 
 	ctx := context.Background()
 	err = pub.PublishBlobRef(ctx, "sha256:blob123", 4096)

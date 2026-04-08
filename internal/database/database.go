@@ -98,6 +98,7 @@ func (db *DB) Ping() error {
 	return db.bun.Ping()
 }
 
+// QueryContext exposes raw SQL — used by tests for assertions.
 func (db *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	return db.bun.QueryContext(ctx, query, args...)
 }

@@ -59,7 +59,8 @@ func newTestIdentity(t *testing.T) *Identity {
 func TestActorCacheHit(t *testing.T) {
 	srv, fetchCount := newTestActorServer(t)
 	identity := newTestIdentity(t)
-	cache := NewActorCache(context.Background(), identity)
+	cache := NewActorCache(identity)
+	t.Cleanup(cache.Stop)
 
 	actorURL := srv.URL + "/ap/actor"
 	ctx := context.Background()
@@ -78,7 +79,8 @@ func TestActorCacheHit(t *testing.T) {
 func TestActorCacheInvalidate(t *testing.T) {
 	srv, fetchCount := newTestActorServer(t)
 	identity := newTestIdentity(t)
-	cache := NewActorCache(context.Background(), identity)
+	cache := NewActorCache(identity)
+	t.Cleanup(cache.Stop)
 
 	actorURL := srv.URL + "/ap/actor"
 	ctx := context.Background()
@@ -97,7 +99,8 @@ func TestActorCacheInvalidate(t *testing.T) {
 func TestActorCacheConcurrentAccess(t *testing.T) {
 	srv, _ := newTestActorServer(t)
 	identity := newTestIdentity(t)
-	cache := NewActorCache(context.Background(), identity)
+	cache := NewActorCache(identity)
+	t.Cleanup(cache.Stop)
 
 	actorURL := srv.URL + "/ap/actor"
 	ctx := context.Background()
@@ -143,6 +146,7 @@ func TestActorCacheEvictsExpiredEntries(t *testing.T) {
 		identity: identity,
 		cache:    c,
 	}
+	t.Cleanup(cache.Stop)
 
 	actorURL := srv.URL + "/ap/actor"
 	ctx := context.Background()

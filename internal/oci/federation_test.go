@@ -34,7 +34,8 @@ func testRegistryWithFederation(t *testing.T) (*oci.Registry, *database.DB) {
 
 	reg, err := oci.NewRegistry(db, blobs, identity.ActorURL, "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
 	require.NoError(t, err)
-	pub := activitypub.NewAPPublisher(context.Background(), identity, db, "https://test.example.com", nopLog())
+	pub := activitypub.NewAPPublisher(identity, db, "https://test.example.com", nopLog())
+	t.Cleanup(pub.Stop)
 	reg.SetPublisher(pub)
 
 	return reg, db

@@ -10,7 +10,7 @@ import (
 )
 
 func TestNodeInfoWellKnown(t *testing.T) {
-	handler := NewNodeInfoHandler("test.example.com", "0.1.0", nil)
+	handler := NewNodeInfoHandler("test.example.com", "0.1.0")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/.well-known/nodeinfo", nil)
@@ -25,7 +25,7 @@ func TestNodeInfoWellKnown(t *testing.T) {
 }
 
 func TestNodeInfoDocument(t *testing.T) {
-	handler := NewNodeInfoHandler("test.example.com", "0.1.0", nil)
+	handler := NewNodeInfoHandler("test.example.com", "0.1.0")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/ap/nodeinfo/2.1", nil)
@@ -42,24 +42,8 @@ func TestNodeInfoDocument(t *testing.T) {
 	require.False(t, info.OpenRegistrations, "expected openRegistrations=false")
 }
 
-type mockStats struct{ count int }
-
-func (m *mockStats) ManifestCount() int { return m.count }
-
-func TestNodeInfoWithStats(t *testing.T) {
-	handler := NewNodeInfoHandler("test.example.com", "0.1.0", &mockStats{count: 42})
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/ap/nodeinfo/2.1", nil)
-	handler.ServeNodeInfo(rec, req)
-
-	var info NodeInfo
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&info))
-	require.Equal(t, 42, info.Usage.LocalPosts)
-}
-
 func TestNodeInfoRejectsPost(t *testing.T) {
-	handler := NewNodeInfoHandler("test.example.com", "0.1.0", nil)
+	handler := NewNodeInfoHandler("test.example.com", "0.1.0")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/ap/nodeinfo/2.1", nil)

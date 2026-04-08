@@ -37,16 +37,6 @@ func (db *DB) GetUploadSession(ctx context.Context, uuid string) (*UploadSession
 	return s, nil
 }
 
-func (db *DB) UpdateUploadProgress(ctx context.Context, uuid string, bytesReceived int64) error {
-	_, err := db.bun.NewRaw(
-		"UPDATE upload_sessions SET bytes_received = ? WHERE uuid = ?",
-		bytesReceived, uuid).Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("updating upload progress: %w", err)
-	}
-	return nil
-}
-
 func (db *DB) DeleteUploadSession(ctx context.Context, uuid string) error {
 	_, err := db.bun.NewRaw(
 		"DELETE FROM upload_sessions WHERE uuid = ?", uuid).Exec(ctx)

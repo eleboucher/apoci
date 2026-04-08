@@ -41,21 +41,15 @@ type NodeInfoUsers struct {
 	ActiveHalfyear int `json:"activeHalfyear"`
 }
 
-type NodeInfoStats interface {
-	ManifestCount() int
-}
-
 type NodeInfoHandler struct {
 	domain  string
 	version string
-	stats   NodeInfoStats
 }
 
-func NewNodeInfoHandler(domain, version string, stats NodeInfoStats) *NodeInfoHandler {
+func NewNodeInfoHandler(domain, version string) *NodeInfoHandler {
 	return &NodeInfoHandler{
 		domain:  domain,
 		version: version,
-		stats:   stats,
 	}
 }
 
@@ -84,11 +78,6 @@ func (h *NodeInfoHandler) ServeNodeInfo(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	localPosts := 0
-	if h.stats != nil {
-		localPosts = h.stats.ManifestCount()
-	}
-
 	info := NodeInfo{
 		Version: "2.1",
 		Software: NodeInfoSoftware{
@@ -103,7 +92,7 @@ func (h *NodeInfoHandler) ServeNodeInfo(w http.ResponseWriter, r *http.Request) 
 				ActiveMonth:    1,
 				ActiveHalfyear: 1,
 			},
-			LocalPosts: localPosts,
+			LocalPosts: 0,
 		},
 		Metadata: map[string]any{
 			"nodeDescription": "Federated OCI artifact registry",

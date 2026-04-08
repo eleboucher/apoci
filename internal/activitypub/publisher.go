@@ -40,11 +40,11 @@ func (p *APPublisher) SetNotifyFunc(fn func()) {
 	p.onEnqueue = fn
 }
 
-func NewAPPublisher(ctx context.Context, identity *Identity, db *database.DB, endpoint string, logger *slog.Logger) *APPublisher {
+func NewAPPublisher(identity *Identity, db *database.DB, endpoint string, logger *slog.Logger) *APPublisher {
 	return &APPublisher{
 		identity:   identity,
 		db:         db,
-		actorCache: NewActorCache(ctx, identity),
+		actorCache: NewActorCache(identity),
 		endpoint:   endpoint,
 		logger:     logger,
 	}

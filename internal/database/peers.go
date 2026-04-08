@@ -46,18 +46,6 @@ func (db *DB) ListAllPeers(ctx context.Context) ([]Peer, error) {
 	return peers, nil
 }
 
-func (db *DB) ListHealthyPeers(ctx context.Context) ([]Peer, error) {
-	var peers []Peer
-	err := db.bun.NewSelect().Model(&peers).
-		Where("is_healthy = true").
-		OrderExpr("last_seen_at DESC").
-		Scan(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("listing healthy peers: %w", err)
-	}
-	return peers, nil
-}
-
 func (db *DB) SetPeerHealth(ctx context.Context, actorURL string, healthy bool) error {
 	_, err := db.bun.NewRaw(
 		"UPDATE peers SET is_healthy = ?, last_seen_at = CURRENT_TIMESTAMP WHERE actor_url = ?",

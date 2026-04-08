@@ -78,31 +78,23 @@ func VerifyRequest(req *http.Request, pubKeyPEM string, body []byte, sigCache *S
 		return err
 	}
 
-	for _, required := range requiredSignedHeaders {
-		found := false
+	hasHeader := func(name string) bool {
 		for _, h := range signedHeaders {
-			if strings.EqualFold(h, required) {
-				found = true
-				break
+			if strings.EqualFold(h, name) {
+				return true
 			}
 		}
-		if !found {
+		return false
+	}
+
+	for _, required := range requiredSignedHeaders {
+		if !hasHeader(required) {
 			return fmt.Errorf("%s must be included in signed headers", required)
 		}
 	}
 
-	// If a body is present, the Digest header must be signed.
-	if len(body) > 0 {
-		digestSigned := false
-		for _, h := range signedHeaders {
-			if strings.EqualFold(h, "digest") {
-				digestSigned = true
-				break
-			}
-		}
-		if !digestSigned {
-			return fmt.Errorf("digest must be included in signed headers when body is present")
-		}
+	if len(body) > 0 && !hasHeader("digest") {
+		return fmt.Errorf("digest must be included in signed headers when body is present")
 	}
 
 	dateStr := req.Header.Get("Date")

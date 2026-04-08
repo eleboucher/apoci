@@ -18,20 +18,16 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/oci"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/peering"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/workers"
 )
 
 type Server struct {
 	cfg                 *config.Config
 	db                  *database.DB
-	blobs               *blobstore.Store
 	identity            *activitypub.Identity
 	apFed               apFederator
 	registry            *oci.Registry
-	publisher           *activitypub.APPublisher
-	deliveryQueue       *activitypub.DeliveryQueue
-	blobReplicator      *peering.BlobReplicator
-	gc                  *peering.GarbageCollector
-	healthChecker       *peering.HealthChecker
+	workers             *workers.Workers
 	ociHandler          http.Handler
 	actorHandler        http.Handler
 	webfingerHandler    http.Handler
@@ -58,7 +54,7 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 		return nil, err
 	}
 
-	apPublisher := activitypub.NewAPPublisher(context.Background(), identity, db, cfg.Endpoint, logger)
+	apPublisher := activitypub.NewAPPublisher(identity, db, cfg.Endpoint, logger)
 	apResolver := activitypub.NewAPResolver(db, logger)
 	deliveryQueue := activitypub.NewDeliveryQueue(db, identity, logger)
 	fetcher := peering.NewFetcher(cfg.Peering.FetchTimeout, cfg.Limits.MaxBlobSize, cfg.Limits.MaxManifestSize, logger)
@@ -92,28 +88,47 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 	inboxHandler.SetEnqueueFunc(enqueueFunc)
 	inboxHandler.SetActorCache(apPublisher.ActorCache())
 
+	inboxWorker := activitypub.NewInboxWorker(inboxHandler, logger)
+	inboxHandler.SetWorker(inboxWorker)
+
+	inboxLimiter := newIPRateLimiter(10, 50)       // 10 req/sec, burst of 50
+	registryPushLimiter := newIPRateLimiter(5, 20) // 5 req/sec, burst of 20 for push ops
+
+	scheduler := workers.NewScheduler()
+	scheduler.Add(workers.PeriodicTask{
+		Interval: 5 * time.Minute,
+		Fn: func(ctx context.Context) {
+			if _, err := registry.CleanExpiredUploads(ctx); err != nil {
+				logger.Warn("upload session cleanup failed", "error", err)
+			}
+		},
+	})
+
+	w := &workers.Workers{
+		Services:   []workers.Service{healthChecker, gc, scheduler},
+		Waiters:    []workers.Waiter{blobReplicator},
+		Drainables: []workers.Service{inboxWorker, deliveryQueue},
+		Cleanup:    []workers.Stoppable{inboxHandler, inboxLimiter, registryPushLimiter, apPublisher},
+		Logger:     logger,
+	}
+
 	s := &Server{
 		cfg:                 cfg,
 		db:                  db,
-		blobs:               blobs,
 		identity:            identity,
 		apFed:               &realAPFederator{identity: identity, db: db, enqueue: enqueueFunc},
 		registry:            registry,
-		publisher:           apPublisher,
-		deliveryQueue:       deliveryQueue,
-		blobReplicator:      blobReplicator,
-		gc:                  gc,
-		healthChecker:       healthChecker,
+		workers:             w,
 		ociHandler:          registry.Handler(),
 		actorHandler:        activitypub.NewActorHandler(identity, cfg.Name, cfg.Endpoint),
 		webfingerHandler:    activitypub.NewWebFingerHandler(identity),
-		nodeinfoHandler:     activitypub.NewNodeInfoHandler(identity.Domain, version, nil),
+		nodeinfoHandler:     activitypub.NewNodeInfoHandler(identity.Domain, version),
 		inboxHandler:        inboxHandler,
 		outboxHandler:       activitypub.NewOutboxHandler(identity, db),
 		followersHandler:    activitypub.NewFollowersHandler(identity, db),
 		followingHandler:    activitypub.NewFollowingHandler(identity, db),
-		inboxLimiter:        newIPRateLimiter(10, 50), // 10 req/sec, burst of 50
-		registryPushLimiter: newIPRateLimiter(5, 20),  // 5 req/sec, burst of 20 for push ops
+		inboxLimiter:        inboxLimiter,
+		registryPushLimiter: registryPushLimiter,
 		logger:              logger,
 	}
 
@@ -135,10 +150,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("listening on %s: %w", s.cfg.Listen, err)
 	}
 
-	s.healthChecker.Start(ctx)
-	s.deliveryQueue.Start(ctx)
-	s.gc.Start(ctx)
-	s.startUploadCleaner(ctx)
+	s.workers.Start(ctx)
 
 	if s.cfg.Metrics.Enabled {
 		metricsMux := http.NewServeMux()
@@ -199,23 +211,8 @@ func (s *Server) Start(ctx context.Context) error {
 		s.logger.Info("shutting down HTTP server")
 		_ = s.httpServer.Shutdown(shutdownCtx)
 
-		// 2. Stop background workers.
-		s.healthChecker.Stop()
-		s.gc.Stop()
-
-		// 3. Wait for in-flight blob replications.
-		s.logger.Info("waiting for in-flight blob replications")
-		s.blobReplicator.Wait()
-
-		// 4. Drain and stop the delivery queue.
-		s.logger.Info("stopping delivery queue")
-		s.deliveryQueue.Stop()
-
-		// 5. Cleanup caches and remaining resources.
-		s.inboxHandler.Stop()
-		s.inboxLimiter.Stop()
-		s.registryPushLimiter.Stop()
-		s.publisher.Stop()
+		// 2. Stop all background workers (ordered phases handled internally).
+		s.workers.Stop()
 	}()
 
 	var serveErr error
@@ -227,21 +224,4 @@ func (s *Server) Start(ctx context.Context) error {
 	// Wait for shutdown goroutine to finish before returning.
 	<-shutdownDone
 	return serveErr
-}
-
-func (s *Server) startUploadCleaner(ctx context.Context) {
-	go func() { //nolint:gosec // intentional background goroutine for upload cleanup
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if _, err := s.registry.CleanExpiredUploads(ctx); err != nil {
-					s.logger.Warn("upload session cleanup failed", "error", err)
-				}
-			}
-		}
-	}()
 }

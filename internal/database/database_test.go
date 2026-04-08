@@ -174,11 +174,6 @@ func TestUploadSessionCRUD(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got, "expected session, got nil")
 
-	// Update progress
-	require.NoError(t, db.UpdateUploadProgress(ctx, "uuid-123", 512))
-	got2, _ := db.GetUploadSession(ctx, "uuid-123")
-	require.Equal(t, int64(512), got2.BytesReceived)
-
 	// Delete
 	require.NoError(t, db.DeleteUploadSession(ctx, "uuid-123"))
 	got3, _ := db.GetUploadSession(ctx, "uuid-123")
@@ -207,15 +202,17 @@ func TestPeerCRUD(t *testing.T) {
 	require.NotNil(t, got, "expected peer, got nil")
 	require.Equal(t, "https://registry.bob.example.com", got.Endpoint)
 
-	// List healthy
-	peers, err := db.ListHealthyPeers(ctx)
+	// List peers
+	peers, err := db.ListAllPeers(ctx)
 	require.NoError(t, err)
 	require.Len(t, peers, 1)
+	require.True(t, peers[0].IsHealthy)
 
 	// Set unhealthy
 	require.NoError(t, db.SetPeerHealth(ctx, "https://bob.example.com/ap/actor", false))
-	peers2, _ := db.ListHealthyPeers(ctx)
-	require.Len(t, peers2, 0)
+	peers2, _ := db.ListAllPeers(ctx)
+	require.Len(t, peers2, 1)
+	require.False(t, peers2[0].IsHealthy)
 }
 
 func TestPeerBlobLookup(t *testing.T) {

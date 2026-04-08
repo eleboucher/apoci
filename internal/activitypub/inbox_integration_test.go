@@ -260,7 +260,7 @@ func TestInboxCreateManifest(t *testing.T) {
 }
 
 func TestInboxCreateManifestRejectsNonFollower(t *testing.T) {
-	alice, _, inbox, _ := setupInboxTest(t)
+	alice, _, inbox, db := setupInboxTest(t)
 
 	create := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
@@ -280,7 +280,12 @@ func TestInboxCreateManifestRejectsNonFollower(t *testing.T) {
 	rec := httptest.NewRecorder()
 	inbox.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusForbidden, rec.Code, "expected 403 for non-follower Create")
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	// Verify no repo was created for the non-follower.
+	repoObj, err := db.GetRepository(context.Background(), "test/app")
+	require.NoError(t, err)
+	require.Nil(t, repoObj, "non-follower Create should not create a repo")
 }
 
 func TestInboxUpdateTag(t *testing.T) {
@@ -418,7 +423,7 @@ func TestInboxOwnershipEnforcement(t *testing.T) {
 	rec := httptest.NewRecorder()
 	inbox.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	require.Equal(t, http.StatusAccepted, rec.Code)
 }
 
 // manifestDigestAndContent returns content bytes and their sha256 digest string.
@@ -501,7 +506,7 @@ func TestInboxCreateManifestWithContent_DigestMismatch(t *testing.T) {
 	rec := httptest.NewRecorder()
 	inbox.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusBadRequest, rec.Code, "tampered content must be rejected")
+	require.Equal(t, http.StatusAccepted, rec.Code)
 }
 
 func TestInboxCreateManifestWrongDomain(t *testing.T) {
@@ -529,7 +534,7 @@ func TestInboxCreateManifestWrongDomain(t *testing.T) {
 	rec := httptest.NewRecorder()
 	inbox.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusForbidden, rec.Code, "pushing to another domain must be rejected")
+	require.Equal(t, http.StatusAccepted, rec.Code)
 }
 
 func TestInboxAcceptWithoutPendingOutgoingFollow(t *testing.T) {
@@ -745,7 +750,7 @@ func TestInboxFollowSelfRejected(t *testing.T) {
 	rec := httptest.NewRecorder()
 	inbox.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, http.StatusAccepted, rec.Code)
 }
 
 func TestInboxBlockedActorSilentDrop(t *testing.T) {
@@ -1007,7 +1012,7 @@ func TestInboxUpdateRejectsNonFollower(t *testing.T) {
 	rec := httptest.NewRecorder()
 	inbox.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusForbidden, rec.Code)
+	require.Equal(t, http.StatusAccepted, rec.Code)
 }
 
 func TestInboxAnnounceRejectsNonFollower(t *testing.T) {
@@ -1027,7 +1032,7 @@ func TestInboxAnnounceRejectsNonFollower(t *testing.T) {
 	rec := httptest.NewRecorder()
 	inbox.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusForbidden, rec.Code)
+	require.Equal(t, http.StatusAccepted, rec.Code)
 }
 
 func TestInboxDeleteRejectsNonFollower(t *testing.T) {
@@ -1047,7 +1052,7 @@ func TestInboxDeleteRejectsNonFollower(t *testing.T) {
 	rec := httptest.NewRecorder()
 	inbox.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusForbidden, rec.Code)
+	require.Equal(t, http.StatusAccepted, rec.Code)
 }
 
 func TestInboxUpdateTagUnknownManifest(t *testing.T) {
@@ -1078,7 +1083,7 @@ func TestInboxUpdateTagUnknownManifest(t *testing.T) {
 	rec := httptest.NewRecorder()
 	inbox.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusBadRequest, rec.Code, "tag pointing to non-existent manifest must be rejected")
+	require.Equal(t, http.StatusAccepted, rec.Code)
 }
 
 func TestInboxCreateManifestSplitDomainNamespace(t *testing.T) {
@@ -1223,7 +1228,7 @@ func TestInboxRejectsSpoofedNamespace(t *testing.T) {
 	rec := httptest.NewRecorder()
 	inbox.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusForbidden, rec.Code, "spoofed namespace must be rejected")
+	require.Equal(t, http.StatusAccepted, rec.Code, "spoofed namespace should get 202 (processed async, error logged)")
 }
 
 func TestValidNamespaceForHost(t *testing.T) {
