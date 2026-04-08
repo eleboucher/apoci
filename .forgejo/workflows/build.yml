@@ -27,7 +27,7 @@ jobs:
 
       - name: Compute image metadata
         id: meta
-        uses: https://data.forgejo.org/docker/metadata-action@v5
+        uses: https://data.forgejo.org/docker/metadata-action@v6
         with:
           images: |
             git.erwanleboucher.dev/${{ vars.USERNAME }}/apoci
