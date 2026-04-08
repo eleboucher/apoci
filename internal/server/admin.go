@@ -199,7 +199,36 @@ func (s *Server) adminAcceptFollow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, map[string]string{"accepted": actorURL})
+	result := map[string]string{"accepted": actorURL}
+
+	if s.cfg.Federation.AutoAccept == activitypub.AutoAcceptMutual {
+		existing, _ := s.db.GetOutgoingFollow(ctx, actorURL)
+		if existing == nil {
+			actor, err := s.apFed.FetchActor(ctx, actorURL)
+			if err != nil {
+				s.logger.Warn("mutual follow-back: could not fetch actor", "actor", actorURL, "error", err)
+			} else if err := s.db.AddOutgoingFollow(ctx, actor.ID); err != nil {
+				s.logger.Warn("mutual follow-back: could not store outgoing follow", "actor", actorURL, "error", err)
+			} else {
+				followActivity := map[string]any{
+					"@context": "https://www.w3.org/ns/activitystreams",
+					"id":       s.identity.ActorURL + "#follow-" + url.QueryEscape(actor.ID),
+					"type":     "Follow",
+					"actor":    s.identity.ActorURL,
+					"object":   actor.ID,
+				}
+				if activityJSON, err := json.Marshal(followActivity); err == nil {
+					if err := s.apFed.DeliverActivity(ctx, actor.Inbox, activityJSON); err != nil {
+						s.logger.Warn("mutual follow-back: delivery failed", "actor", actorURL, "error", err)
+					} else {
+						result["followed_back"] = actorURL
+					}
+				}
+			}
+		}
+	}
+
+	writeJSON(w, result)
 }
 
 func (s *Server) adminRejectFollow(w http.ResponseWriter, r *http.Request) {

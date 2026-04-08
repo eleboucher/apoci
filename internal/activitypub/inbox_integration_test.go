@@ -915,6 +915,52 @@ func TestMutualAutoAcceptDoesNotTriggerWithoutOutgoingFollow(t *testing.T) {
 	require.Nil(t, f, "stranger should not be auto-accepted without outgoing follow")
 }
 
+func TestMutualAcceptAutoAcceptsPendingInboundFollow(t *testing.T) {
+	alice, _, inbox, db := setupInboxTest(t)
+	ctx := context.Background()
+
+	inbox.autoAccept = AutoAcceptMutual
+
+	require.NoError(t, db.AddOutgoingFollow(ctx, alice.ActorURL))
+
+	alicePEM, _ := alice.PublicKeyPEM()
+	require.NoError(t, db.AddFollowRequest(ctx, alice.ActorURL, alicePEM, "https://alice.test"))
+
+	inbox.SetEnqueueFunc(func(_ context.Context, _, _ string, _ []byte) error {
+		return nil
+	})
+
+	accept := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#accept-mutual",
+		"type":     "Accept",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type":   "Follow",
+			"actor":  "https://bob.test/ap/actor",
+			"object": alice.ActorURL,
+		},
+	}
+
+	req := signedInboxPost(t, alice, accept)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	of, err := db.GetOutgoingFollow(ctx, alice.ActorURL)
+	require.NoError(t, err)
+	require.NotNil(t, of)
+	require.Equal(t, "accepted", of.Status)
+
+	f, err := db.GetFollow(ctx, alice.ActorURL)
+	require.NoError(t, err)
+	require.NotNil(t, f, "mutual mode should auto-accept pending inbound follow when Accept is received")
+
+	fr, err := db.GetFollowRequest(ctx, alice.ActorURL)
+	require.NoError(t, err)
+	require.Nil(t, fr, "follow request should be consumed after mutual auto-accept")
+}
+
 func TestInboxAutoAcceptAll(t *testing.T) {
 	alice, bob, inbox, db := setupInboxTest(t)
 	ctx := context.Background()

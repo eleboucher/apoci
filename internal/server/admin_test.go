@@ -70,7 +70,7 @@ func testServerWithMock(t *testing.T, fed apFederator) *Server {
 	return s
 }
 
-func adminActor(actorURL, inboxURL string) *activitypub.Actor {
+func adminActor(actorURL, inboxURL string) *activitypub.Actor { //nolint:unparam // test helper, param aids readability
 	return &activitypub.Actor{
 		ID:    actorURL,
 		Inbox: inboxURL,
@@ -438,6 +438,103 @@ func TestAdminAcceptFollowSuccess(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	require.Equal(t, actorURL, result["accepted"])
 	require.Equal(t, actorURL, acceptedURL)
+}
+
+func TestAdminAcceptFollowMutualFollowBack(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	const inboxURL = "https://peer.example.com/ap/inbox"
+
+	ctx := context.Background()
+
+	var deliveredInbox string
+	var deliveredJSON []byte
+	fed := &mockAPFederator{
+		sendAcceptFn: func(_ context.Context, _ string) error { return nil },
+		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
+			return adminActor(actorURL, inboxURL), nil
+		},
+		deliverActivityFn: func(_ context.Context, inbox string, body []byte) error {
+			deliveredInbox = inbox
+			deliveredJSON = body
+			return nil
+		},
+	}
+	s := testServerWithMock(t, fed)
+	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
+	s.cfg.Federation.AutoAccept = activitypub.AutoAcceptMutual
+	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL))
+
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows/accept", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.Equal(t, actorURL, result["accepted"])
+	require.Equal(t, actorURL, result["followed_back"])
+
+	// Follow activity should have been delivered to the peer's inbox.
+	require.Equal(t, inboxURL, deliveredInbox)
+	var activity map[string]any
+	require.NoError(t, json.Unmarshal(deliveredJSON, &activity))
+	require.Equal(t, "Follow", activity["type"])
+
+	// Outgoing follow should be recorded.
+	of, err := s.db.GetOutgoingFollow(ctx, actorURL)
+	require.NoError(t, err)
+	require.NotNil(t, of, "outgoing follow should be created by mutual follow-back")
+}
+
+func TestAdminAcceptFollowMutualSkipsExistingOutgoing(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	const inboxURL = "https://peer.example.com/ap/inbox"
+
+	ctx := context.Background()
+
+	delivered := false
+	fed := &mockAPFederator{
+		sendAcceptFn: func(_ context.Context, _ string) error { return nil },
+		deliverActivityFn: func(_ context.Context, _ string, _ []byte) error {
+			delivered = true
+			return nil
+		},
+	}
+	s := testServerWithMock(t, fed)
+	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
+	s.cfg.Federation.AutoAccept = activitypub.AutoAcceptMutual
+	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL))
+	// Already following this actor.
+	require.NoError(t, s.db.AddOutgoingFollow(ctx, actorURL))
+
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows/accept", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.Equal(t, actorURL, result["accepted"])
+	require.Empty(t, result["followed_back"], "should not follow back when outgoing follow already exists")
+	require.False(t, delivered, "should not deliver a Follow activity when outgoing follow already exists")
 }
 
 func TestAdminRejectFollowMissingTarget(t *testing.T) {

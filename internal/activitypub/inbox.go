@@ -344,6 +344,19 @@ func (h *InboxHandler) handleAccept(ctx context.Context, w http.ResponseWriter, 
 		h.logger.Info("inbox: outgoing follow accepted", "by", activity.Actor)
 	}
 
+	// In mutual mode, auto-accept any pending inbound follow request from this
+	// actor now that our outgoing follow has been accepted.
+	if h.autoAccept == AutoAcceptMutual {
+		fr, err := h.db.GetFollowRequest(ctx, activity.Actor)
+		if err == nil && fr != nil {
+			if err := SendAccept(ctx, h.identity, h.db, activity.Actor, h.enqueue); err != nil {
+				h.logger.Warn("inbox: mutual auto-accept of pending inbound follow failed", "from", activity.Actor, "error", err)
+			} else {
+				h.logger.Info("inbox: mutual auto-accepted pending inbound follow", "from", activity.Actor)
+			}
+		}
+	}
+
 	activityJSON, err := json.Marshal(activity)
 	if err != nil {
 		h.logger.Error("inbox: failed to marshal Accept activity", "error", err)
