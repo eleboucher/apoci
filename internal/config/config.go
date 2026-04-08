@@ -36,6 +36,7 @@ type Config struct {
 	Federation Federation `yaml:"federation" envPrefix:"APOCI_FEDERATION_"`
 	Limits     Limits     `yaml:"limits"     envPrefix:"APOCI_"`
 	Metrics    Metrics    `yaml:"metrics"    envPrefix:"APOCI_METRICS_"`
+	GC         GC         `yaml:"gc"         envPrefix:"APOCI_GC_"`
 
 	Domain string `yaml:"-" env:"-"`
 }
@@ -79,6 +80,13 @@ type Metrics struct {
 	Enabled bool   `yaml:"enabled" env:"ENABLED"`
 	Listen  string `yaml:"listen"  env:"LISTEN"`
 	Token   string `yaml:"token"   env:"TOKEN"`
+}
+
+type GC struct {
+	Enabled          *bool         `yaml:"enabled"          env:"ENABLED"`
+	Interval         time.Duration `yaml:"interval"         env:"INTERVAL"`
+	StalePeerBlobAge time.Duration `yaml:"stalePeerBlobAge" env:"STALE_PEER_BLOB_AGE"`
+	OrphanBatchSize  int           `yaml:"orphanBatchSize"  env:"ORPHAN_BATCH_SIZE"`
 }
 
 func Load(path string) (*Config, error) {
@@ -169,6 +177,19 @@ func applyDefaults(cfg *Config) error {
 	}
 	if cfg.Metrics.Listen == "" {
 		cfg.Metrics.Listen = ":9090"
+	}
+	if cfg.GC.Enabled == nil {
+		t := true
+		cfg.GC.Enabled = &t
+	}
+	if cfg.GC.Interval == 0 {
+		cfg.GC.Interval = 6 * time.Hour
+	}
+	if cfg.GC.StalePeerBlobAge == 0 {
+		cfg.GC.StalePeerBlobAge = 30 * 24 * time.Hour
+	}
+	if cfg.GC.OrphanBatchSize == 0 {
+		cfg.GC.OrphanBatchSize = 500
 	}
 	if cfg.Federation.AutoAccept == "" {
 		cfg.Federation.AutoAccept = "none"
@@ -281,6 +302,15 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Peering.FetchTimeout < 0 {
 		return fmt.Errorf("peering.fetchTimeout must not be negative")
+	}
+	if cfg.GC.Interval < 0 {
+		return fmt.Errorf("gc.interval must not be negative")
+	}
+	if cfg.GC.StalePeerBlobAge < 0 {
+		return fmt.Errorf("gc.stalePeerBlobAge must not be negative")
+	}
+	if cfg.GC.OrphanBatchSize < 0 {
+		return fmt.Errorf("gc.orphanBatchSize must not be negative")
 	}
 
 	return nil

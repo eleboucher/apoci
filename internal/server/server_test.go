@@ -51,6 +51,12 @@ func testServer(t *testing.T) *Server {
 			MaxManifestSize: config.DefaultMaxManifestSize,
 			MaxBlobSize:     config.DefaultMaxBlobSize,
 		},
+		GC: config.GC{
+			Enabled:          new(true),
+			Interval:         6 * time.Hour,
+			StalePeerBlobAge: 30 * 24 * time.Hour,
+			OrphanBatchSize:  500,
+		},
 	}
 
 	s, err := New(cfg, db, blobs, identity, "test", nopLog())

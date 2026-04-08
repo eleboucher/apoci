@@ -62,7 +62,11 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 	healthChecker := peering.NewHealthChecker(db, fetcher, cfg.Peering.HealthCheckInterval, logger)
 
 	blobReplicator := peering.NewBlobReplicator(db, blobs, fetcher, logger)
-	gc := peering.NewGarbageCollector(db, blobs, logger)
+	gc := peering.NewGarbageCollector(peering.GCConfig{
+		Interval:         cfg.GC.Interval,
+		StalePeerBlobAge: cfg.GC.StalePeerBlobAge,
+		OrphanBatchSize:  cfg.GC.OrphanBatchSize,
+	}, db, blobs, logger)
 
 	apPublisher.SetNotifyFunc(deliveryQueue.Notify)
 
@@ -105,8 +109,13 @@ func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *
 		},
 	})
 
+	services := []workers.Service{healthChecker, scheduler}
+	if *cfg.GC.Enabled {
+		services = append(services, gc)
+	}
+
 	w := &workers.Workers{
-		Services:   []workers.Service{healthChecker, gc, scheduler},
+		Services:   services,
 		Waiters:    []workers.Waiter{blobReplicator},
 		Drainables: []workers.Service{inboxWorker, deliveryQueue},
 		Cleanup:    []workers.Stoppable{inboxHandler, inboxLimiter, registryPushLimiter, apPublisher},

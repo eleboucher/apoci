@@ -322,6 +322,10 @@ All settings can be configured via YAML file, environment variables, or both. En
 | `peering.fetchTimeout` | `APOCI_PEERING_FETCH_TIMEOUT` | `60s` | Blob fetch timeout |
 | `limits.maxManifestSize` | `APOCI_MAX_MANIFEST_SIZE` | `10485760` | Max manifest size in bytes (10 MB) |
 | `limits.maxBlobSize` | `APOCI_MAX_BLOB_SIZE` | `536870912` | Max blob size in bytes (512 MB) |
+| `gc.enabled` | `APOCI_GC_ENABLED` | `true` | Set to `false` to disable background garbage collection |
+| `gc.interval` | `APOCI_GC_INTERVAL` | `6h` | How often to run GC |
+| `gc.stalePeerBlobAge` | `APOCI_GC_STALE_PEER_BLOB_AGE` | `720h` | Remove peer blob refs older than this (720h = 30 days) |
+| `gc.orphanBatchSize` | `APOCI_GC_ORPHAN_BATCH_SIZE` | `500` | Max orphaned blobs to process per cycle |
 | `federation.autoAccept` | `APOCI_FEDERATION_AUTO_ACCEPT` | `none` | `none`, `mutual` (peers you follow), or `all` (public) |
 | `federation.allowedDomains` | `APOCI_FEDERATION_ALLOWED_DOMAINS` | `[]` | Always auto-accept follows from these domains (comma-separated in env) |
 | `federation.blockedDomains` | `APOCI_FEDERATION_BLOCKED_DOMAINS` | `[]` | Silently drop all activities from these domains (comma-separated in env) |

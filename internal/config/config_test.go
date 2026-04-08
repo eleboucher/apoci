@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -197,4 +198,52 @@ limits:
 	require.NoError(t, err)
 	require.Equal(t, int64(5242880), cfg.Limits.MaxManifestSize)
 	require.Equal(t, int64(1073741824), cfg.Limits.MaxBlobSize)
+}
+
+func TestGCDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, fmt.Sprintf(`
+endpoint: "https://test.example.com"
+dataDir: %q
+`, dir))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.GC.Enabled)
+	require.True(t, *cfg.GC.Enabled)
+	require.Equal(t, 6*time.Hour, cfg.GC.Interval)
+	require.Equal(t, 30*24*time.Hour, cfg.GC.StalePeerBlobAge)
+	require.Equal(t, 500, cfg.GC.OrphanBatchSize)
+}
+
+func TestGCCustomValues(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, fmt.Sprintf(`
+endpoint: "https://test.example.com"
+dataDir: %q
+gc:
+  enabled: false
+  interval: 1h
+  stalePeerBlobAge: 168h
+  orphanBatchSize: 100
+`, dir))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.GC.Enabled)
+	require.False(t, *cfg.GC.Enabled)
+	require.Equal(t, 1*time.Hour, cfg.GC.Interval)
+	require.Equal(t, 168*time.Hour, cfg.GC.StalePeerBlobAge)
+	require.Equal(t, 100, cfg.GC.OrphanBatchSize)
+}
+
+func TestGCNegativeInterval(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, fmt.Sprintf(`
+endpoint: "https://test.example.com"
+dataDir: %q
+gc:
+  interval: -1h
+`, dir))
+	_, err := Load(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "gc.interval")
 }

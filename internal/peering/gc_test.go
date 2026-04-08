@@ -112,7 +112,7 @@ func TestGCPreservesValidData(t *testing.T) {
 	require.NoError(t, db.PutPeerBlob(ctx, "https://recent.example.com/ap/actor", recentDigest, "https://recent.example.com"))
 
 	// Cleanup with 30-day threshold should NOT remove the recent peer blob.
-	n, err := db.CleanupStalePeerBlobs(ctx, stalePeerBlobAge)
+	n, err := db.CleanupStalePeerBlobs(ctx, 30*24*time.Hour)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), n)
 
@@ -146,7 +146,11 @@ func TestGCStartStop(t *testing.T) {
 	db, blobs := testGCDeps(t)
 	ctx := context.Background()
 
-	gc := NewGarbageCollector(db, blobs, nopLog())
+	gc := NewGarbageCollector(GCConfig{
+		Interval:         6 * time.Hour,
+		StalePeerBlobAge: 30 * 24 * time.Hour,
+		OrphanBatchSize:  500,
+	}, db, blobs, nopLog())
 	gc.Start(ctx)
 
 	// Stop should return promptly without panic.

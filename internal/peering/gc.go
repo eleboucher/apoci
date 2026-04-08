@@ -11,14 +11,16 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 )
 
-const (
-	gcInterval       = 6 * time.Hour
-	stalePeerBlobAge = 30 * 24 * time.Hour // 30 days
-	orphanBatchSize  = 500
-)
+// GCConfig holds tunable parameters for the garbage collector.
+type GCConfig struct {
+	Interval         time.Duration
+	StalePeerBlobAge time.Duration
+	OrphanBatchSize  int
+}
 
 // GarbageCollector periodically cleans up stale data.
 type GarbageCollector struct {
+	cfg     GCConfig
 	db      *database.DB
 	blobs   *blobstore.Store
 	logger  *slog.Logger
@@ -29,8 +31,9 @@ type GarbageCollector struct {
 	once    sync.Once
 }
 
-func NewGarbageCollector(db *database.DB, blobs *blobstore.Store, logger *slog.Logger) *GarbageCollector {
+func NewGarbageCollector(cfg GCConfig, db *database.DB, blobs *blobstore.Store, logger *slog.Logger) *GarbageCollector {
 	return &GarbageCollector{
+		cfg:    cfg,
 		db:     db,
 		blobs:  blobs,
 		logger: logger,
@@ -71,7 +74,7 @@ func (gc *GarbageCollector) run(ctx context.Context) {
 			return
 		case <-timer.C:
 			gc.collect(ctx)
-			timer.Reset(gcInterval)
+			timer.Reset(gc.cfg.Interval)
 		}
 	}
 }
@@ -89,7 +92,7 @@ func (gc *GarbageCollector) collect(ctx context.Context) {
 
 // cleanupStalePeerBlobs removes peer blob references not verified in 30 days.
 func (gc *GarbageCollector) cleanupStalePeerBlobs(ctx context.Context) {
-	n, err := gc.db.CleanupStalePeerBlobs(ctx, stalePeerBlobAge)
+	n, err := gc.db.CleanupStalePeerBlobs(ctx, gc.cfg.StalePeerBlobAge)
 	if err != nil {
 		gc.logger.Error("gc: failed to cleanup stale peer blobs", "error", err)
 		return
@@ -103,7 +106,7 @@ func (gc *GarbageCollector) cleanupStalePeerBlobs(ctx context.Context) {
 // cleanupOrphanedBlobMetadata removes blob DB records that are not stored locally
 // and have no peer references or manifest layer references.
 func (gc *GarbageCollector) cleanupOrphanedBlobMetadata(ctx context.Context) {
-	digests, err := gc.db.OrphanedBlobs(ctx, orphanBatchSize)
+	digests, err := gc.db.OrphanedBlobs(ctx, gc.cfg.OrphanBatchSize)
 	if err != nil {
 		gc.logger.Error("gc: failed to find orphaned blobs", "error", err)
 		return
