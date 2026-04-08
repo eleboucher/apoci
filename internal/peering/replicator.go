@@ -41,10 +41,10 @@ func (r *BlobReplicator) ReplicateBlob(ctx context.Context, peerEndpoint, digest
 		return
 	}
 
-	metrics.BlobReplicationsStarted.Add(1)
-	metrics.BlobReplicationsInFlight.Add(1)
+	metrics.BlobReplicationsStarted.Inc()
+	metrics.BlobReplicationsInFlight.Inc()
 	r.wg.Go(func() {
-		defer metrics.BlobReplicationsInFlight.Add(-1)
+		defer metrics.BlobReplicationsInFlight.Dec()
 
 		r.sem <- struct{}{}
 		defer func() { <-r.sem }()

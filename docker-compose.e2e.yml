@@ -1,10 +1,22 @@
+configs:
+  alice-config:
+    file: ./configs/e2e-alice.yaml
+  bob-config:
+    file: ./configs/e2e-bob.yaml
+  charlie-config:
+    file: ./configs/e2e-charlie.yaml
+  e2e-tests:
+    file: ./tests/e2e/federation.sh
+
 services:
   alice:
     build: .
+    configs:
+      - source: alice-config
+        target: /etc/apoci.yaml
+    command: ["serve", "-c", "/etc/apoci.yaml"]
     volumes:
       - alice-data:/apoci/storage
-      - ./configs/e2e-alice.yaml:/etc/apoci.yaml:ro
-    command: ["serve", "-c", "/etc/apoci.yaml"]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
       interval: 2s
@@ -13,10 +25,12 @@ services:
 
   bob:
     build: .
+    configs:
+      - source: bob-config
+        target: /etc/apoci.yaml
+    command: ["serve", "-c", "/etc/apoci.yaml"]
     volumes:
       - bob-data:/apoci/storage
-      - ./configs/e2e-bob.yaml:/etc/apoci.yaml:ro
-    command: ["serve", "-c", "/etc/apoci.yaml"]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
       interval: 2s
@@ -25,10 +39,12 @@ services:
 
   charlie:
     build: .
+    configs:
+      - source: charlie-config
+        target: /etc/apoci.yaml
+    command: ["serve", "-c", "/etc/apoci.yaml"]
     volumes:
       - charlie-data:/apoci/storage
-      - ./configs/e2e-charlie.yaml:/etc/apoci.yaml:ro
-    command: ["serve", "-c", "/etc/apoci.yaml"]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/healthz"]
       interval: 2s
@@ -44,8 +60,9 @@ services:
         condition: service_healthy
       charlie:
         condition: service_healthy
-    volumes:
-      - ./tests/e2e:/tests:ro
+    configs:
+      - source: e2e-tests
+        target: /tests/federation.sh
     entrypoint: ["sh", "-c", "apk add --no-cache curl coreutils > /dev/null 2>&1 && sh /tests/federation.sh"]
 
 volumes:

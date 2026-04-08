@@ -116,7 +116,7 @@ func (p *APPublisher) ActorCache() *ActorCache {
 }
 
 func (p *APPublisher) createAndDeliver(ctx context.Context, activityType string, object any) error {
-	metrics.OutboundActivities.Add(activityType, 1)
+	metrics.OutboundActivities.WithLabelValues(activityType).Inc()
 	activityID := p.activityURL()
 	followersURL := p.endpoint + "/ap/followers"
 

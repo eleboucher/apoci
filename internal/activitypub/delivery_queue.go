@@ -92,7 +92,7 @@ func (q *DeliveryQueue) processBatch(ctx context.Context) {
 		return
 	}
 
-	metrics.DeliveryPending.Set(int64(len(deliveries)))
+	metrics.DeliveryPending.Set(float64(len(deliveries)))
 
 	if len(deliveries) == 0 {
 		return

@@ -85,7 +85,7 @@ func (gc *GarbageCollector) cleanupStalePeerBlobs(ctx context.Context) {
 		return
 	}
 	if n > 0 {
-		metrics.GCStalePeerBlobs.Add(n)
+		metrics.GCStalePeerBlobs.Add(float64(n))
 		gc.logger.Info("gc: removed stale peer blob references", "count", n)
 	}
 }
@@ -109,7 +109,7 @@ func (gc *GarbageCollector) cleanupOrphanedBlobMetadata(ctx context.Context) {
 	}
 
 	if removed > 0 {
-		metrics.GCOrphanedMetadata.Add(int64(removed))
+		metrics.GCOrphanedMetadata.Add(float64(removed))
 		gc.logger.Info("gc: removed orphaned blob metadata", "count", removed)
 	}
 }
@@ -143,7 +143,7 @@ func (gc *GarbageCollector) cleanupOrphanedBlobFiles(ctx context.Context) {
 	}
 
 	if removed > 0 {
-		metrics.GCOrphanedFiles.Add(int64(removed))
+		metrics.GCOrphanedFiles.Add(float64(removed))
 		gc.logger.Info("gc: removed orphaned blob files from disk", "count", removed)
 	}
 }

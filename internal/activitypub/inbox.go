@@ -237,7 +237,7 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	metrics.InboxActivities.Add(activity.Type, 1)
+	metrics.InboxActivities.WithLabelValues(activity.Type).Inc()
 
 	switch activity.Type {
 	case ActivityFollow:

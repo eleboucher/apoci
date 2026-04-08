@@ -2,12 +2,13 @@ package server
 
 import (
 	"context"
-	"expvar"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/activitypub"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
@@ -141,7 +142,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	if s.cfg.Metrics.Enabled {
 		metricsMux := http.NewServeMux()
-		metricsMux.Handle("/debug/vars", expvar.Handler())
+		metricsMux.Handle("/metrics", promhttp.Handler())
 		var metricsHandler http.Handler = metricsMux
 		if s.cfg.Metrics.Token != "" {
 			metricsHandler = bearerAuthMiddleware(s.cfg.Metrics.Token)(metricsMux)
@@ -176,8 +177,8 @@ func (s *Server) Start(ctx context.Context) error {
 	if err != nil {
 		s.logger.Warn("failed to count following", "error", err)
 	}
-	metrics.FederationFollowers.Set(int64(len(follows)))
-	metrics.FederationFollowing.Set(int64(len(outgoing)))
+	metrics.FederationFollowers.Set(float64(len(follows)))
+	metrics.FederationFollowing.Set(float64(len(outgoing)))
 
 	s.logger.Info("OCI registry listening",
 		"address", ln.Addr().String(),

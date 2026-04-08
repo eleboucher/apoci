@@ -1,59 +1,206 @@
-// Package metrics provides application-level metrics using expvar.
-// All metrics are served at /debug/vars as JSON.
 package metrics
 
-import "expvar"
+import "github.com/prometheus/client_golang/prometheus"
 
-// Inbox: inbound activity counters by type.
 var (
-	InboxActivities  = expvar.NewMap("inbox_activities") // by type: Follow, Create, etc.
-	InboxDedupHits   = expvar.NewInt("inbox_dedup_hits")
-	InboxRateLimited = expvar.NewInt("inbox_rate_limited")
+	// Inbox: inbound activity counters by type.
+	InboxActivities = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "inbox",
+		Name:      "activities_total",
+		Help:      "Total inbound activities by type.",
+	}, []string{"type"})
+	InboxDedupHits = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "inbox",
+		Name:      "dedup_hits_total",
+		Help:      "Total duplicate activities dropped.",
+	})
+	InboxRateLimited = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "inbox",
+		Name:      "rate_limited_total",
+		Help:      "Total inbound requests rejected by rate limiter.",
+	})
+
+	// Publisher: outbound activity counters.
+	OutboundActivities = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "outbound",
+		Name:      "activities_total",
+		Help:      "Total outbound activities by type.",
+	}, []string{"type"})
+
+	// Delivery queue.
+	DeliveryEnqueued = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "delivery",
+		Name:      "enqueued_total",
+		Help:      "Total deliveries enqueued.",
+	})
+	DeliverySucceeded = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "delivery",
+		Name:      "succeeded_total",
+		Help:      "Total deliveries succeeded.",
+	})
+	DeliveryFailed = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "delivery",
+		Name:      "failed_total",
+		Help:      "Total deliveries permanently failed.",
+	})
+	DeliveryRetries = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "delivery",
+		Name:      "retries_total",
+		Help:      "Total delivery retries.",
+	})
+	DeliveryPending = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "apoci",
+		Subsystem: "delivery",
+		Name:      "pending",
+		Help:      "Number of deliveries currently pending.",
+	})
+
+	// Blob replication.
+	BlobReplicationsStarted = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "blob_replication",
+		Name:      "started_total",
+		Help:      "Total blob replications started.",
+	})
+	BlobReplicationsSucceeded = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "blob_replication",
+		Name:      "succeeded_total",
+		Help:      "Total blob replications succeeded.",
+	})
+	BlobReplicationsFailed = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "blob_replication",
+		Name:      "failed_total",
+		Help:      "Total blob replications failed.",
+	})
+	BlobReplicationsInFlight = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "apoci",
+		Subsystem: "blob_replication",
+		Name:      "in_flight",
+		Help:      "Number of blob replications currently in progress.",
+	})
+
+	// Garbage collection.
+	GCStalePeerBlobs = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "gc",
+		Name:      "stale_peer_blobs_total",
+		Help:      "Total stale peer blobs removed.",
+	})
+	GCOrphanedMetadata = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "gc",
+		Name:      "orphaned_metadata_total",
+		Help:      "Total orphaned metadata entries removed.",
+	})
+	GCOrphanedFiles = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "gc",
+		Name:      "orphaned_files_total",
+		Help:      "Total orphaned files removed.",
+	})
+	GCCyclesCompleted = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "gc",
+		Name:      "cycles_completed_total",
+		Help:      "Total GC cycles completed.",
+	})
+
+	// OCI registry operations.
+	RegistryManifestPushes = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "registry",
+		Name:      "manifest_pushes_total",
+		Help:      "Total manifest pushes.",
+	})
+	RegistryManifestPulls = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "registry",
+		Name:      "manifest_pulls_total",
+		Help:      "Total manifest pulls.",
+	})
+	RegistryBlobPushes = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "registry",
+		Name:      "blob_pushes_total",
+		Help:      "Total blob pushes.",
+	})
+	RegistryBlobPulls = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "registry",
+		Name:      "blob_pulls_total",
+		Help:      "Total blob pulls.",
+	})
+	RegistryBlobPullThru = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "registry",
+		Name:      "blob_pull_throughs_total",
+		Help:      "Total blob pull-throughs from peers.",
+	})
+	RegistryManifestPullThru = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "registry",
+		Name:      "manifest_pull_throughs_total",
+		Help:      "Total manifest pull-throughs from peers.",
+	})
+	RegistryPushRateLimited = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "registry",
+		Name:      "push_rate_limited_total",
+		Help:      "Total pushes rejected by rate limiter.",
+	})
+
+	// Federation state (gauges).
+	FederationFollowers = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "apoci",
+		Subsystem: "federation",
+		Name:      "followers",
+		Help:      "Current number of followers.",
+	})
+	FederationFollowing = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "apoci",
+		Subsystem: "federation",
+		Name:      "following",
+		Help:      "Current number of peers being followed.",
+	})
 )
 
-// Publisher: outbound activity counters.
-var (
-	OutboundActivities = expvar.NewMap("outbound_activities") // by type
-)
-
-// Delivery queue.
-var (
-	DeliveryEnqueued  = expvar.NewInt("delivery_enqueued")
-	DeliverySucceeded = expvar.NewInt("delivery_succeeded")
-	DeliveryFailed    = expvar.NewInt("delivery_failed")
-	DeliveryRetries   = expvar.NewInt("delivery_retries")
-	DeliveryPending   = expvar.NewInt("delivery_pending") // gauge, updated per batch
-)
-
-// Blob replication.
-var (
-	BlobReplicationsStarted   = expvar.NewInt("blob_replications_started")
-	BlobReplicationsSucceeded = expvar.NewInt("blob_replications_succeeded")
-	BlobReplicationsFailed    = expvar.NewInt("blob_replications_failed")
-	BlobReplicationsInFlight  = expvar.NewInt("blob_replications_inflight") // gauge
-)
-
-// Garbage collection.
-var (
-	GCStalePeerBlobs   = expvar.NewInt("gc_stale_peer_blobs")
-	GCOrphanedMetadata = expvar.NewInt("gc_orphaned_metadata")
-	GCOrphanedFiles    = expvar.NewInt("gc_orphaned_files")
-	GCCyclesCompleted  = expvar.NewInt("gc_cycles_completed")
-)
-
-// OCI registry operations.
-var (
-	RegistryManifestPushes   = expvar.NewInt("registry_manifest_pushes")
-	RegistryManifestPulls    = expvar.NewInt("registry_manifest_pulls")
-	RegistryBlobPushes       = expvar.NewInt("registry_blob_pushes")
-	RegistryBlobPulls        = expvar.NewInt("registry_blob_pulls")
-	RegistryBlobPullThru     = expvar.NewInt("registry_blob_pull_throughs")
-	RegistryManifestPullThru = expvar.NewInt("registry_manifest_pull_throughs")
-	RegistryPushRateLimited  = expvar.NewInt("registry_push_rate_limited")
-)
-
-// Federation state (gauges, set periodically or on change).
-var (
-	FederationFollowers = expvar.NewInt("federation_followers")
-	FederationFollowing = expvar.NewInt("federation_following")
-)
+func init() {
+	prometheus.MustRegister(
+		InboxActivities,
+		InboxDedupHits,
+		InboxRateLimited,
+		OutboundActivities,
+		DeliveryEnqueued,
+		DeliverySucceeded,
+		DeliveryFailed,
+		DeliveryRetries,
+		DeliveryPending,
+		BlobReplicationsStarted,
+		BlobReplicationsSucceeded,
+		BlobReplicationsFailed,
+		BlobReplicationsInFlight,
+		GCStalePeerBlobs,
+		GCOrphanedMetadata,
+		GCOrphanedFiles,
+		GCCyclesCompleted,
+		RegistryManifestPushes,
+		RegistryManifestPulls,
+		RegistryBlobPushes,
+		RegistryBlobPulls,
+		RegistryBlobPullThru,
+		RegistryManifestPullThru,
+		RegistryPushRateLimited,
+		FederationFollowers,
+		FederationFollowing,
+	)
+}
