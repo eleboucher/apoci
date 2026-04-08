@@ -55,3 +55,15 @@ func (db *DB) DeleteUploadSession(ctx context.Context, uuid string) error {
 	}
 	return nil
 }
+
+// ListExpiredUploadSessions returns UUIDs of upload sessions that have passed their expiry time.
+func (db *DB) ListExpiredUploadSessions(ctx context.Context, limit int) ([]string, error) {
+	var uuids []string
+	err := db.bun.NewRaw(
+		"SELECT uuid FROM upload_sessions WHERE expires_at <= CURRENT_TIMESTAMP LIMIT ?",
+		limit).Scan(ctx, &uuids)
+	if err != nil {
+		return nil, fmt.Errorf("listing expired upload sessions: %w", err)
+	}
+	return uuids, nil
+}

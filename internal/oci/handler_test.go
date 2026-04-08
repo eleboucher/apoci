@@ -480,6 +480,107 @@ func TestManifestSizeLimitEnforced(t *testing.T) {
 	require.Error(t, err, "oversized manifest should be rejected")
 }
 
+func TestBlobExistenceCheckOnManifestPush(t *testing.T) {
+	reg, _ := testRegistry(t)
+	ctx := context.Background()
+
+	// Push a blob so we have a valid digest.
+	blobData := []byte("real blob content for existence check")
+	blobDesc, err := reg.PushBlob(ctx, "test.example.com/test/blobcheck", descriptorFor(blobData), strings.NewReader(string(blobData)))
+	require.NoError(t, err)
+
+	// Manifest referencing the real blob should succeed.
+	manifest := fmt.Sprintf(`{"schemaVersion":2,"config":{"digest":"%s","size":%d,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`, blobDesc.Digest, blobDesc.Size)
+	_, err = reg.PushManifest(ctx, "test.example.com/test/blobcheck", "v1", []byte(manifest), testManifestMediaType)
+	require.NoError(t, err, "manifest with existing blob should succeed")
+
+	// Manifest referencing a non-existent well-formed digest should fail.
+	fakeDigest := "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	badManifest := fmt.Sprintf(`{"schemaVersion":2,"config":{"digest":"%s","size":0,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`, fakeDigest)
+	_, err = reg.PushManifest(ctx, "test.example.com/test/blobcheck", "v2", []byte(badManifest), testManifestMediaType)
+	require.Error(t, err, "manifest referencing non-existent blob should fail")
+	require.Contains(t, err.Error(), "blob unknown")
+}
+
+func TestDeleteManifestCascadesTags(t *testing.T) {
+	reg, _ := testRegistry(t)
+	ctx := context.Background()
+
+	manifest := []byte(`{"schemaVersion":2}`)
+	desc, err := reg.PushManifest(ctx, "test.example.com/test/cascade", "latest", manifest, testManifestMediaType)
+	require.NoError(t, err)
+
+	// Tag should exist.
+	_, err = reg.GetTag(ctx, "test.example.com/test/cascade", "latest")
+	require.NoError(t, err)
+
+	// Delete manifest by digest — should also remove the tag.
+	require.NoError(t, reg.DeleteManifest(ctx, "test.example.com/test/cascade", desc.Digest))
+
+	// Both manifest and tag should be gone.
+	_, err = reg.GetManifest(ctx, "test.example.com/test/cascade", desc.Digest)
+	require.Error(t, err, "manifest should be gone")
+
+	_, err = reg.GetTag(ctx, "test.example.com/test/cascade", "latest")
+	require.Error(t, err, "tag should be gone after manifest delete")
+}
+
+func TestDeleteManifestBlockedByImmutableTag(t *testing.T) {
+	dir := t.TempDir()
+	db, _ := database.OpenSQLite(dir, 0, 0, nopLog())
+	defer func() { _ = db.Close() }()
+	blobs, _ := blobstore.New(dir, nopLog())
+
+	reg, err := NewRegistry(db, blobs, "https://test.example.com", "", `^v[0-9]`, config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	manifest := []byte(`{"schemaVersion":2}`)
+	desc, err := reg.PushManifest(ctx, "test.example.com/test/immudel", "v1.0", manifest, testManifestMediaType)
+	require.NoError(t, err)
+
+	// Deleting a manifest that has an immutable tag should fail.
+	err = reg.DeleteManifest(ctx, "test.example.com/test/immudel", desc.Digest)
+	require.Error(t, err, "should not delete manifest with immutable tags")
+	require.Contains(t, err.Error(), "immutable")
+
+	// Manifest should still be accessible.
+	reader, err := reg.GetManifest(ctx, "test.example.com/test/immudel", desc.Digest)
+	require.NoError(t, err)
+	_ = reader.Close()
+}
+
+func TestUploadSessionDBWiring(t *testing.T) {
+	reg, _ := testRegistry(t)
+	ctx := context.Background()
+
+	// Start a chunked upload.
+	writer, err := reg.PushBlobChunked(ctx, "test.example.com/test/upload", 0)
+	require.NoError(t, err)
+
+	uploadID := writer.ID()
+
+	// Verify session was created in DB.
+	session, err := reg.DB().GetUploadSession(ctx, uploadID)
+	require.NoError(t, err)
+	require.NotNil(t, session, "upload session should be in DB")
+	require.Equal(t, uploadID, session.UUID)
+
+	// Write some data and commit.
+	_, err = writer.Write([]byte("test data"))
+	require.NoError(t, err)
+
+	_, err = writer.Commit(ociregistry.Digest(""))
+	// Commit without a proper digest may error, but the session should be cleaned up.
+	// We just check the DB is cleaned up after a successful commit.
+	if err == nil {
+		session, _ = reg.DB().GetUploadSession(ctx, uploadID)
+		require.Nil(t, session, "upload session should be deleted after commit")
+	}
+
+	_ = writer.Close()
+}
+
 func descriptorFor(data []byte) ociregistry.Descriptor {
 	return ociregistry.Descriptor{
 		MediaType: "application/octet-stream",

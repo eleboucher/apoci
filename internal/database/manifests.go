@@ -70,12 +70,47 @@ func (db *DB) ListManifestsBySubject(ctx context.Context, repoID int64, subjectD
 }
 
 func (db *DB) DeleteManifest(ctx context.Context, repoID int64, digest string) error {
-	_, err := db.bun.NewRaw(
+	tx, err := db.bun.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning delete manifest transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Remove tags pointing to this manifest first (non-immutable only).
+	_, err = tx.NewRaw(
+		"DELETE FROM tags WHERE repository_id = ? AND manifest_digest = ? AND immutable = false",
+		repoID, digest).Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("deleting tags for manifest: %w", err)
+	}
+
+	// Check if any immutable tags still reference this manifest.
+	var immutableCount int
+	err = tx.NewRaw(
+		"SELECT COUNT(*) FROM tags WHERE repository_id = ? AND manifest_digest = ? AND immutable = true",
+		repoID, digest).Scan(ctx, &immutableCount)
+	if err != nil {
+		return fmt.Errorf("checking immutable tags: %w", err)
+	}
+	if immutableCount > 0 {
+		return fmt.Errorf("%w: manifest has immutable tags", ErrTagImmutable)
+	}
+
+	// Remove manifest layer references.
+	_, err = tx.NewRaw(
+		"DELETE FROM manifest_layers WHERE manifest_id IN (SELECT id FROM manifests WHERE repository_id = ? AND digest = ?)",
+		repoID, digest).Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("deleting manifest layers: %w", err)
+	}
+
+	_, err = tx.NewRaw(
 		"DELETE FROM manifests WHERE repository_id = ? AND digest = ?", repoID, digest).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("deleting manifest: %w", err)
 	}
-	return nil
+
+	return tx.Commit()
 }
 
 func (db *DB) PutManifestLayers(ctx context.Context, manifestID int64, blobDigests []string) error {

@@ -119,6 +119,10 @@ func NewRegistry(db *database.DB, blobs *blobstore.Store, localID, namespace, im
 	return r, nil
 }
 
+func (r *Registry) DB() *database.DB {
+	return r.db
+}
+
 func (r *Registry) SetPublisher(p Publisher) {
 	r.publisher = p
 }
@@ -130,6 +134,30 @@ func (r *Registry) SetFederation(resolver ContentResolver, fetcher BlobFetcher) 
 
 func (r *Registry) Handler() http.Handler {
 	return ociserver.New(r, nil)
+}
+
+// CleanExpiredUploads removes upload sessions that have expired from both
+// the in-memory buffer map and the database.
+func (r *Registry) CleanExpiredUploads(ctx context.Context) (int, error) {
+	expired, err := r.db.ListExpiredUploadSessions(ctx, 100)
+	if err != nil {
+		return 0, fmt.Errorf("listing expired upload sessions: %w", err)
+	}
+
+	for _, uuid := range expired {
+		r.uploadsMu.Lock()
+		delete(r.uploads, uuid)
+		r.uploadsMu.Unlock()
+
+		if err := r.db.DeleteUploadSession(ctx, uuid); err != nil {
+			r.logger.Warn("failed to delete expired upload session", "uuid", uuid, "error", err)
+		}
+	}
+
+	if len(expired) > 0 {
+		r.logger.Info("cleaned expired upload sessions", "count", len(expired))
+	}
+	return len(expired), nil
 }
 
 func (r *Registry) checkNamespace(repo string) error {
@@ -322,6 +350,39 @@ func (r *Registry) getManifest(ctx context.Context, repo string, digest ociregis
 		}
 		if m != nil {
 			return r.serveManifest(ctx, repo, m)
+		}
+	}
+
+	// Manifest not found locally. Try fetching from federation peers that own this repo's namespace.
+	if r.fetcher != nil && repoObj != nil && repoObj.OwnerID != r.localID {
+		follow, err := r.db.GetFollow(ctx, repoObj.OwnerID)
+		if err == nil && follow != nil {
+			data, mediaType, fetchErr := r.fetcher.FetchManifest(ctx, follow.Endpoint, repo, string(digest))
+			if fetchErr == nil {
+				computed := string(godigest.FromBytes(data))
+				if computed == string(digest) {
+					m := &database.Manifest{
+						RepositoryID: repoObj.ID,
+						Digest:       computed,
+						MediaType:    mediaType,
+						SizeBytes:    int64(len(data)),
+						Content:      data,
+						SourceActor:  &repoObj.OwnerID,
+					}
+					if err := r.db.PutManifest(ctx, m); err != nil {
+						r.logger.Warn("failed to cache fetched manifest", "error", err)
+					}
+					metrics.RegistryManifestPullThru.Add(1)
+					desc := ociregistry.Descriptor{
+						MediaType: mediaType,
+						Digest:    digest,
+						Size:      int64(len(data)),
+					}
+					return ocimem.NewBytesReader(data, desc), nil
+				}
+				r.logger.Warn("manifest digest mismatch from federation peer",
+					"expected", string(digest), "got", computed)
+			}
 		}
 	}
 
@@ -534,15 +595,23 @@ func (r *Registry) pushBlob(ctx context.Context, repo string, desc ociregistry.D
 	}, nil
 }
 
+const uploadSessionTTL = 1 * time.Hour
+
 func (r *Registry) pushBlobChunked(ctx context.Context, repo string, chunkSize int) (ociregistry.BlobWriter, error) {
 	if err := r.checkNamespace(repo); err != nil {
 		return nil, err
 	}
-	if _, err := r.db.GetOrCreateRepository(ctx, repo, r.localID); err != nil {
+	repoObj, err := r.db.GetOrCreateRepository(ctx, repo, r.localID)
+	if err != nil {
 		return nil, fmt.Errorf("getting repository: %w", err)
 	}
 
 	buf := r.newUploadBuffer(repo, "")
+
+	if _, err := r.db.CreateUploadSession(ctx, buf.ID(), repoObj.ID, uploadSessionTTL); err != nil {
+		r.logger.Warn("failed to persist upload session", "uuid", buf.ID(), "error", err)
+	}
+
 	return &limitedBlobWriter{BlobWriter: buf, maxSize: r.maxBlobSize}, nil
 }
 
@@ -563,12 +632,24 @@ func (r *Registry) pushBlobChunkedResume(ctx context.Context, repo, id string, o
 		return nil, err
 	}
 
+	// Validate the session exists and hasn't expired.
+	session, err := r.db.GetUploadSession(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("checking upload session: %w", err)
+	}
+	if session == nil {
+		return nil, fmt.Errorf("%w: upload %q not found or expired", ociregistry.ErrBlobUploadUnknown, id)
+	}
+
 	r.uploadsMu.Lock()
 	buf, ok := r.uploads[id]
 	r.uploadsMu.Unlock()
 
 	if !ok {
-		return nil, fmt.Errorf("%w: upload %q not found", ociregistry.ErrBlobUploadUnknown, id)
+		// Session exists in DB but buffer was lost (e.g. server restart).
+		// Clean up the stale DB record.
+		_ = r.db.DeleteUploadSession(ctx, id)
+		return nil, fmt.Errorf("%w: upload %q session expired (server restarted)", ociregistry.ErrBlobUploadUnknown, id)
 	}
 
 	return &limitedBlobWriter{BlobWriter: buf, maxSize: r.maxBlobSize}, nil
@@ -598,6 +679,11 @@ func (r *Registry) newUploadBuffer(repo, uuid string) *ocimem.Buffer {
 		mt := desc.MediaType
 		if err := r.db.PutBlob(commitCtx, string(desc.Digest), desc.Size, &mt, true); err != nil {
 			return fmt.Errorf("recording chunked blob: %w", err)
+		}
+
+		// Clean up the upload session from DB.
+		if err := r.db.DeleteUploadSession(commitCtx, b.ID()); err != nil {
+			r.logger.Warn("failed to delete upload session", "uuid", b.ID(), "error", err)
 		}
 
 		metrics.RegistryBlobPushes.Add(1)
@@ -642,6 +728,21 @@ func (r *Registry) pushManifest(ctx context.Context, repo string, tag string, co
 	digest := string(dgst)
 
 	meta := parseManifestMeta(contents, r.logger)
+
+	// Verify all referenced blobs exist locally before accepting the manifest.
+	// Only check well-formed digests to avoid rejecting manifests with placeholder references.
+	for _, blobDigest := range meta.layerDigests {
+		if validate.Digest(blobDigest) != nil {
+			continue
+		}
+		blob, err := r.db.GetBlob(ctx, blobDigest)
+		if err != nil {
+			return ociregistry.Descriptor{}, fmt.Errorf("checking blob %s: %w", blobDigest, err)
+		}
+		if blob == nil || !blob.StoredLocally {
+			return ociregistry.Descriptor{}, fmt.Errorf("%w: referenced blob %s not found", ociregistry.ErrBlobUnknown, blobDigest)
+		}
+	}
 
 	m := &database.Manifest{
 		RepositoryID:  repoObj.ID,

@@ -130,6 +130,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.healthChecker.Start(ctx)
 	s.deliveryQueue.Start(ctx)
 	s.gc.Start(ctx)
+	s.startUploadCleaner(ctx)
 
 	if s.cfg.Metrics.Enabled {
 		metricsMux := http.NewServeMux()
@@ -218,4 +219,21 @@ func (s *Server) Start(ctx context.Context) error {
 	// Wait for shutdown goroutine to finish before returning.
 	<-shutdownDone
 	return serveErr
+}
+
+func (s *Server) startUploadCleaner(ctx context.Context) {
+	go func() { //nolint:gosec // intentional background goroutine for upload cleanup
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := s.registry.CleanExpiredUploads(ctx); err != nil {
+					s.logger.Warn("upload session cleanup failed", "error", err)
+				}
+			}
+		}
+	}()
 }

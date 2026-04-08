@@ -209,7 +209,7 @@ func TestE2EDeleteFlowViaHTTP(t *testing.T) {
 
 	// Push manifest
 	manifest := fmt.Sprintf(`{"schemaVersion":2,"config":{"digest":"%s","size":%d},"layers":[]}`, blobDigest, len(blobData))
-	req = authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/deltest/manifests/v1", strings.NewReader(manifest)))
+	req = authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/test.example.com/deltest/manifests/latest", strings.NewReader(manifest)))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
