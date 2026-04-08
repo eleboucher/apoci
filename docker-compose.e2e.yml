@@ -24,7 +24,7 @@ services:
       retries: 10
 
   e2e:
-    image: alpine:3.21
+    image: alpine:3.23
     depends_on:
       alice:
         condition: service_healthy
