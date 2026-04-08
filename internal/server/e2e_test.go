@@ -182,13 +182,21 @@ func TestE2ENamespaceEnforcementViaHTTP(t *testing.T) {
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "namespaced push")
 
-	// Push to wrong namespace is rejected
+	// Push without namespace prefix succeeds (auto-prefixed)
 	req = authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/someone-else/myapp/manifests/v1", strings.NewReader(manifest)))
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
-	require.NotEqual(t, http.StatusCreated, resp.StatusCode, "push to wrong namespace should be rejected")
+	require.Equal(t, http.StatusCreated, resp.StatusCode, "push without prefix should succeed via auto-prefix")
+
+	// Push to a foreign domain-scoped namespace is rejected
+	req = authReq(mustNewRequest(t, "PUT", srv.URL+"/v2/foreign.example.com/myapp/manifests/v1", strings.NewReader(manifest)))
+	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.NotEqual(t, http.StatusCreated, resp.StatusCode, "push to foreign domain must be rejected")
 }
 
 func TestE2EDeleteFlowViaHTTP(t *testing.T) {

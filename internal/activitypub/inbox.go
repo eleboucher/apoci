@@ -130,6 +130,12 @@ func (h *InboxHandler) SetEnqueueFunc(fn EnqueueFunc) {
 	h.enqueue = fn
 }
 
+// SetNamespaceForActor pre-populates the namespace cache for a given actor,
+// bypassing the actor fetch. Intended for testing.
+func (h *InboxHandler) SetNamespaceForActor(actorURL, namespace string) {
+	h.nsCache.Set(actorURL, namespace, ttlcache.DefaultTTL)
+}
+
 const (
 	ActivityFollow   = "Follow"
 	ActivityAccept   = "Accept"
@@ -849,25 +855,37 @@ func repoOwnedBySender(repo, senderDomain string) bool {
 // fetchSenderNamespace returns the OCI namespace for a remote actor.
 // It checks the actor's ociNamespace field (supports split-domain), falling
 // back to the actor URL hostname for older nodes that don't advertise it.
+// The claimed namespace is validated: it must be the actor's hostname or a
+// parent domain of it (e.g. registry.example.com may claim example.com).
 func (h *InboxHandler) fetchSenderNamespace(ctx context.Context, actorURL string) (string, error) {
 	if item := h.nsCache.Get(actorURL); item != nil {
 		return item.Value(), nil
 	}
 
-	actor, err := FetchActor(ctx, actorURL)
+	actorHost, err := senderDomainFromActorURL(actorURL)
 	if err != nil {
-		return senderDomainFromActorURL(actorURL)
+		return "", err
+	}
+
+	actor, fetchErr := FetchActor(ctx, actorURL)
+	if fetchErr != nil {
+		h.nsCache.Set(actorURL, actorHost, ttlcache.DefaultTTL)
+		return actorHost, nil
 	}
 
 	ns := actor.OCINamespace
-	if ns == "" {
-		ns, err = senderDomainFromActorURL(actorURL)
-		if err != nil {
-			return "", err
-		}
+	if ns == "" || !validNamespaceForHost(ns, actorHost) {
+		ns = actorHost
 	}
 	h.nsCache.Set(actorURL, ns, ttlcache.DefaultTTL)
 	return ns, nil
+}
+
+// validNamespaceForHost checks that ns is the host itself or a parent domain.
+// e.g. host "registry.example.com" may claim "example.com" or "registry.example.com",
+// but not "evil.com".
+func validNamespaceForHost(ns, actorHost string) bool {
+	return actorHost == ns || strings.HasSuffix(actorHost, "."+ns)
 }
 
 func (h *InboxHandler) ingestTag(ctx context.Context, w http.ResponseWriter, obj map[string]any, actorURL string) {

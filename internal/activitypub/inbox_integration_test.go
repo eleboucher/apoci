@@ -1127,6 +1127,11 @@ func TestInboxCreateManifestSplitDomainNamespace(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, actorSrv.URL))
 
+	// Pre-populate the namespace cache to simulate a validated split-domain.
+	// httptest uses 127.0.0.1 which can't pass the parent-domain validation
+	// against "alice.test" — covered by TestValidNamespaceForHost instead.
+	inbox.SetNamespaceForActor(alice.ActorURL, "alice.test")
+
 	create := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
 		"id":       alice.ActorURL + "#create-split-1",
@@ -1150,4 +1155,91 @@ func TestInboxCreateManifestSplitDomainNamespace(t *testing.T) {
 	repoObj, err := db.GetRepository(ctx, "alice.test/myapp")
 	require.NoError(t, err)
 	require.NotNil(t, repoObj)
+}
+
+func TestInboxRejectsSpoofedNamespace(t *testing.T) {
+	dir := t.TempDir()
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	// Evil actor claims ociNamespace of a different domain.
+	evil, err := LoadOrCreateIdentity("https://evil.test", "evil.test", "", "", discardLogger())
+	require.NoError(t, err)
+
+	bob, err := LoadOrCreateIdentity("https://bob.test", "bob.test", "", "", discardLogger())
+	require.NoError(t, err)
+
+	inbox := NewInboxHandler(bob, db, InboxConfig{
+		MaxManifestSize: config.DefaultMaxManifestSize,
+		MaxBlobSize:     config.DefaultMaxBlobSize,
+		AutoAccept:      "none",
+	}, discardLogger())
+
+	evilPEM, _ := evil.PublicKeyPEM()
+	evilActor := Actor{
+		Context: []any{"https://www.w3.org/ns/activitystreams", "https://w3id.org/security/v1"},
+		Type:    "Application",
+		ID:      evil.ActorURL,
+		Inbox:   "https://evil.test/ap/inbox",
+		PublicKey: ActorPublicKey{
+			ID:           evil.KeyID(),
+			Owner:        evil.ActorURL,
+			PublicKeyPEM: evilPEM,
+		},
+		OCINamespace: "victim.test", // spoofed namespace
+	}
+
+	actorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/activity+json")
+		_ = json.NewEncoder(w).Encode(evilActor)
+	}))
+	t.Cleanup(actorSrv.Close)
+
+	evil.ActorURL = actorSrv.URL + "/ap/actor"
+	evilActor.ID = evil.ActorURL
+	evilActor.PublicKey.ID = evil.ActorURL + "#main-key"
+	evilActor.PublicKey.Owner = evil.ActorURL
+
+	ctx := context.Background()
+	require.NoError(t, db.AddFollow(ctx, evil.ActorURL, evilPEM, actorSrv.URL))
+
+	// Evil tries to push a repo under the spoofed namespace.
+	create := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       evil.ActorURL + "#create-spoof",
+		"type":     "Create",
+		"actor":    evil.ActorURL,
+		"object": map[string]any{
+			"type":          "OCIManifest",
+			"ociRepository": "victim.test/malicious",
+			"ociDigest":     "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
+			"ociMediaType":  "application/vnd.oci.image.manifest.v1+json",
+			"ociSize":       float64(256),
+		},
+	}
+
+	req := signedInboxPost(t, evil, create)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusForbidden, rec.Code, "spoofed namespace must be rejected")
+}
+
+func TestValidNamespaceForHost(t *testing.T) {
+	tests := []struct {
+		ns, host string
+		want     bool
+	}{
+		{"example.com", "registry.example.com", true},
+		{"example.com", "example.com", true},
+		{"example.com", "evil.test", false},
+		{"example.com", "notexample.com", false},
+		{"a.b.c", "x.a.b.c", true},
+		{"alice.test", "127.0.0.1", false},
+	}
+	for _, tt := range tests {
+		got := validNamespaceForHost(tt.ns, tt.host)
+		require.Equal(t, tt.want, got, "validNamespaceForHost(%q, %q)", tt.ns, tt.host)
+	}
 }

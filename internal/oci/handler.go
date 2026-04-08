@@ -160,13 +160,30 @@ func (r *Registry) CleanExpiredUploads(ctx context.Context) (int, error) {
 	return len(expired), nil
 }
 
+// normalizeRepo auto-prepends the namespace prefix when the repo is not
+// domain-scoped. Domain-scoped repos (first component contains a dot, e.g.
+// "mortecouille.dev/user/app") pass through unchanged so federated repos
+// remain addressable.
+func (r *Registry) normalizeRepo(repo string) string {
+	if r.namespace == "" {
+		return repo
+	}
+	prefix := r.namespace + "/"
+	if strings.HasPrefix(repo, prefix) {
+		return repo
+	}
+	if first, _, _ := strings.Cut(repo, "/"); strings.Contains(first, ".") {
+		return repo
+	}
+	return prefix + repo
+}
+
 func (r *Registry) checkNamespace(repo string) error {
 	if r.namespace == "" {
 		return nil
 	}
-	prefix := r.namespace + "/"
-	if !strings.HasPrefix(repo, prefix) {
-		return fmt.Errorf("%w: repository must start with %q", ociregistry.ErrDenied, prefix)
+	if !strings.HasPrefix(repo, r.namespace+"/") {
+		return fmt.Errorf("%w: repository %q is not in local namespace %q", ociregistry.ErrDenied, repo, r.namespace)
 	}
 	return nil
 }
@@ -174,6 +191,7 @@ func (r *Registry) checkNamespace(repo string) error {
 const defaultMediaType = "application/octet-stream"
 
 func (r *Registry) getBlob(ctx context.Context, repo string, digest ociregistry.Digest) (ociregistry.BlobReader, error) {
+	repo = r.normalizeRepo(repo)
 	metrics.RegistryBlobPulls.Add(1)
 	f, err := r.blobs.Open(string(digest))
 	if err != nil && !errors.Is(err, blobstore.ErrBlobNotFound) {
@@ -278,6 +296,7 @@ func (r *Registry) fetchBlobFromPeers(ctx context.Context, repo string, digest o
 }
 
 func (r *Registry) getBlobRange(ctx context.Context, repo string, digest ociregistry.Digest, offset0, offset1 int64) (ociregistry.BlobReader, error) {
+	repo = r.normalizeRepo(repo)
 	f, err := r.blobs.Open(string(digest))
 	if err != nil && !errors.Is(err, blobstore.ErrBlobNotFound) {
 		return nil, fmt.Errorf("opening blob: %w", err)
@@ -338,6 +357,7 @@ type limitedReadCloser struct {
 }
 
 func (r *Registry) getManifest(ctx context.Context, repo string, digest ociregistry.Digest) (ociregistry.BlobReader, error) {
+	repo = r.normalizeRepo(repo)
 	metrics.RegistryManifestPulls.Add(1)
 	repoObj, err := r.db.GetRepository(ctx, repo)
 	if err != nil {
@@ -390,6 +410,7 @@ func (r *Registry) getManifest(ctx context.Context, repo string, digest ociregis
 }
 
 func (r *Registry) getTag(ctx context.Context, repo string, tagName string) (ociregistry.BlobReader, error) {
+	repo = r.normalizeRepo(repo)
 	repoObj, err := r.db.GetRepository(ctx, repo)
 	if err != nil {
 		return nil, fmt.Errorf("getting repository: %w", err)
@@ -479,7 +500,7 @@ func (r *Registry) fetchManifestFromSource(ctx context.Context, repo string, m *
 	return data, nil
 }
 
-func (r *Registry) resolveBlob(ctx context.Context, repo string, digest ociregistry.Digest) (ociregistry.Descriptor, error) {
+func (r *Registry) resolveBlob(ctx context.Context, _ string, digest ociregistry.Digest) (ociregistry.Descriptor, error) {
 	blob, err := r.db.GetBlob(ctx, string(digest))
 	if err != nil {
 		return ociregistry.Descriptor{}, fmt.Errorf("resolving blob: %w", err)
@@ -501,6 +522,7 @@ func (r *Registry) resolveBlob(ctx context.Context, repo string, digest ociregis
 }
 
 func (r *Registry) resolveManifest(ctx context.Context, repo string, digest ociregistry.Digest) (ociregistry.Descriptor, error) {
+	repo = r.normalizeRepo(repo)
 	repoObj, err := r.db.GetRepository(ctx, repo)
 	if err != nil {
 		return ociregistry.Descriptor{}, fmt.Errorf("resolving manifest: %w", err)
@@ -525,6 +547,7 @@ func (r *Registry) resolveManifest(ctx context.Context, repo string, digest ocir
 }
 
 func (r *Registry) resolveTag(ctx context.Context, repo string, tagName string) (ociregistry.Descriptor, error) {
+	repo = r.normalizeRepo(repo)
 	repoObj, err := r.db.GetRepository(ctx, repo)
 	if err != nil {
 		return ociregistry.Descriptor{}, fmt.Errorf("resolving tag: %w", err)
@@ -549,6 +572,7 @@ func (r *Registry) resolveTag(ctx context.Context, repo string, tagName string) 
 }
 
 func (r *Registry) pushBlob(ctx context.Context, repo string, desc ociregistry.Descriptor, rd io.Reader) (ociregistry.Descriptor, error) {
+	repo = r.normalizeRepo(repo)
 	if err := r.checkNamespace(repo); err != nil {
 		return ociregistry.Descriptor{}, err
 	}
@@ -598,6 +622,7 @@ func (r *Registry) pushBlob(ctx context.Context, repo string, desc ociregistry.D
 const uploadSessionTTL = 1 * time.Hour
 
 func (r *Registry) pushBlobChunked(ctx context.Context, repo string, chunkSize int) (ociregistry.BlobWriter, error) {
+	repo = r.normalizeRepo(repo)
 	if err := r.checkNamespace(repo); err != nil {
 		return nil, err
 	}
@@ -628,6 +653,7 @@ func (l *limitedBlobWriter) Write(p []byte) (int, error) {
 }
 
 func (r *Registry) pushBlobChunkedResume(ctx context.Context, repo, id string, offset int64, chunkSize int) (ociregistry.BlobWriter, error) {
+	repo = r.normalizeRepo(repo)
 	if err := r.checkNamespace(repo); err != nil {
 		return nil, err
 	}
@@ -709,6 +735,7 @@ func (r *Registry) newUploadBuffer(repo, uuid string) *ocimem.Buffer {
 }
 
 func (r *Registry) pushManifest(ctx context.Context, repo string, tag string, contents []byte, mediaType string) (ociregistry.Descriptor, error) {
+	repo = r.normalizeRepo(repo)
 	if err := r.checkNamespace(repo); err != nil {
 		return ociregistry.Descriptor{}, err
 	}
@@ -803,6 +830,7 @@ func (r *Registry) pushManifest(ctx context.Context, repo string, tag string, co
 }
 
 func (r *Registry) deleteBlob(ctx context.Context, repo string, digest ociregistry.Digest) error {
+	repo = r.normalizeRepo(repo)
 	repoObj, err := r.db.GetRepository(ctx, repo)
 	if err != nil {
 		return fmt.Errorf("getting repository: %w", err)
@@ -825,6 +853,7 @@ func (r *Registry) deleteBlob(ctx context.Context, repo string, digest ociregist
 }
 
 func (r *Registry) deleteManifest(ctx context.Context, repo string, digest ociregistry.Digest) error {
+	repo = r.normalizeRepo(repo)
 	repoObj, err := r.db.GetRepository(ctx, repo)
 	if err != nil {
 		return fmt.Errorf("getting repository: %w", err)
@@ -839,6 +868,7 @@ func (r *Registry) deleteManifest(ctx context.Context, repo string, digest ocire
 }
 
 func (r *Registry) deleteTag(ctx context.Context, repo string, name string) error {
+	repo = r.normalizeRepo(repo)
 	repoObj, err := r.db.GetRepository(ctx, repo)
 	if err != nil {
 		return fmt.Errorf("getting repository: %w", err)
@@ -883,6 +913,7 @@ func (r *Registry) repositories(ctx context.Context, startAfter string) iter.Seq
 }
 
 func (r *Registry) tags(ctx context.Context, repo string, startAfter string) iter.Seq2[string, error] {
+	repo = r.normalizeRepo(repo)
 	return func(yield func(string, error) bool) {
 		repoObj, err := r.db.GetRepository(ctx, repo)
 		if err != nil {
@@ -915,6 +946,7 @@ func (r *Registry) tags(ctx context.Context, repo string, startAfter string) ite
 }
 
 func (r *Registry) referrers(ctx context.Context, repo string, digest ociregistry.Digest, artifactType string) iter.Seq2[ociregistry.Descriptor, error] {
+	repo = r.normalizeRepo(repo)
 	return func(yield func(ociregistry.Descriptor, error) bool) {
 		repoObj, err := r.db.GetRepository(ctx, repo)
 		if err != nil {

@@ -219,7 +219,22 @@ endpoint: "https://registry.example.com"
 accountDomain: "example.com"
 ```
 
-WebFinger accepts both `acct:registry@example.com` and `acct:registry@registry.example.com`. OCI repositories are namespaced under the `accountDomain` (e.g. `example.com/myapp`), and federated peers use the `ociNamespace` field in the actor document to validate ownership.
+WebFinger accepts both `acct:registry@example.com` and `acct:registry@registry.example.com`. Repos are namespaced under the `accountDomain` (`example.com/*`). Federated peers read the `ociNamespace` field in the actor document to validate ownership.
+
+The domain prefix is added automatically on push/pull, so you don't need to type it:
+
+```bash
+docker push registry.example.com/myteam/myapp:v1
+# stored and federated as example.com/myteam/myapp
+```
+
+Federated repos from other domains keep their full path:
+
+```bash
+docker pull registry.example.com/other.dev/user/repo:latest
+```
+
+Writes to a foreign namespace (`other.dev/...`) are rejected; reads work for any repo in the database.
 
 You need to proxy `/.well-known/webfinger` from the vanity domain to the service:
 

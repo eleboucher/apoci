@@ -145,11 +145,12 @@ func TestOwnershipEnforcement(t *testing.T) {
 	_, err = alice.PushManifest(ctx, "alice.example.com/shared/repo", "v1", manifest, "application/vnd.oci.image.manifest.v1+json")
 	require.NoError(t, err)
 
-	// Bob tries to push to Alice's repo -- should fail
+	// Bob tries to push to Alice's repo — rejected because alice.example.com
+	// is domain-scoped and doesn't match Bob's namespace.
 	bob, err := NewRegistry(db, blobs, "https://bob.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
 	require.NoError(t, err)
 	_, err = bob.PushManifest(ctx, "alice.example.com/shared/repo", "v2", manifest, "application/vnd.oci.image.manifest.v1+json")
-	require.Error(t, err, "expected ownership error when bob pushes to alice's repo")
+	require.Error(t, err, "push to foreign domain namespace must be rejected")
 }
 
 func TestDeleteManifestAndTag(t *testing.T) {
@@ -314,7 +315,7 @@ func TestTagImmutability(t *testing.T) {
 	require.NoError(t, err, "second push to latest should succeed")
 }
 
-func TestNamespaceEnforcement(t *testing.T) {
+func TestNamespaceNormalization(t *testing.T) {
 	dir := t.TempDir()
 	db, _ := database.OpenSQLite(dir, 0, 0, nopLog())
 	defer func() { _ = db.Close() }()
@@ -327,17 +328,32 @@ func TestNamespaceEnforcement(t *testing.T) {
 	manifest := []byte(`{"schemaVersion":2}`)
 	mediaType := testManifestMediaType
 
-	// Push to namespaced repo succeeds
+	// Push with explicit namespace prefix succeeds
 	_, err = reg.PushManifest(ctx, "alice/myapp", "v1", manifest, mediaType)
 	require.NoError(t, err, "push to alice/myapp should succeed")
 
-	// Push outside namespace is rejected
-	_, err = reg.PushManifest(ctx, "bob/myapp", "v1", manifest, mediaType)
-	require.Error(t, err, "push to bob/myapp should be rejected")
-
-	// Push without prefix is rejected
+	// Push without namespace prefix succeeds (auto-prefixed)
 	_, err = reg.PushManifest(ctx, "myapp", "v1", manifest, mediaType)
-	require.Error(t, err, "push to myapp (no prefix) should be rejected")
+	require.NoError(t, err, "push to myapp (no prefix) should succeed via auto-prefix")
+
+	// Verify the auto-prefixed repo is stored with the canonical name
+	repoObj, err := db.GetRepository(ctx, "alice/myapp")
+	require.NoError(t, err)
+	require.NotNil(t, repoObj, "alice/myapp should exist in DB")
+
+	// Pull without prefix works (normalized to canonical name)
+	reader, err := reg.GetTag(ctx, "myapp", "v1")
+	require.NoError(t, err)
+	_ = reader.Close()
+
+	// Pull with explicit prefix also works
+	reader2, err := reg.GetTag(ctx, "alice/myapp", "v1")
+	require.NoError(t, err)
+	_ = reader2.Close()
+
+	// Push to a foreign domain-scoped name is rejected
+	_, err = reg.PushManifest(ctx, "foreign.example.com/evil", "v1", manifest, mediaType)
+	require.Error(t, err, "push to foreign domain must be rejected")
 }
 
 func TestBlobRangeRequest(t *testing.T) {
