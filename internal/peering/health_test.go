@@ -11,6 +11,7 @@ import (
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/config"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
 )
 
 func TestHealthCheckerStartStop(t *testing.T) {
@@ -39,7 +40,7 @@ func TestHealthCheckerStartStop(t *testing.T) {
 	}))
 
 	fetcher := NewFetcher(5*time.Second, config.DefaultMaxBlobSize, config.DefaultMaxManifestSize, nopLog())
-	hc := NewHealthChecker(db, fetcher, 100*time.Millisecond, nopLog())
+	hc := NewHealthChecker(db, fetcher, 100*time.Millisecond, notify.New("test", nil, nil, nopLog()), nopLog())
 
 	hc.Start(ctx)
 
@@ -62,7 +63,7 @@ func TestHealthCheckerDoubleStartIsNoop(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	fetcher := NewFetcher(5*time.Second, config.DefaultMaxBlobSize, config.DefaultMaxManifestSize, nopLog())
-	hc := NewHealthChecker(db, fetcher, 100*time.Millisecond, nopLog())
+	hc := NewHealthChecker(db, fetcher, 100*time.Millisecond, notify.New("test", nil, nil, nopLog()), nopLog())
 
 	ctx := context.Background()
 	hc.Start(ctx)

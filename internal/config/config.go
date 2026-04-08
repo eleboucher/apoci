@@ -32,11 +32,12 @@ type Config struct {
 	Database Database `yaml:"database"   envPrefix:"APOCI_DB_"`
 	TLS      *TLS     `yaml:"tls,omitempty"`
 
-	Peering    Peering    `yaml:"peering"    envPrefix:"APOCI_PEERING_"`
-	Federation Federation `yaml:"federation" envPrefix:"APOCI_FEDERATION_"`
-	Limits     Limits     `yaml:"limits"     envPrefix:"APOCI_"`
-	Metrics    Metrics    `yaml:"metrics"    envPrefix:"APOCI_METRICS_"`
-	GC         GC         `yaml:"gc"         envPrefix:"APOCI_GC_"`
+	Peering       Peering       `yaml:"peering"    envPrefix:"APOCI_PEERING_"`
+	Federation    Federation    `yaml:"federation" envPrefix:"APOCI_FEDERATION_"`
+	Limits        Limits        `yaml:"limits"     envPrefix:"APOCI_"`
+	Metrics       Metrics       `yaml:"metrics"       envPrefix:"APOCI_METRICS_"`
+	GC            GC            `yaml:"gc"            envPrefix:"APOCI_GC_"`
+	Notifications Notifications `yaml:"notifications" envPrefix:"APOCI_NOTIFICATIONS_"`
 
 	Domain string `yaml:"-" env:"-"`
 }
@@ -80,6 +81,11 @@ type Metrics struct {
 	Enabled bool   `yaml:"enabled" env:"ENABLED"`
 	Listen  string `yaml:"listen"  env:"LISTEN"`
 	Token   string `yaml:"token"   env:"TOKEN"`
+}
+
+type Notifications struct {
+	URLs   []string `yaml:"urls"   env:"URLS"   envSeparator:","`
+	Events []string `yaml:"events" env:"EVENTS" envSeparator:","`
 }
 
 type GC struct {
@@ -311,6 +317,18 @@ func validate(cfg *Config) error {
 	}
 	if cfg.GC.OrphanBatchSize < 0 {
 		return fmt.Errorf("gc.orphanBatchSize must not be negative")
+	}
+
+	validNotificationEvents := map[string]bool{
+		"peer_health":         true,
+		"follow_request":      true,
+		"replication_failure": true,
+		"gc_error":            true,
+	}
+	for _, e := range cfg.Notifications.Events {
+		if !validNotificationEvents[e] {
+			return fmt.Errorf("notifications.events: unknown event %q", e)
+		}
 	}
 
 	return nil

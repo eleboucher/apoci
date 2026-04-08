@@ -2,17 +2,20 @@ package peering
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
 )
 
 type HealthChecker struct {
 	db       *database.DB
 	fetcher  *Fetcher
 	interval time.Duration
+	notifier *notify.Notifier
 	logger   *slog.Logger
 
 	mu      sync.Mutex
@@ -21,11 +24,12 @@ type HealthChecker struct {
 	wg      sync.WaitGroup
 }
 
-func NewHealthChecker(db *database.DB, fetcher *Fetcher, interval time.Duration, logger *slog.Logger) *HealthChecker {
+func NewHealthChecker(db *database.DB, fetcher *Fetcher, interval time.Duration, notifier *notify.Notifier, logger *slog.Logger) *HealthChecker {
 	return &HealthChecker{
 		db:       db,
 		fetcher:  fetcher,
 		interval: interval,
+		notifier: notifier,
 		logger:   logger,
 	}
 }
@@ -94,6 +98,11 @@ func (hc *HealthChecker) checkAll(ctx context.Context) {
 				"endpoint", peer.Endpoint,
 				"healthy", healthy,
 			)
+			if healthy {
+				hc.notifier.Send(notify.EventPeerHealth, fmt.Sprintf("Peer %s is back online", peer.Endpoint))
+			} else {
+				hc.notifier.Send(notify.EventPeerHealth, fmt.Sprintf("Peer %s is unreachable", peer.Endpoint))
+			}
 		}
 
 		if err := hc.db.SetPeerHealth(ctx, peer.ActorURL, healthy); err != nil {

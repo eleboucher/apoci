@@ -2,6 +2,7 @@ package peering
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -9,27 +10,30 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
 )
 
 const maxConcurrentReplications = 10
 
 // BlobReplicator eagerly fetches blobs from federation peers and stores them locally.
 type BlobReplicator struct {
-	db      *database.DB
-	blobs   *blobstore.Store
-	fetcher *Fetcher
-	logger  *slog.Logger
-	sem     chan struct{}
-	wg      sync.WaitGroup
+	db       *database.DB
+	blobs    *blobstore.Store
+	fetcher  *Fetcher
+	notifier *notify.Notifier
+	logger   *slog.Logger
+	sem      chan struct{}
+	wg       sync.WaitGroup
 }
 
-func NewBlobReplicator(db *database.DB, blobs *blobstore.Store, fetcher *Fetcher, logger *slog.Logger) *BlobReplicator {
+func NewBlobReplicator(db *database.DB, blobs *blobstore.Store, fetcher *Fetcher, notifier *notify.Notifier, logger *slog.Logger) *BlobReplicator {
 	return &BlobReplicator{
-		db:      db,
-		blobs:   blobs,
-		fetcher: fetcher,
-		logger:  logger,
-		sem:     make(chan struct{}, maxConcurrentReplications),
+		db:       db,
+		blobs:    blobs,
+		fetcher:  fetcher,
+		notifier: notifier,
+		logger:   logger,
+		sem:      make(chan struct{}, maxConcurrentReplications),
 	}
 }
 
@@ -81,6 +85,7 @@ func (r *BlobReplicator) replicateBlob(ctx context.Context, peerEndpoint, digest
 			"peer", peerEndpoint,
 			"error", err,
 		)
+		r.notifier.Send(notify.EventReplicationFailure, fmt.Sprintf("Failed to replicate blob %s from %s: %v", digest, peerEndpoint, err))
 		return
 	}
 	defer func() {
@@ -96,6 +101,7 @@ func (r *BlobReplicator) replicateBlob(ctx context.Context, peerEndpoint, digest
 			"digest", digest,
 			"error", err,
 		)
+		r.notifier.Send(notify.EventReplicationFailure, fmt.Sprintf("Failed to store replicated blob %s: %v", digest, err))
 		return
 	}
 

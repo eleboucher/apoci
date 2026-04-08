@@ -18,6 +18,7 @@ import (
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
 )
 
@@ -41,6 +42,7 @@ type InboxHandler struct {
 	actorCache     ActorInvalidator
 	enqueue        EnqueueFunc
 	worker         ActivityEnqueuer
+	notifier       *notify.Notifier
 
 	maxManifestSize int64
 	maxBlobSize     int64
@@ -144,6 +146,10 @@ func (h *InboxHandler) SetEnqueueFunc(fn EnqueueFunc) {
 
 func (h *InboxHandler) SetWorker(w ActivityEnqueuer) {
 	h.worker = w
+}
+
+func (h *InboxHandler) SetNotifier(n *notify.Notifier) {
+	h.notifier = n
 }
 
 // SetNamespaceForActor pre-populates the namespace cache for a given actor,
@@ -378,6 +384,9 @@ func (h *InboxHandler) processFollow(ctx context.Context, activity *RawActivity,
 	}
 
 	h.logger.Info("inbox: received follow request (pending operator approval)", "from", activity.Actor)
+	if h.notifier != nil {
+		h.notifier.Send(notify.EventFollowRequest, fmt.Sprintf("New follow request from %s (pending approval)", activity.Actor))
+	}
 	return nil
 }
 

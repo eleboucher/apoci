@@ -10,6 +10,7 @@ import (
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
 )
 
 func testGCDeps(t *testing.T) (*database.DB, *blobstore.Store) {
@@ -150,7 +151,7 @@ func TestGCStartStop(t *testing.T) {
 		Interval:         6 * time.Hour,
 		StalePeerBlobAge: 30 * 24 * time.Hour,
 		OrphanBatchSize:  500,
-	}, db, blobs, nopLog())
+	}, db, blobs, notify.New("test", nil, nil, nopLog()), nopLog())
 	gc.Start(ctx)
 
 	// Stop should return promptly without panic.

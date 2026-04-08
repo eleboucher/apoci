@@ -2,6 +2,7 @@ package peering
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
 )
 
 // GCConfig holds tunable parameters for the garbage collector.
@@ -20,24 +22,26 @@ type GCConfig struct {
 
 // GarbageCollector periodically cleans up stale data.
 type GarbageCollector struct {
-	cfg     GCConfig
-	db      *database.DB
-	blobs   *blobstore.Store
-	logger  *slog.Logger
-	mu      sync.Mutex
-	running bool
-	wg      sync.WaitGroup
-	stop    chan struct{}
-	once    sync.Once
+	cfg      GCConfig
+	db       *database.DB
+	blobs    *blobstore.Store
+	notifier *notify.Notifier
+	logger   *slog.Logger
+	mu       sync.Mutex
+	running  bool
+	wg       sync.WaitGroup
+	stop     chan struct{}
+	once     sync.Once
 }
 
-func NewGarbageCollector(cfg GCConfig, db *database.DB, blobs *blobstore.Store, logger *slog.Logger) *GarbageCollector {
+func NewGarbageCollector(cfg GCConfig, db *database.DB, blobs *blobstore.Store, notifier *notify.Notifier, logger *slog.Logger) *GarbageCollector {
 	return &GarbageCollector{
-		cfg:    cfg,
-		db:     db,
-		blobs:  blobs,
-		logger: logger,
-		stop:   make(chan struct{}),
+		cfg:      cfg,
+		db:       db,
+		blobs:    blobs,
+		notifier: notifier,
+		logger:   logger,
+		stop:     make(chan struct{}),
 	}
 }
 
@@ -95,6 +99,7 @@ func (gc *GarbageCollector) cleanupStalePeerBlobs(ctx context.Context) {
 	n, err := gc.db.CleanupStalePeerBlobs(ctx, gc.cfg.StalePeerBlobAge)
 	if err != nil {
 		gc.logger.Error("gc: failed to cleanup stale peer blobs", "error", err)
+		gc.notifier.Send(notify.EventGCError, fmt.Sprintf("GC: failed to cleanup stale peer blobs: %v", err))
 		return
 	}
 	if n > 0 {
@@ -109,6 +114,7 @@ func (gc *GarbageCollector) cleanupOrphanedBlobMetadata(ctx context.Context) {
 	digests, err := gc.db.OrphanedBlobs(ctx, gc.cfg.OrphanBatchSize)
 	if err != nil {
 		gc.logger.Error("gc: failed to find orphaned blobs", "error", err)
+		gc.notifier.Send(notify.EventGCError, fmt.Sprintf("GC: failed to find orphaned blobs: %v", err))
 		return
 	}
 
@@ -134,12 +140,14 @@ func (gc *GarbageCollector) cleanupOrphanedBlobFiles(ctx context.Context) {
 	diskDigests, err := gc.blobs.ListDigests()
 	if err != nil {
 		gc.logger.Error("gc: failed to list blob files on disk", "error", err)
+		gc.notifier.Send(notify.EventGCError, fmt.Sprintf("GC: failed to list blob files on disk: %v", err))
 		return
 	}
 
 	knownDigests, err := gc.db.AllBlobDigests(ctx, 1000)
 	if err != nil {
 		gc.logger.Error("gc: failed to list known blob digests", "error", err)
+		gc.notifier.Send(notify.EventGCError, fmt.Sprintf("GC: failed to list known blob digests: %v", err))
 		return
 	}
 

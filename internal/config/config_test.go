@@ -235,6 +235,35 @@ gc:
 	require.Equal(t, 100, cfg.GC.OrphanBatchSize)
 }
 
+func TestNotificationsValidEvents(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, fmt.Sprintf(`
+endpoint: "https://test.example.com"
+dataDir: %q
+notifications:
+  events:
+    - peer_health
+    - gc_error
+`, dir))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, []string{"peer_health", "gc_error"}, cfg.Notifications.Events)
+}
+
+func TestNotificationsInvalidEvent(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, fmt.Sprintf(`
+endpoint: "https://test.example.com"
+dataDir: %q
+notifications:
+  events:
+    - bogus_event
+`, dir))
+	_, err := Load(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bogus_event")
+}
+
 func TestGCNegativeInterval(t *testing.T) {
 	dir := t.TempDir()
 	path := writeConfig(t, fmt.Sprintf(`

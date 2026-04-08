@@ -252,6 +252,33 @@ example.com {
 
 Path-prefix proxying (`example.com/registry/...`) is not supported.
 
+## Notifications
+
+Send alerts to Discord, Slack, Telegram, email, and more via [shoutrrr](https://github.com/nicholas-fedor/shoutrrr) URLs.
+
+```yaml
+notifications:
+  urls:
+    - "discord://token@id"
+    - "slack://token:token:token@channel"
+  events:
+    - peer_health
+    - follow_request
+    - replication_failure
+    - gc_error
+```
+
+| Event | Description |
+|-------|-------------|
+| `peer_health` | A federation peer went up or down |
+| `follow_request` | New follow request pending operator approval |
+| `replication_failure` | Blob replication from a peer failed |
+| `gc_error` | Garbage collection encountered an error |
+
+No events are enabled by default. See the [shoutrrr docs](https://nicholas-fedor.github.io/shoutrrr) for supported services and URL formats.
+
+Env vars: `APOCI_NOTIFICATIONS_URLS` (comma-separated) and `APOCI_NOTIFICATIONS_EVENTS` (comma-separated).
+
 ## Monitoring
 
 Enable metrics in config:
@@ -330,6 +357,8 @@ All settings can be configured via YAML file, environment variables, or both. En
 | `federation.allowedDomains` | `APOCI_FEDERATION_ALLOWED_DOMAINS` | `[]` | Always auto-accept follows from these domains (comma-separated in env) |
 | `federation.blockedDomains` | `APOCI_FEDERATION_BLOCKED_DOMAINS` | `[]` | Silently drop all activities from these domains (comma-separated in env) |
 | `federation.blockedActors` | `APOCI_FEDERATION_BLOCKED_ACTORS` | `[]` | Silently drop all activities from these actor URLs (comma-separated in env) |
+| `notifications.urls` | `APOCI_NOTIFICATIONS_URLS` | `[]` | Shoutrrr notification URLs (comma-separated in env) |
+| `notifications.events` | `APOCI_NOTIFICATIONS_EVENTS` | `[]` | Events to notify on: `peer_health`, `follow_request`, `replication_failure`, `gc_error` (comma-separated in env) |
 | `metrics.enabled` | `APOCI_METRICS_ENABLED` | `false` | Expose `/debug/vars` on the metrics port |
 | `metrics.listen` | `APOCI_METRICS_LISTEN` | `:9090` | Metrics bind address |
 | `metrics.token` | `APOCI_METRICS_TOKEN` | | Bearer token for `/debug/vars` (unauthenticated if empty) |
