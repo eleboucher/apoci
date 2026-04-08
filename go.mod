@@ -3,6 +3,7 @@ module git.erwanleboucher.dev/eleboucher/apoci
 go 1.26.1
 
 require (
+	charm.land/lipgloss/v2 v2.0.2
 	code.superseriousbusiness.org/httpsig v1.5.0
 	cuelabs.dev/go/oci/ociregistry v0.0.0-20251212221603-3adeb8663819
 	github.com/caarlos0/env/v11 v11.4.0
@@ -24,7 +25,6 @@ require (
 )
 
 require (
-	charm.land/lipgloss/v2 v2.0.2 // indirect
 	github.com/charmbracelet/colorprofile v0.4.2 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20251205161215-1948445e3318 // indirect
 	github.com/charmbracelet/x/ansi v0.11.6 // indirect
