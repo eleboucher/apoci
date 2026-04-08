@@ -30,6 +30,23 @@ func TestActorHandler(t *testing.T) {
 	require.Equal(t, "https://test.example.com/ap/inbox", actor.Inbox)
 	require.NotEmpty(t, actor.PublicKey.PublicKeyPEM, "expected public key PEM to be set")
 	require.Equal(t, "https://test.example.com/ap/actor#main-key", actor.PublicKey.ID)
+	require.Equal(t, "test.example.com", actor.OCINamespace)
+}
+
+func TestActorHandlerSplitDomainNamespace(t *testing.T) {
+	id, _ := LoadOrCreateIdentity("https://registry.example.com", "registry.example.com", "example.com", "", discardLogger())
+	handler := NewActorHandler(id, "Test Registry", "https://registry.example.com")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/ap/actor", nil)
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var actor Actor
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&actor))
+
+	require.Equal(t, "example.com", actor.OCINamespace)
 }
 
 func TestActorHandlerRejectsPost(t *testing.T) {

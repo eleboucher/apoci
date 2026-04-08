@@ -219,7 +219,7 @@ endpoint: "https://registry.example.com"
 accountDomain: "example.com"
 ```
 
-WebFinger accepts both `acct:registry@example.com` and `acct:registry@registry.example.com`. AP URLs and OCI namespace stay on the service domain.
+WebFinger accepts both `acct:registry@example.com` and `acct:registry@registry.example.com`. OCI repositories are namespaced under the `accountDomain` (e.g. `example.com/myapp`), and federated peers use the `ociNamespace` field in the actor document to validate ownership.
 
 You need to proxy `/.well-known/webfinger` from the vanity domain to the service:
 

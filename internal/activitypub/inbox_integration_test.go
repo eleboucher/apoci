@@ -1080,3 +1080,74 @@ func TestInboxUpdateTagUnknownManifest(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, rec.Code, "tag pointing to non-existent manifest must be rejected")
 }
+
+func TestInboxCreateManifestSplitDomainNamespace(t *testing.T) {
+	dir := t.TempDir()
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	alice, err := LoadOrCreateIdentity("https://registry.alice.test", "registry.alice.test", "alice.test", "", discardLogger())
+	require.NoError(t, err)
+
+	bob, err := LoadOrCreateIdentity("https://bob.test", "bob.test", "", "", discardLogger())
+	require.NoError(t, err)
+
+	inbox := NewInboxHandler(bob, db, InboxConfig{
+		MaxManifestSize: config.DefaultMaxManifestSize,
+		MaxBlobSize:     config.DefaultMaxBlobSize,
+		AutoAccept:      "none",
+	}, discardLogger())
+
+	alicePEM, _ := alice.PublicKeyPEM()
+	aliceActor := Actor{
+		Context: []any{"https://www.w3.org/ns/activitystreams", "https://w3id.org/security/v1"},
+		Type:    "Application",
+		ID:      alice.ActorURL,
+		Inbox:   "https://registry.alice.test/ap/inbox",
+		PublicKey: ActorPublicKey{
+			ID:           alice.KeyID(),
+			Owner:        alice.ActorURL,
+			PublicKeyPEM: alicePEM,
+		},
+		OCINamespace: "alice.test",
+	}
+
+	actorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/activity+json")
+		_ = json.NewEncoder(w).Encode(aliceActor)
+	}))
+	t.Cleanup(actorSrv.Close)
+
+	alice.ActorURL = actorSrv.URL + "/ap/actor"
+	aliceActor.ID = alice.ActorURL
+	aliceActor.PublicKey.ID = alice.ActorURL + "#main-key"
+	aliceActor.PublicKey.Owner = alice.ActorURL
+
+	ctx := context.Background()
+	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, actorSrv.URL))
+
+	create := map[string]any{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id":       alice.ActorURL + "#create-split-1",
+		"type":     "Create",
+		"actor":    alice.ActorURL,
+		"object": map[string]any{
+			"type":          "OCIManifest",
+			"ociRepository": "alice.test/myapp",
+			"ociDigest":     "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
+			"ociMediaType":  "application/vnd.oci.image.manifest.v1+json",
+			"ociSize":       float64(256),
+		},
+	}
+
+	req := signedInboxPost(t, alice, create)
+	rec := httptest.NewRecorder()
+	inbox.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code, "split-domain repo must be accepted: %s", rec.Body.String())
+
+	repoObj, err := db.GetRepository(ctx, "alice.test/myapp")
+	require.NoError(t, err)
+	require.NotNil(t, repoObj)
+}

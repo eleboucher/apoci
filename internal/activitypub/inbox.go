@@ -47,6 +47,7 @@ type InboxHandler struct {
 	actorLimiters  *ttlcache.Cache[string, *rate.Limiter]
 	domainLimiters *ttlcache.Cache[string, *rate.Limiter]
 	fetchFailures  *ttlcache.Cache[string, struct{}]
+	nsCache        *ttlcache.Cache[string, string]
 	sigCache       *SignatureCache
 
 	logger *slog.Logger
@@ -86,6 +87,11 @@ func NewInboxHandler(identity *Identity, db *database.DB, cfg InboxConfig, logge
 	)
 	go fetchFailures.Start()
 
+	nsCache := ttlcache.New[string, string](
+		ttlcache.WithTTL[string, string](1 * time.Hour),
+	)
+	go nsCache.Start()
+
 	return &InboxHandler{
 		identity:        identity,
 		db:              db,
@@ -98,6 +104,7 @@ func NewInboxHandler(identity *Identity, db *database.DB, cfg InboxConfig, logge
 		actorLimiters:   actorLimiters,
 		domainLimiters:  domainLimiters,
 		fetchFailures:   fetchFailures,
+		nsCache:         nsCache,
 		sigCache:        NewSignatureCache(),
 		logger:          logger,
 	}
@@ -107,6 +114,7 @@ func (h *InboxHandler) Stop() {
 	h.actorLimiters.Stop()
 	h.domainLimiters.Stop()
 	h.fetchFailures.Stop()
+	h.nsCache.Stop()
 	h.sigCache.Stop()
 }
 
@@ -731,18 +739,18 @@ func (h *InboxHandler) ingestManifest(ctx context.Context, w http.ResponseWriter
 		return
 	}
 
-	// Enforce that the repository name is scoped to the sender's domain.
-	// e.g. actor "https://registry.example.com/ap/actor" may only push repos
-	// whose first path component equals "registry.example.com".
-	senderDomain, err := senderDomainFromActorURL(actorURL)
+	// Enforce that the repository name is scoped to the sender's namespace.
+	// The namespace comes from the actor's ociNamespace field (split-domain),
+	// falling back to the actor URL hostname for older nodes.
+	senderNS, err := h.fetchSenderNamespace(ctx, actorURL)
 	if err != nil {
-		h.logger.Warn("inbox: cannot derive domain from actor URL", "actor", actorURL, "error", err)
+		h.logger.Warn("inbox: cannot derive namespace from actor", "actor", actorURL, "error", err)
 		http.Error(w, "invalid actor URL", http.StatusBadRequest)
 		return
 	}
-	if !repoOwnedBySender(repo, senderDomain) {
-		h.logger.Warn("inbox: repo name does not match sender domain",
-			"repo", repo, "sender_domain", senderDomain, "actor", actorURL)
+	if !repoOwnedBySender(repo, senderNS) {
+		h.logger.Warn("inbox: repo name does not match sender namespace",
+			"repo", repo, "sender_namespace", senderNS, "actor", actorURL)
 		http.Error(w, "repository name must be scoped to sender's domain", http.StatusForbidden)
 		return
 	}
@@ -836,6 +844,30 @@ func senderDomainFromActorURL(actorURL string) (string, error) {
 func repoOwnedBySender(repo, senderDomain string) bool {
 	parts := strings.SplitN(repo, "/", 2)
 	return strings.ToLower(parts[0]) == senderDomain
+}
+
+// fetchSenderNamespace returns the OCI namespace for a remote actor.
+// It checks the actor's ociNamespace field (supports split-domain), falling
+// back to the actor URL hostname for older nodes that don't advertise it.
+func (h *InboxHandler) fetchSenderNamespace(ctx context.Context, actorURL string) (string, error) {
+	if item := h.nsCache.Get(actorURL); item != nil {
+		return item.Value(), nil
+	}
+
+	actor, err := FetchActor(ctx, actorURL)
+	if err != nil {
+		return senderDomainFromActorURL(actorURL)
+	}
+
+	ns := actor.OCINamespace
+	if ns == "" {
+		ns, err = senderDomainFromActorURL(actorURL)
+		if err != nil {
+			return "", err
+		}
+	}
+	h.nsCache.Set(actorURL, ns, ttlcache.DefaultTTL)
+	return ns, nil
 }
 
 func (h *InboxHandler) ingestTag(ctx context.Context, w http.ResponseWriter, obj map[string]any, actorURL string) {

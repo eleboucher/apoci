@@ -19,6 +19,7 @@ type Actor struct {
 	PublicKey         ActorPublicKey    `json:"publicKey"`
 	Endpoints         map[string]string `json:"endpoints,omitempty"`
 	URL               string            `json:"url,omitempty"`
+	OCINamespace      string            `json:"ociNamespace,omitempty"`
 }
 
 type ActorPublicKey struct {
@@ -75,7 +76,8 @@ func (h *ActorHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Endpoints: map[string]string{
 			"sharedInbox": base + "/ap/inbox",
 		},
-		URL: h.endpoint,
+		URL:          h.endpoint,
+		OCINamespace: h.identity.AccountDomain,
 	}
 
 	w.Header().Set("Content-Type", "application/activity+json")
