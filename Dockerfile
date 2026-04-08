@@ -22,7 +22,8 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates wget && \
     rm -rf /var/lib/apt/lists/*
 
-ENV PATH="/apoci:${PATH}"
+ENV PATH="/apoci:${PATH}" \
+    APOCI_DATA_DIR="/apoci/storage"
 
 USER 1000:1000
 

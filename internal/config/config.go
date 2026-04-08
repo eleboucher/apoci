@@ -137,7 +137,11 @@ func applyDefaults(cfg *Config) error {
 		cfg.Listen = ":5000"
 	}
 	if cfg.DataDir == "" {
-		cfg.DataDir = "/apoci/storage"
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("determining home directory: %w", err)
+		}
+		cfg.DataDir = filepath.Join(home, ".apoci")
 	}
 	if cfg.KeyPath == "" {
 		cfg.KeyPath = filepath.Join(cfg.DataDir, "ap.key")

@@ -4,7 +4,7 @@ endpoint: "https://registry.example.com"
 
 # name: "registry.example.com"   # defaults to domain from endpoint
 # listen: ":5000"
-# dataDir: "/apoci/storage"
+# dataDir: "~/.apoci"            # defaults to $HOME/.apoci
 # keyPath: "/apoci/storage/ap.key"
 # registryToken: ""              # auto-generated to {dataDir}/registry.token if empty
 # adminToken: ""                 # auto-generated to {dataDir}/admin.token if empty (separate from registryToken)

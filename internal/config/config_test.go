@@ -68,18 +68,22 @@ dataDir: %q
 }
 
 func TestMissingEndpoint(t *testing.T) {
-	path := writeConfig(t, `
+	dir := t.TempDir()
+	path := writeConfig(t, fmt.Sprintf(`
 name: "test"
-`)
+dataDir: %q
+`, dir))
 	_, err := Load(path)
 	require.Error(t, err, "expected error for missing endpoint")
 }
 
 func TestInvalidLogLevel(t *testing.T) {
-	path := writeConfig(t, `
+	dir := t.TempDir()
+	path := writeConfig(t, fmt.Sprintf(`
 endpoint: "https://test.example.com"
+dataDir: %q
 logLevel: verbose
-`)
+`, dir))
 	_, err := Load(path)
 	require.Error(t, err, "expected error for invalid log level")
 }
