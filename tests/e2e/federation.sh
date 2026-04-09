@@ -169,7 +169,7 @@ poll_until "bob has alice as follower" 'alice' 15 \
   -H "Authorization: Bearer $BOB_TOKEN" "$BOB/api/admin/follows"
 
 poll_until "alice outgoing follow accepted" 'bob' 15 \
-  -H 'Accept: application/activity+json' "$ALICE/ap/following"
+  -H 'Accept: application/activity+json' "$ALICE/ap/following?offset=0"
 
 # ==============================================================
 echo "--- Phase 5: Follow (Bob → Alice, auto-accept) ---"
@@ -189,7 +189,7 @@ poll_until "alice has bob as follower" 'bob' 15 \
   -H "Authorization: Bearer $ALICE_TOKEN" "$ALICE/api/admin/follows"
 
 poll_until "bob outgoing follow accepted" 'alice' 15 \
-  -H 'Accept: application/activity+json' "$BOB/ap/following"
+  -H 'Accept: application/activity+json' "$BOB/ap/following?offset=0"
 
 # ==============================================================
 echo "--- Phase 6: Follow + Reject (Alice → Charlie, manual reject) ---"
@@ -266,7 +266,7 @@ poll_until "charlie has bob as follower" 'bob' 15 \
 
 # Bob's outgoing follow to Charlie should be accepted
 poll_until "bob outgoing follow to charlie accepted" 'charlie' 15 \
-  -H 'Accept: application/activity+json' "$BOB/ap/following"
+  -H 'Accept: application/activity+json' "$BOB/ap/following?offset=0"
 
 # ==============================================================
 echo "--- Phase 8: Manifest federation ---"
