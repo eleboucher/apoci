@@ -66,7 +66,7 @@ func TestWorkersStartAndStop(t *testing.T) {
 func TestSchedulerRunsTasks(t *testing.T) {
 	var count atomic.Int32
 
-	s := NewScheduler()
+	s := NewScheduler(nopLog())
 	s.Add(PeriodicTask{
 		Interval: 10 * time.Millisecond,
 		Fn: func(_ context.Context) {
@@ -86,7 +86,7 @@ func TestSchedulerRunsTasks(t *testing.T) {
 }
 
 func TestSchedulerStopsCleanly(t *testing.T) {
-	s := NewScheduler()
+	s := NewScheduler(nopLog())
 	s.Add(PeriodicTask{
 		Interval: 1 * time.Hour,
 		Fn:       func(_ context.Context) {},
@@ -110,7 +110,7 @@ func TestSchedulerStopsCleanly(t *testing.T) {
 }
 
 func TestSchedulerNoTasks(t *testing.T) {
-	s := NewScheduler()
+	s := NewScheduler(nopLog())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s.Start(ctx)

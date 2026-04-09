@@ -4,11 +4,17 @@ import (
 	"context"
 	"log/slog"
 	"net/url"
+	"runtime"
+	"slices"
 	"sync"
 	"time"
 
+	"codeberg.org/gruf/go-runners"
+	"github.com/sourcegraph/conc/pool"
+
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/util"
 )
 
 const (
@@ -19,6 +25,16 @@ const (
 	circuitBreakerThreshold = 5         // consecutive failures before opening the circuit
 	circuitOpenDuration     = time.Hour // how long the circuit stays open
 )
+
+// deliveryMaxConcurrency returns the max concurrent deliveries based on GOMAXPROCS.
+// Uses 10x multiplier since delivery is I/O bound (HTTP requests).
+func deliveryMaxConcurrency() int {
+	n := runtime.GOMAXPROCS(0) * 10
+	if n < 10 {
+		return 10
+	}
+	return n
+}
 
 // deliveryCircuitBreaker tracks consecutive delivery failures per peer domain
 // and fast-fails deliveries to domains that have exceeded the failure threshold.
@@ -85,10 +101,18 @@ func (cb *deliveryCircuitBreaker) openCount() int {
 	return count
 }
 
+// forceOpen opens the circuit for domain without requiring failures.
+// Used by PreWarmCircuit to restore state from persistent storage.
 func (cb *deliveryCircuitBreaker) forceOpen(domain string, duration time.Duration) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	cb.openUntil[domain] = time.Now().Add(duration)
+}
+
+// retryItem holds a delivery scheduled for retry with its next attempt time.
+type retryItem struct {
+	delivery database.Delivery
+	nextTime time.Time
 }
 
 type DeliveryRepository interface {
@@ -101,24 +125,28 @@ type DeliveryRepository interface {
 }
 
 type DeliveryQueue struct {
-	db       DeliveryRepository
-	identity *Identity
-	logger   *slog.Logger
-	circuit  *deliveryCircuitBreaker
-	wg       sync.WaitGroup
-	stop     chan struct{}
-	notify   chan struct{}
-	once     sync.Once
+	db             DeliveryRepository
+	identity       *Identity
+	logger         *slog.Logger
+	circuit        *deliveryCircuitBreaker
+	maxConcurrency int
+	notify         chan struct{}
+	service        runners.Service
+
+	// In-memory retry backlog for failed deliveries
+	backlogMu sync.Mutex
+	backlog   []retryItem
 }
 
 func NewDeliveryQueue(db DeliveryRepository, identity *Identity, logger *slog.Logger) *DeliveryQueue {
 	return &DeliveryQueue{
-		db:       db,
-		identity: identity,
-		logger:   logger,
-		circuit:  newDeliveryCircuitBreaker(),
-		stop:     make(chan struct{}),
-		notify:   make(chan struct{}, 1),
+		db:             db,
+		identity:       identity,
+		logger:         logger,
+		circuit:        newDeliveryCircuitBreaker(),
+		maxConcurrency: deliveryMaxConcurrency(),
+		notify:         make(chan struct{}, 1),
+		backlog:        make([]retryItem, 0, 100),
 	}
 }
 
@@ -130,8 +158,12 @@ func (q *DeliveryQueue) Notify() {
 }
 
 func (q *DeliveryQueue) Start(ctx context.Context) {
-	q.wg.Add(1)
-	go q.run(ctx)
+	q.service.GoRun(func(svcCtx context.Context) {
+		util.Must(q.logger, func() {
+			q.run(ctx, svcCtx)
+		})
+	})
+	q.logger.Info("started delivery queue", "max_concurrency", q.maxConcurrency)
 }
 
 // PreWarmCircuit loads unhealthy peer domains from the DB and opens the
@@ -152,15 +184,12 @@ func (q *DeliveryQueue) PreWarmCircuit(ctx context.Context) {
 	}
 }
 
-// Stop signals the worker to stop and waits for it to finish. Safe to call multiple times.
+// Stop signals the worker to stop and waits for it to finish.
 func (q *DeliveryQueue) Stop() {
-	q.once.Do(func() { close(q.stop) })
-	q.wg.Wait()
+	q.service.Stop()
 }
 
-func (q *DeliveryQueue) run(ctx context.Context) {
-	defer q.wg.Done()
-
+func (q *DeliveryQueue) run(parentCtx, svcCtx context.Context) {
 	ticker := time.NewTicker(deliveryPollInterval)
 	defer ticker.Stop()
 
@@ -169,18 +198,19 @@ func (q *DeliveryQueue) run(ctx context.Context) {
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-svcCtx.Done():
 			q.drainRemaining()
 			return
-		case <-q.stop:
+		case <-parentCtx.Done():
 			q.drainRemaining()
 			return
 		case <-q.notify:
-			q.processBatch(ctx)
+			q.processBatch(parentCtx)
 		case <-ticker.C:
-			q.processBatch(ctx)
+			q.processBatch(parentCtx)
+			q.processBacklog(parentCtx)
 		case <-cleanupTicker.C:
-			q.cleanup(ctx)
+			q.cleanup(parentCtx)
 		}
 	}
 }
@@ -198,19 +228,78 @@ func (q *DeliveryQueue) processBatch(ctx context.Context) {
 		return
 	}
 
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, maxConcurrentDeliveries)
-
+	p := pool.New().WithMaxGoroutines(q.maxConcurrency)
 	for _, d := range deliveries {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func() {
-			defer func() { <-sem; wg.Done() }()
+		p.Go(func() {
 			q.deliver(ctx, d)
-		}()
+		})
+	}
+	p.Wait()
+}
+
+// processBacklog processes deliveries from the in-memory retry backlog.
+// Items are processed if their next retry time has passed.
+func (q *DeliveryQueue) processBacklog(ctx context.Context) {
+	q.backlogMu.Lock()
+	if len(q.backlog) == 0 {
+		q.backlogMu.Unlock()
+		return
 	}
 
-	wg.Wait()
+	slices.SortFunc(q.backlog, func(a, b retryItem) int {
+		if a.nextTime.Before(b.nextTime) {
+			return -1
+		}
+		if a.nextTime.After(b.nextTime) {
+			return 1
+		}
+		return 0
+	})
+
+	now := time.Now()
+	var ready []database.Delivery
+	var remaining []retryItem
+	for _, item := range q.backlog {
+		if item.nextTime.Before(now) || item.nextTime.Equal(now) {
+			ready = append(ready, item.delivery)
+		} else {
+			remaining = append(remaining, item)
+		}
+	}
+	q.backlog = remaining
+	q.backlogMu.Unlock()
+
+	if len(ready) == 0 {
+		return
+	}
+
+	q.logger.Debug("processing backlog retries", "count", len(ready))
+
+	p := pool.New().WithMaxGoroutines(q.maxConcurrency)
+	for _, d := range ready {
+		p.Go(func() {
+			q.deliver(ctx, d)
+		})
+	}
+	p.Wait()
+}
+
+// addToBacklog adds a failed delivery to the in-memory retry backlog.
+func (q *DeliveryQueue) addToBacklog(d database.Delivery, backoff time.Duration) {
+	q.backlogMu.Lock()
+	defer q.backlogMu.Unlock()
+
+	// Limit backlog size to prevent memory growth
+	const maxBacklogSize = 1000
+	if len(q.backlog) >= maxBacklogSize {
+		q.logger.Warn("backlog full, dropping retry", "delivery_id", d.ID)
+		return
+	}
+
+	q.backlog = append(q.backlog, retryItem{
+		delivery: d,
+		nextTime: time.Now().Add(backoff),
+	})
 }
 
 func (q *DeliveryQueue) deliver(ctx context.Context, d database.Delivery) {
@@ -257,7 +346,13 @@ func (q *DeliveryQueue) deliver(ctx context.Context, d database.Delivery) {
 		if dbErr := q.db.MarkDeliveryFailed(ctx, d.ID, d.Attempts, d.MaxAttempts, err.Error()); dbErr != nil {
 			q.logger.Error("failed to mark delivery failed", "error", dbErr)
 		}
-		if d.Attempts+1 >= d.MaxAttempts {
+
+		// Add to in-memory backlog for faster retry if not at max attempts
+		if d.Attempts+1 < d.MaxAttempts {
+			backoff := min(time.Duration(d.Attempts+1)*30*time.Second, 5*time.Minute)
+			d.Attempts++ // Increment for backlog tracking
+			q.addToBacklog(d, backoff)
+		} else {
 			metrics.DeliveryFailed.WithLabelValues(domainLabel(domain)).Add(1)
 		}
 		return

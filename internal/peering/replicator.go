@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -12,7 +14,15 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
 )
 
-const maxConcurrentReplications = 10
+// replicationMaxConcurrency returns the max concurrent replications based on GOMAXPROCS.
+// Uses 10x multiplier since replication is I/O bound (HTTP fetch + disk write).
+func replicationMaxConcurrency() int {
+	n := runtime.GOMAXPROCS(0) * 10
+	if n < 10 {
+		return 10
+	}
+	return n
+}
 
 type ReplicatorRepository interface {
 	FindRepoForBlob(ctx context.Context, digest string) (string, error)
@@ -24,23 +34,26 @@ type BlobStreamFetcher interface {
 }
 
 type BlobReplicator struct {
-	db       ReplicatorRepository
-	blobs    blobstore.BlobStore
-	fetcher  BlobStreamFetcher
-	notifier Notifier
-	logger   *slog.Logger
-	sem      chan struct{}
-	wg       sync.WaitGroup
+	db             ReplicatorRepository
+	blobs          blobstore.BlobStore
+	fetcher        BlobStreamFetcher
+	notifier       Notifier
+	logger         *slog.Logger
+	maxConcurrency int
+	sem            chan struct{}
+	wg             sync.WaitGroup
 }
 
 func NewBlobReplicator(db ReplicatorRepository, blobs blobstore.BlobStore, fetcher BlobStreamFetcher, notifier Notifier, logger *slog.Logger) *BlobReplicator {
+	maxConcurrency := replicationMaxConcurrency()
 	return &BlobReplicator{
-		db:       db,
-		blobs:    blobs,
-		fetcher:  fetcher,
-		notifier: notifier,
-		logger:   logger,
-		sem:      make(chan struct{}, maxConcurrentReplications),
+		db:             db,
+		blobs:          blobs,
+		fetcher:        fetcher,
+		notifier:       notifier,
+		logger:         logger,
+		maxConcurrency: maxConcurrency,
+		sem:            make(chan struct{}, maxConcurrency),
 	}
 }
 
@@ -57,17 +70,30 @@ func (r *BlobReplicator) ReplicateBlob(ctx context.Context, peerEndpoint, digest
 
 	metrics.BlobReplicationsStarted.Inc()
 	metrics.BlobReplicationsInFlight.Inc()
+
 	r.wg.Go(func() {
 		defer metrics.BlobReplicationsInFlight.Dec()
+		defer r.recoverPanic(digest)
 
 		r.sem <- struct{}{}
 		defer func() { <-r.sem }()
 
-		// Use a fresh context with a timeout since the HTTP request context will be cancelled.
+		// Fresh context since the request context will be cancelled.
 		bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
 		r.replicateBlob(bgCtx, peerEndpoint, digest)
 	})
+}
+
+// recoverPanic recovers from panics in replication goroutines and logs them.
+func (r *BlobReplicator) recoverPanic(digest string) {
+	if rec := recover(); rec != nil {
+		r.logger.Error("replication panic recovered",
+			"digest", digest,
+			"panic", rec,
+			"stack", string(debug.Stack()),
+		)
+	}
 }
 
 // Wait blocks until all in-flight replications complete.

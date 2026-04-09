@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
+
+	"codeberg.org/gruf/go-runners"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/util"
 )
 
 type GCRepository interface {
@@ -31,15 +33,12 @@ type GCConfig struct {
 }
 
 type GarbageCollector struct {
-	cfg       GCConfig
-	db        GCRepository
-	blobs     blobstore.BlobStore
-	notifier  Notifier
-	logger    *slog.Logger
-	wg        sync.WaitGroup
-	stop      chan struct{}
-	startOnce sync.Once
-	stopOnce  sync.Once
+	cfg      GCConfig
+	db       GCRepository
+	blobs    blobstore.BlobStore
+	notifier Notifier
+	logger   *slog.Logger
+	service  runners.Service
 }
 
 func NewGarbageCollector(cfg GCConfig, db GCRepository, blobs blobstore.BlobStore, notifier Notifier, logger *slog.Logger) *GarbageCollector {
@@ -49,37 +48,34 @@ func NewGarbageCollector(cfg GCConfig, db GCRepository, blobs blobstore.BlobStor
 		blobs:    blobs,
 		notifier: notifier,
 		logger:   logger,
-		stop:     make(chan struct{}),
 	}
 }
 
 func (gc *GarbageCollector) Start(ctx context.Context) {
-	gc.startOnce.Do(func() {
-		gc.wg.Add(1)
-		go gc.run(ctx)
+	gc.service.GoRun(func(svcCtx context.Context) {
+		util.Must(gc.logger, func() {
+			gc.run(ctx, svcCtx)
+		})
 	})
 }
 
 func (gc *GarbageCollector) Stop() {
-	gc.stopOnce.Do(func() { close(gc.stop) })
-	gc.wg.Wait()
+	gc.service.Stop()
 }
 
-func (gc *GarbageCollector) run(ctx context.Context) {
-	defer gc.wg.Done()
-
+func (gc *GarbageCollector) run(parentCtx, svcCtx context.Context) {
 	// Run once shortly after startup.
 	timer := time.NewTimer(time.Minute)
 	defer timer.Stop()
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-svcCtx.Done():
 			return
-		case <-gc.stop:
+		case <-parentCtx.Done():
 			return
 		case <-timer.C:
-			gc.collect(ctx)
+			gc.collect(parentCtx)
 			timer.Reset(gc.cfg.Interval)
 		}
 	}

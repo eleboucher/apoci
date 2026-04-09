@@ -2,25 +2,34 @@ package workers
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
+
+	"codeberg.org/gruf/go-runners"
+
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/util"
 )
 
 // PeriodicTask defines a recurring background task.
 type PeriodicTask struct {
+	Name     string
 	Interval time.Duration
 	Fn       func(ctx context.Context)
 }
 
 // Scheduler runs periodic tasks. Add tasks before calling Start.
 type Scheduler struct {
-	tasks  []PeriodicTask
-	wg     sync.WaitGroup
-	cancel context.CancelFunc
+	tasks   []PeriodicTask
+	logger  *slog.Logger
+	service runners.Service
+	taskWg  sync.WaitGroup
 }
 
-func NewScheduler() *Scheduler {
-	return &Scheduler{}
+func NewScheduler(logger *slog.Logger) *Scheduler {
+	return &Scheduler{
+		logger: logger,
+	}
 }
 
 func (s *Scheduler) Add(task PeriodicTask) {
@@ -28,31 +37,44 @@ func (s *Scheduler) Add(task PeriodicTask) {
 }
 
 func (s *Scheduler) Start(ctx context.Context) {
-	childCtx, cancel := context.WithCancel(ctx)
-	s.cancel = cancel
-	for _, task := range s.tasks {
-		s.wg.Add(1)
-		go s.run(childCtx, task)
-	}
+	s.service.GoRun(func(svcCtx context.Context) {
+		mergedCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		go func() {
+			select {
+			case <-svcCtx.Done():
+				cancel()
+			case <-mergedCtx.Done():
+			}
+		}()
+
+		for _, task := range s.tasks {
+			s.taskWg.Add(1)
+			go s.run(mergedCtx, task)
+		}
+
+		<-mergedCtx.Done()
+		s.taskWg.Wait()
+	})
 }
 
 func (s *Scheduler) Stop() {
-	if s.cancel != nil {
-		s.cancel()
-	}
-	s.wg.Wait()
+	s.service.Stop()
 }
 
 func (s *Scheduler) run(ctx context.Context, task PeriodicTask) {
-	defer s.wg.Done()
-	ticker := time.NewTicker(task.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			task.Fn(ctx)
+	defer s.taskWg.Done()
+	util.Must(s.logger.With("task", task.Name), func() {
+		ticker := time.NewTicker(task.Interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				task.Fn(ctx)
+			}
 		}
-	}
+	})
 }

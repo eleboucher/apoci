@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
+	"codeberg.org/gruf/go-runners"
+
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/util"
 )
 
 // PeerRecord is the minimal peer information needed for health checks.
@@ -32,11 +34,7 @@ type HealthChecker struct {
 	interval time.Duration
 	notifier Notifier
 	logger   *slog.Logger
-
-	mu      sync.Mutex
-	running bool
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	service  runners.Service
 }
 
 func NewHealthChecker(db HealthRepository, fetcher HealthFetcher, interval time.Duration, notifier Notifier, logger *slog.Logger) *HealthChecker {
@@ -50,44 +48,31 @@ func NewHealthChecker(db HealthRepository, fetcher HealthFetcher, interval time.
 }
 
 func (hc *HealthChecker) Start(ctx context.Context) {
-	hc.mu.Lock()
-	if hc.running {
-		hc.mu.Unlock()
-		return
-	}
-	hc.running = true
-	childCtx, cancel := context.WithCancel(ctx)
-	hc.cancel = cancel
-	hc.wg.Add(1)
-	hc.mu.Unlock()
-
-	go hc.loop(childCtx)
+	hc.service.GoRun(func(svcCtx context.Context) {
+		util.Must(hc.logger, func() {
+			hc.loop(ctx, svcCtx)
+		})
+	})
 }
 
 func (hc *HealthChecker) Stop() {
-	hc.mu.Lock()
-	if hc.cancel != nil {
-		hc.cancel()
-		hc.cancel = nil
-		hc.running = false
-	}
-	hc.mu.Unlock()
-	hc.wg.Wait()
+	hc.service.Stop()
 }
 
-func (hc *HealthChecker) loop(ctx context.Context) {
-	defer hc.wg.Done()
-	hc.checkAll(ctx)
+func (hc *HealthChecker) loop(parentCtx, svcCtx context.Context) {
+	hc.checkAll(parentCtx)
 
 	ticker := time.NewTicker(hc.interval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-svcCtx.Done():
+			return
+		case <-parentCtx.Done():
 			return
 		case <-ticker.C:
-			hc.checkAll(ctx)
+			hc.checkAll(parentCtx)
 		}
 	}
 }

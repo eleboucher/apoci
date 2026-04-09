@@ -3,84 +3,107 @@ package activitypub
 import (
 	"context"
 	"log/slog"
+	"runtime"
 	"sync"
 	"time"
 
+	"codeberg.org/gruf/go-runners"
+
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/queue"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/util"
 )
 
 const (
 	inboxQueueSize   = 256
-	inboxWorkerCount = 1
 	inboxTaskTimeout = 10 * time.Second
 )
 
-// InboxWorker processes validated ActivityPub activities asynchronously.
-type InboxWorker struct {
-	handler *InboxHandler
-	queue   chan InboxTask
-	logger  *slog.Logger
-	wg      sync.WaitGroup
-	stop    chan struct{}
-	once    sync.Once
+// inboxWorkerCount returns the number of inbox workers based on GOMAXPROCS.
+func inboxWorkerCount() int {
+	n := runtime.GOMAXPROCS(0) * 4
+	if n < 1 {
+		return 1
+	}
+	return n
 }
 
-func NewInboxWorker(handler *InboxHandler, logger *slog.Logger) *InboxWorker {
+// InboxDispatcher processes incoming ActivityPub tasks.
+type InboxDispatcher interface {
+	dispatch(ctx context.Context, task InboxTask) error
+	storeActivity(ctx context.Context, activityID, activityType, actorURL string, activityJSON []byte)
+}
+
+// InboxWorker processes validated ActivityPub activities asynchronously.
+type InboxWorker struct {
+	handler  InboxDispatcher
+	queue    *queue.SimpleQueue[InboxTask]
+	logger   *slog.Logger
+	services []runners.Service
+	workerWg sync.WaitGroup
+}
+
+func NewInboxWorker(handler InboxDispatcher, logger *slog.Logger) *InboxWorker {
 	return &InboxWorker{
 		handler: handler,
-		queue:   make(chan InboxTask, inboxQueueSize),
+		queue:   queue.NewSimpleQueue[InboxTask](inboxQueueSize),
 		logger:  logger,
-		stop:    make(chan struct{}),
 	}
 }
 
 // Enqueue pushes a task for async processing. Returns false if the queue is full.
 func (w *InboxWorker) Enqueue(task InboxTask) bool {
-	select {
-	case w.queue <- task:
-		return true
-	default:
-		return false
-	}
+	return w.queue.TryPush(task, inboxQueueSize)
 }
 
 func (w *InboxWorker) Start(ctx context.Context) {
-	for range inboxWorkerCount {
-		w.wg.Add(1)
-		go w.run(ctx)
+	n := inboxWorkerCount()
+	w.services = make([]runners.Service, n)
+	for i := range n {
+		w.workerWg.Add(1)
+		w.services[i].GoRun(func(svcCtx context.Context) {
+			defer w.workerWg.Done()
+			w.run(ctx, svcCtx)
+		})
 	}
+	w.logger.Info("started inbox workers", "count", n)
 }
 
-// Stop signals the worker to stop and waits for it to finish. Safe to call multiple times.
 func (w *InboxWorker) Stop() {
-	w.once.Do(func() { close(w.stop) })
-	w.wg.Wait()
+	for i := range w.services {
+		w.services[i].Stop()
+	}
+	w.workerWg.Wait()
+	w.drain()
 }
 
-func (w *InboxWorker) run(ctx context.Context) {
-	defer w.wg.Done()
-	for {
-		select {
-		case task := <-w.queue:
+func (w *InboxWorker) run(parentCtx, svcCtx context.Context) {
+	util.Must(w.logger, func() {
+		for {
+			select {
+			case <-svcCtx.Done():
+				return
+			case <-parentCtx.Done():
+				return
+			default:
+			}
+
+			task, ok := w.queue.PopCtx(svcCtx)
+			if !ok {
+				return
+			}
 			w.process(task)
-		case <-ctx.Done():
-			w.drain()
-			return
-		case <-w.stop:
-			w.drain()
-			return
 		}
-	}
+	})
 }
 
 func (w *InboxWorker) drain() {
 	for {
-		select {
-		case task := <-w.queue:
-			w.process(task)
-		default:
+		task, ok := w.queue.Pop()
+		if !ok {
 			return
 		}
+		w.process(task)
 	}
 }
 

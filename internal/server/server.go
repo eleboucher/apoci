@@ -130,7 +130,7 @@ func New(cfg *config.Config, db *database.DB, blobs blobstore.BlobStore, identit
 	inboxLimiter := newIPRateLimiter(10, 50)       // 10 req/sec, burst of 50
 	registryPushLimiter := newIPRateLimiter(5, 20) // 5 req/sec, burst of 20 for push ops
 
-	scheduler := workers.NewScheduler()
+	scheduler := workers.NewScheduler(logger)
 	scheduler.Add(workers.PeriodicTask{
 		Interval: 5 * time.Minute,
 		Fn: func(ctx context.Context) {

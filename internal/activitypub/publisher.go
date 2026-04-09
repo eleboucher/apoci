@@ -16,12 +16,8 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
 
-const (
-	// PublicCollection is the special ActivityStreams address for public content.
-	PublicCollection = "https://www.w3.org/ns/activitystreams#Public"
-
-	maxConcurrentDeliveries = 50
-)
+// PublicCollection is the special ActivityStreams address for public content.
+const PublicCollection = "https://www.w3.org/ns/activitystreams#Public"
 
 const followerBatchSize = 100
 

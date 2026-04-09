@@ -136,6 +136,6 @@ func TestInboxWorkerConcurrency(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
-		return len(worker.queue) == 0
+		return worker.queue.Len() == 0
 	}, 2*time.Second, 10*time.Millisecond)
 }
