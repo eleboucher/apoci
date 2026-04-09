@@ -14,6 +14,31 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
 )
 
+// dbHealthRepo adapts *database.DB to HealthRepository for tests.
+type dbHealthRepo struct {
+	db *database.DB
+}
+
+func (r *dbHealthRepo) ListAllPeers(ctx context.Context) ([]PeerRecord, error) {
+	peers, err := r.db.ListAllPeers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]PeerRecord, len(peers))
+	for i, p := range peers {
+		records[i] = PeerRecord{
+			ActorURL:  p.ActorURL,
+			Endpoint:  p.Endpoint,
+			IsHealthy: p.IsHealthy,
+		}
+	}
+	return records, nil
+}
+
+func (r *dbHealthRepo) SetPeerHealth(ctx context.Context, actorURL string, healthy bool) error {
+	return r.db.SetPeerHealth(ctx, actorURL, healthy)
+}
+
 func TestHealthCheckerStartStop(t *testing.T) {
 	dir := t.TempDir()
 	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
@@ -40,7 +65,7 @@ func TestHealthCheckerStartStop(t *testing.T) {
 	}))
 
 	fetcher := NewFetcher(5*time.Second, config.DefaultMaxBlobSize, config.DefaultMaxManifestSize, nopLog())
-	hc := NewHealthChecker(db, fetcher, 100*time.Millisecond, notify.New("test", nil, nil, nopLog()), nopLog())
+	hc := NewHealthChecker(&dbHealthRepo{db: db}, fetcher, 100*time.Millisecond, notify.New("test", nil, nil, nopLog()), nopLog())
 
 	hc.Start(ctx)
 
@@ -63,7 +88,7 @@ func TestHealthCheckerDoubleStartIsNoop(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	fetcher := NewFetcher(5*time.Second, config.DefaultMaxBlobSize, config.DefaultMaxManifestSize, nopLog())
-	hc := NewHealthChecker(db, fetcher, 100*time.Millisecond, notify.New("test", nil, nil, nopLog()), nopLog())
+	hc := NewHealthChecker(&dbHealthRepo{db: db}, fetcher, 100*time.Millisecond, notify.New("test", nil, nil, nopLog()), nopLog())
 
 	ctx := context.Background()
 	hc.Start(ctx)

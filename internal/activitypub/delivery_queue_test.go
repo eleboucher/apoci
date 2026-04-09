@@ -192,6 +192,39 @@ func TestDeliveryQueueCleanup(t *testing.T) {
 	assert.Equal(t, "fresh-activity", remaining[0])
 }
 
+func TestDeliveryCircuitBreaker(t *testing.T) {
+	db := openTestDB(t)
+	identity := testIdentity(t)
+
+	var attempts atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	activityJSON := []byte(`{"type":"Create"}`)
+
+	q := NewDeliveryQueue(db, identity, discardLogger())
+
+	// Enqueue enough deliveries to trip the circuit.
+	for i := range circuitBreakerThreshold {
+		actID := "circuit-activity-" + string(rune('0'+i))
+		require.NoError(t, db.EnqueueDelivery(ctx, actID, srv.URL+"/inbox", activityJSON))
+		q.processBatch(ctx)
+	}
+
+	trippedAt := int(attempts.Load())
+	require.GreaterOrEqual(t, trippedAt, circuitBreakerThreshold, "expected at least threshold real attempts")
+
+	// Circuit should now be open; next delivery should be skipped without hitting the server.
+	require.NoError(t, db.EnqueueDelivery(ctx, "circuit-after-open", srv.URL+"/inbox", activityJSON))
+	q.processBatch(ctx)
+	assert.Equal(t, trippedAt, int(attempts.Load()), "expected no additional server hits after circuit opened")
+}
+
 // openRawConn opens a second raw SQL connection to the same database file
 // used by the given *database.DB. This allows test code to execute arbitrary
 // SQL (e.g. backdating timestamps) that the database package doesn't expose.

@@ -62,6 +62,12 @@ var (
 		Name:      "pending",
 		Help:      "Number of deliveries currently pending.",
 	})
+	DeliveryCircuitOpen = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "apoci",
+		Subsystem: "delivery",
+		Name:      "circuit_open_domains",
+		Help:      "Number of peer domains currently circuit-broken (delivery skipped).",
+	})
 
 	// Blob replication.
 	BlobReplicationsStarted = prometheus.NewCounter(prometheus.CounterOpts{
@@ -159,6 +165,38 @@ var (
 		Help:      "Total pushes rejected by rate limiter.",
 	})
 
+	// Latency histograms.
+	latencyBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
+
+	DeliveryDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "apoci",
+		Subsystem: "delivery",
+		Name:      "duration_seconds",
+		Help:      "Duration of individual activity delivery attempts.",
+		Buckets:   latencyBuckets,
+	})
+	BlobFetchDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "apoci",
+		Subsystem: "blob_replication",
+		Name:      "fetch_duration_seconds",
+		Help:      "Duration of blob fetch operations from peers.",
+		Buckets:   latencyBuckets,
+	})
+	InboxProcessingDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "apoci",
+		Subsystem: "inbox",
+		Name:      "processing_duration_seconds",
+		Help:      "Duration of inbox activity processing.",
+		Buckets:   latencyBuckets,
+	})
+	PeerFetchDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "apoci",
+		Subsystem: "registry",
+		Name:      "peer_fetch_duration_seconds",
+		Help:      "Duration of pull-through manifest/blob fetches from peers.",
+		Buckets:   latencyBuckets,
+	})
+
 	// Federation state (gauges).
 	FederationFollowers = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "apoci",
@@ -185,6 +223,7 @@ func init() {
 		DeliveryFailed,
 		DeliveryRetries,
 		DeliveryPending,
+		DeliveryCircuitOpen,
 		BlobReplicationsStarted,
 		BlobReplicationsSucceeded,
 		BlobReplicationsFailed,
@@ -200,6 +239,10 @@ func init() {
 		RegistryBlobPullThru,
 		RegistryManifestPullThru,
 		RegistryPushRateLimited,
+		DeliveryDuration,
+		BlobFetchDuration,
+		InboxProcessingDuration,
+		PeerFetchDuration,
 		FederationFollowers,
 		FederationFollowing,
 	)

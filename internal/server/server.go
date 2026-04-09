@@ -44,6 +44,32 @@ type Server struct {
 	logger              *slog.Logger
 }
 
+// peerHealthAdapter bridges *database.DB to peering.HealthRepository by
+// converting between database.Peer and peering.PeerRecord.
+type peerHealthAdapter struct {
+	db *database.DB
+}
+
+func (a *peerHealthAdapter) ListAllPeers(ctx context.Context) ([]peering.PeerRecord, error) {
+	peers, err := a.db.ListAllPeers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing peers: %w", err)
+	}
+	records := make([]peering.PeerRecord, len(peers))
+	for i, p := range peers {
+		records[i] = peering.PeerRecord{
+			ActorURL:  p.ActorURL,
+			Endpoint:  p.Endpoint,
+			IsHealthy: p.IsHealthy,
+		}
+	}
+	return records, nil
+}
+
+func (a *peerHealthAdapter) SetPeerHealth(ctx context.Context, actorURL string, healthy bool) error {
+	return a.db.SetPeerHealth(ctx, actorURL, healthy)
+}
+
 func New(cfg *config.Config, db *database.DB, blobs blobstore.BlobStore, identity *activitypub.Identity, version string, logger *slog.Logger) (*Server, error) {
 	if cfg.Federation.AllowInsecureHTTP {
 		activitypub.SetAllowInsecureHTTP(true)
@@ -62,7 +88,7 @@ func New(cfg *config.Config, db *database.DB, blobs blobstore.BlobStore, identit
 	apResolver := activitypub.NewAPResolver(db, logger)
 	deliveryQueue := activitypub.NewDeliveryQueue(db, identity, logger)
 	fetcher := peering.NewFetcher(cfg.Peering.FetchTimeout, cfg.Limits.MaxBlobSize, cfg.Limits.MaxManifestSize, logger)
-	healthChecker := peering.NewHealthChecker(db, fetcher, cfg.Peering.HealthCheckInterval, notifier, logger)
+	healthChecker := peering.NewHealthChecker(&peerHealthAdapter{db: db}, fetcher, cfg.Peering.HealthCheckInterval, notifier, logger)
 
 	blobReplicator := peering.NewBlobReplicator(db, blobs, fetcher, notifier, logger)
 	gc := peering.NewGarbageCollector(peering.GCConfig{

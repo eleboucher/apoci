@@ -25,22 +25,26 @@ const (
 
 const followerBatchSize = 100
 
+type PublisherRepository interface {
+	PutActivity(ctx context.Context, activityID, activityType, actorURL string, activityJSON []byte) error
+	ListFollowsBatch(ctx context.Context, afterID int64, limit int) ([]database.Follow, error)
+	EnqueueDelivery(ctx context.Context, activityID, inboxURL string, activityJSON []byte) error
+}
+
 type APPublisher struct {
 	identity   *Identity
-	db         *database.DB
+	db         PublisherRepository
 	actorCache *ActorCache
 	endpoint   string
 	logger     *slog.Logger
 	onEnqueue  func()
 }
 
-// SetNotifyFunc sets a callback invoked after deliveries are enqueued,
-// allowing the delivery queue to wake up immediately.
 func (p *APPublisher) SetNotifyFunc(fn func()) {
 	p.onEnqueue = fn
 }
 
-func NewAPPublisher(identity *Identity, db *database.DB, endpoint string, logger *slog.Logger) *APPublisher {
+func NewAPPublisher(identity *Identity, db PublisherRepository, endpoint string, logger *slog.Logger) *APPublisher {
 	return &APPublisher{
 		identity:   identity,
 		db:         db,

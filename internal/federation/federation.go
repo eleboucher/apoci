@@ -1,9 +1,4 @@
 // Package federation provides the shared business logic for follow management.
-// Both the HTTP admin API and the CLI call into these functions, keeping
-// transport concerns (HTTP decoding, terminal output) in their own layers.
-//
-// The activitypub package handles only protocol mechanics (build and deliver
-// activities). All database state transitions live here.
 package federation
 
 import (
@@ -17,8 +12,21 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
 
-// Federator abstracts the ActivityPub network operations, enabling injection
-// of test doubles. None of these methods touch the database.
+type FederationRepository interface {
+	RemoveFollow(ctx context.Context, actorURL string) error
+	ListFollows(ctx context.Context) ([]database.Follow, error)
+	RefreshFollow(ctx context.Context, actorURL, publicKeyPEM, endpoint string, alias *string) error
+	GetFollowRequest(ctx context.Context, actorURL string) (*database.FollowRequest, error)
+	AcceptFollowRequest(ctx context.Context, actorURL string) error
+	RejectFollowRequest(ctx context.Context, actorURL string) error
+	ListFollowRequests(ctx context.Context) ([]database.FollowRequest, error)
+	RefreshFollowRequest(ctx context.Context, actorURL, publicKeyPEM, endpoint string, alias *string) error
+	AddOutgoingFollow(ctx context.Context, actorURL string) error
+	GetOutgoingFollow(ctx context.Context, actorURL string) (*database.OutgoingFollow, error)
+	RemoveOutgoingFollow(ctx context.Context, actorURL string) error
+	UpsertPeer(ctx context.Context, p *database.Peer) error
+}
+
 type Federator interface {
 	ResolveFollowTarget(ctx context.Context, input string) (string, error)
 	FetchActor(ctx context.Context, actorURL string) (*activitypub.Actor, error)
@@ -29,7 +37,6 @@ type Federator interface {
 	SendFollow(ctx context.Context, targetActorURL string) (string, error)
 }
 
-// RealFederator implements Federator using the activitypub package.
 type RealFederator struct {
 	Identity *activitypub.Identity
 	Enqueue  activitypub.EnqueueFunc
@@ -63,10 +70,9 @@ func (f *RealFederator) SendFollow(ctx context.Context, targetActorURL string) (
 	return activitypub.SendFollow(ctx, f.Identity, targetActorURL, f.Enqueue)
 }
 
-// Service orchestrates follow management operations.
 type Service struct {
 	Fed      Federator
-	DB       *database.DB
+	DB       FederationRepository
 	ActorURL string // this node's actor URL
 	Logger   *slog.Logger
 }

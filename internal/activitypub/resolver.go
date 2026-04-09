@@ -9,12 +9,16 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/oci"
 )
 
+type ResolverRepository interface {
+	FindPeersWithBlob(ctx context.Context, digest string) ([]database.PeerBlob, error)
+}
+
 type APResolver struct {
-	db     *database.DB
+	db     ResolverRepository
 	logger *slog.Logger
 }
 
-func NewAPResolver(db *database.DB, logger *slog.Logger) *APResolver {
+func NewAPResolver(db ResolverRepository, logger *slog.Logger) *APResolver {
 	return &APResolver{db: db, logger: logger}
 }
 

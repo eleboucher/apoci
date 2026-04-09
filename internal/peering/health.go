@@ -7,15 +7,30 @@ import (
 	"sync"
 	"time"
 
-	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
 )
 
+// PeerRecord is the minimal peer information needed for health checks.
+type PeerRecord struct {
+	ActorURL  string
+	Endpoint  string
+	IsHealthy bool
+}
+
+type HealthRepository interface {
+	ListAllPeers(ctx context.Context) ([]PeerRecord, error)
+	SetPeerHealth(ctx context.Context, actorURL string, healthy bool) error
+}
+
+type HealthFetcher interface {
+	CheckHealth(ctx context.Context, endpoint string) error
+}
+
 type HealthChecker struct {
-	db       *database.DB
-	fetcher  *Fetcher
+	db       HealthRepository
+	fetcher  HealthFetcher
 	interval time.Duration
-	notifier *notify.Notifier
+	notifier Notifier
 	logger   *slog.Logger
 
 	mu      sync.Mutex
@@ -24,7 +39,7 @@ type HealthChecker struct {
 	wg      sync.WaitGroup
 }
 
-func NewHealthChecker(db *database.DB, fetcher *Fetcher, interval time.Duration, notifier *notify.Notifier, logger *slog.Logger) *HealthChecker {
+func NewHealthChecker(db HealthRepository, fetcher HealthFetcher, interval time.Duration, notifier Notifier, logger *slog.Logger) *HealthChecker {
 	return &HealthChecker{
 		db:       db,
 		fetcher:  fetcher,

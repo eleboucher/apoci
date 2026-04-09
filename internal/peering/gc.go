@@ -8,24 +8,32 @@ import (
 	"time"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
-	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
 )
 
-// GCConfig holds tunable parameters for the garbage collector.
+type GCRepository interface {
+	CleanupStalePeerBlobs(ctx context.Context, olderThan time.Duration) (int64, error)
+	OrphanedBlobs(ctx context.Context, limit int) ([]string, error)
+	DeleteBlob(ctx context.Context, digest string) error
+	AllBlobDigests(ctx context.Context, pageSize int) (map[string]bool, error)
+}
+
+type Notifier interface {
+	Send(event, message string)
+}
+
 type GCConfig struct {
 	Interval         time.Duration
 	StalePeerBlobAge time.Duration
 	OrphanBatchSize  int
 }
 
-// GarbageCollector periodically cleans up stale data.
 type GarbageCollector struct {
 	cfg      GCConfig
-	db       *database.DB
+	db       GCRepository
 	blobs    blobstore.BlobStore
-	notifier *notify.Notifier
+	notifier Notifier
 	logger   *slog.Logger
 	mu       sync.Mutex
 	running  bool
@@ -34,7 +42,7 @@ type GarbageCollector struct {
 	once     sync.Once
 }
 
-func NewGarbageCollector(cfg GCConfig, db *database.DB, blobs blobstore.BlobStore, notifier *notify.Notifier, logger *slog.Logger) *GarbageCollector {
+func NewGarbageCollector(cfg GCConfig, db GCRepository, blobs blobstore.BlobStore, notifier Notifier, logger *slog.Logger) *GarbageCollector {
 	return &GarbageCollector{
 		cfg:      cfg,
 		db:       db,

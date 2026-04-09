@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 )
 
 const (
@@ -83,12 +85,15 @@ func (w *InboxWorker) drain() {
 func (w *InboxWorker) process(task InboxTask) {
 	ctx, cancel := context.WithTimeout(context.Background(), inboxTaskTimeout)
 	defer cancel()
-	if err := w.handler.dispatch(ctx, task); err != nil {
+	start := time.Now()
+	dispatchErr := w.handler.dispatch(ctx, task)
+	metrics.InboxProcessingDuration.Observe(time.Since(start).Seconds())
+	if dispatchErr != nil {
 		w.logger.Warn("inbox worker: processing failed",
 			"type", task.Activity.Type,
 			"id", task.Activity.ID,
 			"actor", task.Activity.Actor,
-			"error", err,
+			"error", dispatchErr,
 		)
 		return
 	}

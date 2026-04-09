@@ -1,6 +1,7 @@
 package activitypub
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,12 +12,27 @@ import (
 
 const defaultPageSize = 20
 
-type OutboxHandler struct {
-	identity *Identity
-	db       *database.DB
+type OutboxRepository interface {
+	CountActivities(ctx context.Context, actorURL string) (int, error)
+	ListActivitiesPage(ctx context.Context, actorURL string, beforeID int64, limit int) ([]database.Activity, error)
 }
 
-func NewOutboxHandler(identity *Identity, db *database.DB) *OutboxHandler {
+type FollowersRepository interface {
+	CountFollows(ctx context.Context) (int, error)
+	ListFollowsPage(ctx context.Context, offset, limit int) ([]database.Follow, error)
+}
+
+// FollowingRepository is the persistence port for the following handler.
+type FollowingRepository interface {
+	ListOutgoingFollows(ctx context.Context, status string) ([]database.OutgoingFollow, error)
+}
+
+type OutboxHandler struct {
+	identity *Identity
+	db       OutboxRepository
+}
+
+func NewOutboxHandler(identity *Identity, db OutboxRepository) *OutboxHandler {
 	return &OutboxHandler{identity: identity, db: db}
 }
 
@@ -90,10 +106,10 @@ func (h *OutboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 type FollowersHandler struct {
 	identity *Identity
-	db       *database.DB
+	db       FollowersRepository
 }
 
-func NewFollowersHandler(identity *Identity, db *database.DB) *FollowersHandler {
+func NewFollowersHandler(identity *Identity, db FollowersRepository) *FollowersHandler {
 	return &FollowersHandler{identity: identity, db: db}
 }
 
@@ -165,10 +181,10 @@ func (h *FollowersHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // FollowingHandler returns who this instance is following (outgoing follows).
 type FollowingHandler struct {
 	identity *Identity
-	db       *database.DB
+	db       FollowingRepository
 }
 
-func NewFollowingHandler(identity *Identity, db *database.DB) *FollowingHandler {
+func NewFollowingHandler(identity *Identity, db FollowingRepository) *FollowingHandler {
 	return &FollowingHandler{identity: identity, db: db}
 }
 

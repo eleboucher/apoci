@@ -30,6 +30,35 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
 )
 
+type RegistryRepository interface {
+	BlobExistsInRepo(ctx context.Context, repoName, digest string) (bool, error)
+	GetBlob(ctx context.Context, digest string) (*database.Blob, error)
+	PutBlob(ctx context.Context, digest string, sizeBytes int64, mediaType *string, storedLocally bool) error
+	DeleteBlob(ctx context.Context, digest string) error
+
+	GetRepository(ctx context.Context, name string) (*database.Repository, error)
+	GetOrCreateRepository(ctx context.Context, name, ownerID string) (*database.Repository, error)
+	ListRepositoriesAfter(ctx context.Context, startAfter string, limit int) ([]database.Repository, error)
+
+	GetManifestByDigest(ctx context.Context, repoID int64, digest string) (*database.Manifest, error)
+	GetManifestByTag(ctx context.Context, repoID int64, tag string) (*database.Manifest, error)
+	PutManifest(ctx context.Context, m *database.Manifest) error
+	DeleteManifest(ctx context.Context, repoID int64, digest string) error
+	ListManifestsBySubject(ctx context.Context, repoID int64, subjectDigest string) ([]database.Manifest, error)
+	PutManifestLayers(ctx context.Context, manifestID int64, layerDigests []string) error
+
+	PutTagWithImmutable(ctx context.Context, repoID int64, tag, digest string, immutable bool) error
+	DeleteTag(ctx context.Context, repoID int64, tag string) error
+	ListTagsAfter(ctx context.Context, repoID int64, startAfter string, limit int) ([]string, error)
+
+	GetFollow(ctx context.Context, actorURL string) (*database.Follow, error)
+
+	CreateUploadSession(ctx context.Context, uuid string, repoID int64, ttl time.Duration) (*database.UploadSession, error)
+	GetUploadSession(ctx context.Context, uuid string) (*database.UploadSession, error)
+	DeleteUploadSession(ctx context.Context, uuid string) error
+	ListExpiredUploadSessions(ctx context.Context, limit int) ([]string, error)
+}
+
 type Publisher interface {
 	PublishManifest(ctx context.Context, repo, tag, digest, mediaType string, size int64, content []byte, subjectDigest *string) error
 	PublishTag(ctx context.Context, repo, tag, digest string) error
@@ -51,7 +80,7 @@ type BlobFetcher interface {
 
 type Registry struct {
 	*ociregistry.Funcs
-	db              *database.DB
+	db              RegistryRepository
 	blobs           blobstore.BlobStore
 	logger          *slog.Logger
 	localID         string
@@ -118,7 +147,7 @@ func NewRegistry(db *database.DB, blobs blobstore.BlobStore, localID, namespace,
 	return r, nil
 }
 
-func (r *Registry) DB() *database.DB {
+func (r *Registry) Repo() RegistryRepository {
 	return r.db
 }
 
@@ -233,6 +262,7 @@ func (r *Registry) fetchBlobFromPeers(ctx context.Context, repo string, digest o
 	}
 
 	for _, peer := range peers {
+		peerFetchStart := time.Now()
 		stream, err := r.fetcher.FetchBlobStream(ctx, peer.PeerEndpoint, repo, string(digest))
 		if err != nil {
 			r.logger.Warn("failed to fetch blob from peer",
@@ -268,6 +298,7 @@ func (r *Registry) fetchBlobFromPeers(ctx context.Context, repo string, digest o
 			}
 		}
 
+		metrics.PeerFetchDuration.Observe(time.Since(peerFetchStart).Seconds())
 		r.logger.Info("fetched blob from federation peer",
 			"digest", storedDigest,
 			"peer", peer.PeerEndpoint,

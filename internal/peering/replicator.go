@@ -8,25 +8,32 @@ import (
 	"time"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
-	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
 )
 
 const maxConcurrentReplications = 10
 
-// BlobReplicator eagerly fetches blobs from federation peers and stores them locally.
+type ReplicatorRepository interface {
+	FindRepoForBlob(ctx context.Context, digest string) (string, error)
+	PutBlob(ctx context.Context, digest string, sizeBytes int64, mediaType *string, storedLocally bool) error
+}
+
+type BlobStreamFetcher interface {
+	FetchBlobStream(ctx context.Context, peerEndpoint, repo, digest string) (*BlobStream, error)
+}
+
 type BlobReplicator struct {
-	db       *database.DB
+	db       ReplicatorRepository
 	blobs    blobstore.BlobStore
-	fetcher  *Fetcher
-	notifier *notify.Notifier
+	fetcher  BlobStreamFetcher
+	notifier Notifier
 	logger   *slog.Logger
 	sem      chan struct{}
 	wg       sync.WaitGroup
 }
 
-func NewBlobReplicator(db *database.DB, blobs blobstore.BlobStore, fetcher *Fetcher, notifier *notify.Notifier, logger *slog.Logger) *BlobReplicator {
+func NewBlobReplicator(db ReplicatorRepository, blobs blobstore.BlobStore, fetcher BlobStreamFetcher, notifier Notifier, logger *slog.Logger) *BlobReplicator {
 	return &BlobReplicator{
 		db:       db,
 		blobs:    blobs,
@@ -80,6 +87,7 @@ func (r *BlobReplicator) replicateBlob(ctx context.Context, peerEndpoint, digest
 		return
 	}
 
+	fetchStart := time.Now()
 	stream, err := r.fetcher.FetchBlobStream(ctx, peerEndpoint, repo, digest)
 	if err != nil {
 		metrics.BlobReplicationsFailed.Add(1)
@@ -117,6 +125,7 @@ func (r *BlobReplicator) replicateBlob(ctx context.Context, peerEndpoint, digest
 		return
 	}
 
+	metrics.BlobFetchDuration.Observe(time.Since(fetchStart).Seconds())
 	metrics.BlobReplicationsSucceeded.Add(1)
 	r.logger.Info("eagerly replicated blob",
 		"digest", digest,

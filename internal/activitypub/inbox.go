@@ -22,6 +22,37 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
 )
 
+type Notifier interface {
+	Send(event, message string)
+}
+
+type InboxRepository interface {
+	GetActivity(ctx context.Context, activityID string) (*database.Activity, error)
+	PutActivity(ctx context.Context, activityID, activityType, actorURL string, activityJSON []byte) error
+	AddFollowRequest(ctx context.Context, actorURL, publicKeyPEM, endpoint string, alias *string) error
+	AcceptFollowRequest(ctx context.Context, actorURL string) error
+	RejectFollowRequest(ctx context.Context, actorURL string) error
+	GetFollowRequest(ctx context.Context, actorURL string) (*database.FollowRequest, error)
+	GetFollow(ctx context.Context, actorURL string) (*database.Follow, error)
+	RemoveFollow(ctx context.Context, actorURL string) error
+	GetOutgoingFollow(ctx context.Context, actorURL string) (*database.OutgoingFollow, error)
+	AcceptOutgoingFollow(ctx context.Context, actorURL string) error
+	RejectOutgoingFollow(ctx context.Context, actorURL string) error
+	GetRepository(ctx context.Context, name string) (*database.Repository, error)
+	GetOrCreateRepository(ctx context.Context, name, ownerDID string) (*database.Repository, error)
+	IsRepositoryOwner(ctx context.Context, repoID int64, did string) (bool, error)
+	PutManifest(ctx context.Context, m *database.Manifest) error
+	GetManifestByDigest(ctx context.Context, repoID int64, digest string) (*database.Manifest, error)
+	PutManifestLayers(ctx context.Context, manifestID int64, blobDigests []string) error
+	DeleteManifest(ctx context.Context, repoID int64, digest string) error
+	PutTag(ctx context.Context, repoID int64, name, manifestDigest string) error
+	DeleteTag(ctx context.Context, repoID int64, name string) error
+	FindPeersWithBlob(ctx context.Context, digest string) ([]database.PeerBlob, error)
+	GetBlob(ctx context.Context, digest string) (*database.Blob, error)
+	PutBlob(ctx context.Context, digest string, sizeBytes int64, mediaType *string, storedLocally bool) error
+	PutPeerBlob(ctx context.Context, peerActor, blobDigest, peerEndpoint string) error
+}
+
 type BlobReplicator interface {
 	ReplicateBlob(ctx context.Context, peerEndpoint, digest string, size int64)
 }
@@ -37,12 +68,12 @@ type ActivityEnqueuer interface {
 
 type InboxHandler struct {
 	identity       *Identity
-	db             *database.DB
+	db             InboxRepository
 	blobReplicator BlobReplicator
 	actorCache     ActorInvalidator
 	enqueue        EnqueueFunc
 	worker         ActivityEnqueuer
-	notifier       *notify.Notifier
+	notifier       Notifier
 
 	maxManifestSize int64
 	maxBlobSize     int64
@@ -76,7 +107,7 @@ type InboxConfig struct {
 	BlockedActors   []string
 }
 
-func NewInboxHandler(identity *Identity, db *database.DB, cfg InboxConfig, logger *slog.Logger) *InboxHandler {
+func NewInboxHandler(identity *Identity, db InboxRepository, cfg InboxConfig, logger *slog.Logger) *InboxHandler {
 	blockedDomainSet := make(map[string]struct{}, len(cfg.BlockedDomains))
 	for _, d := range cfg.BlockedDomains {
 		blockedDomainSet[d] = struct{}{}
@@ -148,7 +179,7 @@ func (h *InboxHandler) SetWorker(w ActivityEnqueuer) {
 	h.worker = w
 }
 
-func (h *InboxHandler) SetNotifier(n *notify.Notifier) {
+func (h *InboxHandler) SetNotifier(n Notifier) {
 	h.notifier = n
 }
 
@@ -184,6 +215,11 @@ type RawActivity struct {
 func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if ct := r.Header.Get("Content-Type"); !isActivityPubContentType(ct) {
+		http.Error(w, "unsupported content type", http.StatusUnsupportedMediaType)
 		return
 	}
 
@@ -1137,4 +1173,14 @@ func (h *InboxHandler) shouldAutoAccept(ctx context.Context, actorURL string) bo
 	}
 
 	return false
+}
+
+// isActivityPubContentType returns true if ct is a valid ActivityPub content
+// type. Both application/activity+json and application/ld+json (with or
+// without a profile parameter) are accepted per the AP spec.
+func isActivityPubContentType(ct string) bool {
+	// Trim optional parameters (e.g. charset, profile).
+	mediaType, _, _ := strings.Cut(ct, ";")
+	mediaType = strings.TrimSpace(mediaType)
+	return mediaType == "application/activity+json" || mediaType == "application/ld+json"
 }

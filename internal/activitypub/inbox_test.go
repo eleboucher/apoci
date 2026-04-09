@@ -58,6 +58,37 @@ func TestInboxRejectsGet(t *testing.T) {
 	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }
 
+func TestInboxRejectsUnsupportedContentType(t *testing.T) {
+	handler := testInboxSetup(t)
+
+	body := []byte(`{"type":"Follow"}`)
+	req := httptest.NewRequest("POST", "/ap/inbox", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
+}
+
+func TestIsActivityPubContentType(t *testing.T) {
+	tests := []struct {
+		ct   string
+		want bool
+	}{
+		{"application/activity+json", true},
+		{"application/ld+json", true},
+		{`application/ld+json; profile="https://www.w3.org/ns/activitystreams"`, true},
+		{"application/json", false},
+		{"text/html", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		got := isActivityPubContentType(tt.ct)
+		assert.Equal(t, tt.want, got, "isActivityPubContentType(%q)", tt.ct)
+	}
+}
+
 func TestKeyIDToActorURL(t *testing.T) {
 	tests := []struct {
 		input    string

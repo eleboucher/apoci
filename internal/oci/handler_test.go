@@ -640,7 +640,7 @@ func TestUploadSessionDBWiring(t *testing.T) {
 	uploadID := writer.ID()
 
 	// Verify session was created in DB.
-	session, err := reg.DB().GetUploadSession(ctx, uploadID)
+	session, err := reg.Repo().GetUploadSession(ctx, uploadID)
 	require.NoError(t, err)
 	require.NotNil(t, session, "upload session should be in DB")
 	require.Equal(t, uploadID, session.UUID)
@@ -653,7 +653,7 @@ func TestUploadSessionDBWiring(t *testing.T) {
 	// Commit without a proper digest may error, but the session should be cleaned up.
 	// We just check the DB is cleaned up after a successful commit.
 	if err == nil {
-		session, _ = reg.DB().GetUploadSession(ctx, uploadID)
+		session, _ = reg.Repo().GetUploadSession(ctx, uploadID)
 		require.Nil(t, session, "upload session should be deleted after commit")
 	}
 

@@ -85,9 +85,10 @@ func testDB(t *testing.T) *database.DB {
 	return db
 }
 
-func testService(t *testing.T, fed *mockFed) *Service {
+func testService(t *testing.T, fed *mockFed) (*Service, *database.DB) {
 	t.Helper()
-	return testServiceWithDB(t, fed, testDB(t))
+	db := testDB(t)
+	return testServiceWithDB(t, fed, db), db
 }
 
 func testServiceWithDB(t *testing.T, fed *mockFed, db *database.DB) *Service {
@@ -123,7 +124,7 @@ func TestAddFollowSuccess(t *testing.T) {
 			return nil
 		},
 	}
-	svc := testService(t, fed)
+	svc, db := testService(t, fed)
 	ctx := context.Background()
 
 	result, err := svc.AddFollow(ctx, peerActorURL)
@@ -138,7 +139,7 @@ func TestAddFollowSuccess(t *testing.T) {
 	require.Equal(t, "pending", of.Status)
 
 	// Peer record must be created.
-	peer, err := svc.DB.GetPeer(ctx, peerActorURL)
+	peer, err := db.GetPeer(ctx, peerActorURL)
 	require.NoError(t, err)
 	require.NotNil(t, peer)
 	require.Equal(t, "lazy", peer.ReplicationPolicy)
@@ -178,7 +179,7 @@ func TestAddFollowResolveError(t *testing.T) {
 			return "", errors.New("resolve failed")
 		},
 	}
-	svc := testService(t, fed)
+	svc, _ := testService(t, fed)
 
 	_, err := svc.AddFollow(context.Background(), "bad-input")
 	require.Error(t, err)
@@ -191,7 +192,7 @@ func TestAddFollowFetchActorError(t *testing.T) {
 			return nil, errors.New("unreachable")
 		},
 	}
-	svc := testService(t, fed)
+	svc, _ := testService(t, fed)
 
 	_, err := svc.AddFollow(context.Background(), peerActorURL)
 	require.Error(t, err)
@@ -207,7 +208,7 @@ func TestAddFollowDeliveryError(t *testing.T) {
 			return errors.New("delivery failed")
 		},
 	}
-	svc := testService(t, fed)
+	svc, _ := testService(t, fed)
 
 	_, err := svc.AddFollow(context.Background(), peerActorURL)
 	require.Error(t, err)
@@ -216,24 +217,24 @@ func TestAddFollowDeliveryError(t *testing.T) {
 
 func TestRemoveFollowWithInboundFollow(t *testing.T) {
 	fed := &mockFed{}
-	svc := testService(t, fed)
+	svc, db := testService(t, fed)
 	ctx := context.Background()
 
 	// Simulate an accepted inbound follow.
-	require.NoError(t, svc.DB.AddFollow(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
+	require.NoError(t, db.AddFollow(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
 
 	actorURL, err := svc.RemoveFollow(ctx, peerActorURL)
 	require.NoError(t, err)
 	require.Equal(t, peerActorURL, actorURL)
 
-	f, err := svc.DB.GetFollow(ctx, peerActorURL)
+	f, err := db.GetFollow(ctx, peerActorURL)
 	require.NoError(t, err)
 	require.Nil(t, f, "inbound follow should be removed")
 }
 
 func TestRemoveFollowWithOutgoingFollow(t *testing.T) {
 	fed := &mockFed{}
-	svc := testService(t, fed)
+	svc, _ := testService(t, fed)
 	ctx := context.Background()
 
 	require.NoError(t, svc.DB.AddOutgoingFollow(ctx, peerActorURL))
@@ -249,16 +250,16 @@ func TestRemoveFollowWithOutgoingFollow(t *testing.T) {
 
 func TestRemoveFollowBothTables(t *testing.T) {
 	fed := &mockFed{}
-	svc := testService(t, fed)
+	svc, db := testService(t, fed)
 	ctx := context.Background()
 
-	require.NoError(t, svc.DB.AddFollow(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
+	require.NoError(t, db.AddFollow(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
 	require.NoError(t, svc.DB.AddOutgoingFollow(ctx, peerActorURL))
 
 	_, err := svc.RemoveFollow(ctx, peerActorURL)
 	require.NoError(t, err)
 
-	f, err := svc.DB.GetFollow(ctx, peerActorURL)
+	f, err := db.GetFollow(ctx, peerActorURL)
 	require.NoError(t, err)
 	require.Nil(t, f)
 
@@ -269,7 +270,7 @@ func TestRemoveFollowBothTables(t *testing.T) {
 
 func TestRemoveFollowNeitherTableReturnsError(t *testing.T) {
 	fed := &mockFed{}
-	svc := testService(t, fed)
+	svc, _ := testService(t, fed)
 
 	_, err := svc.RemoveFollow(context.Background(), peerActorURL)
 	require.Error(t, err)
@@ -282,7 +283,7 @@ func TestRemoveFollowUndoFailureDoesNotBlock(t *testing.T) {
 			return errors.New("peer unreachable")
 		},
 	}
-	svc := testService(t, fed)
+	svc, _ := testService(t, fed)
 	ctx := context.Background()
 
 	require.NoError(t, svc.DB.AddOutgoingFollow(ctx, peerActorURL))
@@ -298,7 +299,7 @@ func TestRemoveFollowResolveError(t *testing.T) {
 			return "", errors.New("resolve failed")
 		},
 	}
-	svc := testService(t, fed)
+	svc, _ := testService(t, fed)
 
 	_, err := svc.RemoveFollow(context.Background(), "bad")
 	require.Error(t, err)
@@ -313,10 +314,10 @@ func TestAcceptFollowSuccess(t *testing.T) {
 			return nil
 		},
 	}
-	svc := testService(t, fed)
+	svc, db := testService(t, fed)
 	ctx := context.Background()
 
-	require.NoError(t, svc.DB.AddFollowRequest(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
+	require.NoError(t, db.AddFollowRequest(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
 
 	result, err := svc.AcceptFollow(ctx, peerActorURL, "")
 	require.NoError(t, err)
@@ -325,7 +326,7 @@ func TestAcceptFollowSuccess(t *testing.T) {
 	require.Equal(t, peerActorURL, acceptedActor)
 
 	// Follow request should be promoted to accepted follow.
-	f, err := svc.DB.GetFollow(ctx, peerActorURL)
+	f, err := db.GetFollow(ctx, peerActorURL)
 	require.NoError(t, err)
 	require.NotNil(t, f, "follow should exist after accept")
 
@@ -337,7 +338,7 @@ func TestAcceptFollowSuccess(t *testing.T) {
 
 func TestAcceptFollowNoPendingRequest(t *testing.T) {
 	fed := &mockFed{}
-	svc := testService(t, fed)
+	svc, _ := testService(t, fed)
 
 	_, err := svc.AcceptFollow(context.Background(), peerActorURL, "")
 	require.Error(t, err)
@@ -350,17 +351,17 @@ func TestAcceptFollowDeliveryError(t *testing.T) {
 			return errors.New("delivery failed")
 		},
 	}
-	svc := testService(t, fed)
+	svc, db := testService(t, fed)
 	ctx := context.Background()
 
-	require.NoError(t, svc.DB.AddFollowRequest(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
+	require.NoError(t, db.AddFollowRequest(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
 
 	_, err := svc.AcceptFollow(ctx, peerActorURL, "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "delivering accept")
 
 	// Even on delivery failure, the follow should be promoted locally.
-	f, err := svc.DB.GetFollow(ctx, peerActorURL)
+	f, err := db.GetFollow(ctx, peerActorURL)
 	require.NoError(t, err)
 	require.NotNil(t, f, "follow should be accepted locally even if delivery fails")
 }
@@ -374,10 +375,10 @@ func TestAcceptFollowMutualFollowBack(t *testing.T) {
 			return target, nil
 		},
 	}
-	svc := testService(t, fed)
+	svc, db := testService(t, fed)
 	ctx := context.Background()
 
-	require.NoError(t, svc.DB.AddFollowRequest(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
+	require.NoError(t, db.AddFollowRequest(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
 
 	result, err := svc.AcceptFollow(ctx, peerActorURL, activitypub.AutoAcceptMutual)
 	require.NoError(t, err)
@@ -390,7 +391,7 @@ func TestAcceptFollowMutualFollowBack(t *testing.T) {
 	require.NotNil(t, of, "outgoing follow should be recorded after follow-back")
 
 	// Peer should be recorded.
-	peer, err := svc.DB.GetPeer(ctx, peerActorURL)
+	peer, err := db.GetPeer(ctx, peerActorURL)
 	require.NoError(t, err)
 	require.NotNil(t, peer)
 }
@@ -404,10 +405,10 @@ func TestAcceptFollowMutualSkipsExistingOutgoing(t *testing.T) {
 			return "", nil
 		},
 	}
-	svc := testService(t, fed)
+	svc, db := testService(t, fed)
 	ctx := context.Background()
 
-	require.NoError(t, svc.DB.AddFollowRequest(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
+	require.NoError(t, db.AddFollowRequest(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
 	require.NoError(t, svc.DB.AddOutgoingFollow(ctx, peerActorURL))
 
 	result, err := svc.AcceptFollow(ctx, peerActorURL, activitypub.AutoAcceptMutual)
@@ -423,10 +424,10 @@ func TestAcceptFollowMutualFollowBackError(t *testing.T) {
 			return "", errors.New("follow-back failed")
 		},
 	}
-	svc := testService(t, fed)
+	svc, db := testService(t, fed)
 	ctx := context.Background()
 
-	require.NoError(t, svc.DB.AddFollowRequest(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
+	require.NoError(t, db.AddFollowRequest(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
 
 	result, err := svc.AcceptFollow(ctx, peerActorURL, activitypub.AutoAcceptMutual)
 	require.NoError(t, err, "follow-back failure should not fail the accept")
@@ -440,7 +441,7 @@ func TestAcceptFollowResolveError(t *testing.T) {
 			return "", errors.New("resolve failed")
 		},
 	}
-	svc := testService(t, fed)
+	svc, _ := testService(t, fed)
 
 	_, err := svc.AcceptFollow(context.Background(), "bad", "")
 	require.Error(t, err)
@@ -455,10 +456,10 @@ func TestRejectFollowSuccess(t *testing.T) {
 			return nil
 		},
 	}
-	svc := testService(t, fed)
+	svc, db := testService(t, fed)
 	ctx := context.Background()
 
-	require.NoError(t, svc.DB.AddFollowRequest(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
+	require.NoError(t, db.AddFollowRequest(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
 
 	actorURL, err := svc.RejectFollow(ctx, peerActorURL)
 	require.NoError(t, err)
@@ -473,7 +474,7 @@ func TestRejectFollowSuccess(t *testing.T) {
 
 func TestRejectFollowNoPendingRequest(t *testing.T) {
 	fed := &mockFed{}
-	svc := testService(t, fed)
+	svc, _ := testService(t, fed)
 
 	_, err := svc.RejectFollow(context.Background(), peerActorURL)
 	require.Error(t, err)
@@ -486,10 +487,10 @@ func TestRejectFollowDeliveryErrorDoesNotFail(t *testing.T) {
 			return errors.New("delivery failed")
 		},
 	}
-	svc := testService(t, fed)
+	svc, db := testService(t, fed)
 	ctx := context.Background()
 
-	require.NoError(t, svc.DB.AddFollowRequest(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
+	require.NoError(t, db.AddFollowRequest(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
 
 	actorURL, err := svc.RejectFollow(ctx, peerActorURL)
 	require.NoError(t, err, "delivery failure should not fail the reject")
@@ -507,7 +508,7 @@ func TestRejectFollowResolveError(t *testing.T) {
 			return "", errors.New("resolve failed")
 		},
 	}
-	svc := testService(t, fed)
+	svc, _ := testService(t, fed)
 
 	_, err := svc.RejectFollow(context.Background(), "bad")
 	require.Error(t, err)
