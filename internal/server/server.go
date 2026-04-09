@@ -19,6 +19,7 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/oci"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/peering"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/upstream"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/workers"
 )
@@ -102,6 +103,13 @@ func New(cfg *config.Config, db *database.DB, blobs blobstore.BlobStore, identit
 
 	registry.SetPublisher(apPublisher)
 	registry.SetFederation(apResolver, fetcher)
+
+	// Initialize upstream proxy if enabled
+	if cfg.Upstreams.Enabled && len(cfg.Upstreams.Registries) > 0 {
+		upstreamFetcher := upstream.NewFetcher(cfg.Upstreams, cfg.Limits.MaxBlobSize, cfg.Limits.MaxManifestSize, logger)
+		registry.SetUpstreamFetcher(upstreamFetcher)
+		logger.Info("upstream proxy enabled", "registries", len(cfg.Upstreams.Registries))
+	}
 
 	enqueueFunc := activitypub.EnqueueFunc(func(ctx context.Context, activityID, inboxURL string, activityJSON []byte) error {
 		if err := db.EnqueueDelivery(ctx, activityID, inboxURL, activityJSON); err != nil {

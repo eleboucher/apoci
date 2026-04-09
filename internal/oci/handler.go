@@ -27,6 +27,7 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/peering"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/upstream"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
 )
 
@@ -79,6 +80,12 @@ type BlobFetcher interface {
 	FetchManifest(ctx context.Context, peerEndpoint, repo, reference string) ([]byte, string, error)
 }
 
+type UpstreamFetcher interface {
+	HasRegistry(name string) bool
+	FetchBlobStream(ctx context.Context, registry, repo, digest string) (*peering.BlobStream, error)
+	FetchManifest(ctx context.Context, registry, repo, reference string) ([]byte, string, error)
+}
+
 type Registry struct {
 	*ociregistry.Funcs
 	db              RegistryRepository
@@ -90,6 +97,7 @@ type Registry struct {
 	publisher       Publisher
 	resolver        ContentResolver
 	fetcher         BlobFetcher
+	upstreamFetcher UpstreamFetcher
 	maxManifestSize int64
 	maxBlobSize     int64
 
@@ -161,6 +169,10 @@ func (r *Registry) SetFederation(resolver ContentResolver, fetcher BlobFetcher) 
 	r.fetcher = fetcher
 }
 
+func (r *Registry) SetUpstreamFetcher(f UpstreamFetcher) {
+	r.upstreamFetcher = f
+}
+
 func (r *Registry) Handler() http.Handler {
 	return ociserver.New(r, nil)
 }
@@ -220,6 +232,7 @@ func (r *Registry) checkNamespace(repo string) error {
 const defaultMediaType = "application/octet-stream"
 
 func (r *Registry) getBlob(ctx context.Context, repo string, digest ociregistry.Digest) (ociregistry.BlobReader, error) {
+	originalRepo := repo
 	repo = r.normalizeRepo(repo)
 	metrics.RegistryBlobPulls.Add(1)
 
@@ -227,28 +240,38 @@ func (r *Registry) getBlob(ctx context.Context, repo string, digest ociregistry.
 	if err != nil {
 		return nil, fmt.Errorf("checking blob repo scope: %w", err)
 	}
-	if !exists {
-		return nil, ociregistry.ErrBlobUnknown
+	if exists {
+		f, blobSize, openErr := r.blobs.Open(ctx, string(digest))
+		switch {
+		case openErr == nil:
+			return newBlobReader(f, ociregistry.Descriptor{
+				MediaType: defaultMediaType,
+				Digest:    digest,
+				Size:      blobSize,
+			}), nil
+		case !errors.Is(openErr, blobstore.ErrBlobNotFound):
+			return nil, fmt.Errorf("opening blob: %w", openErr)
+		}
+		// Blob tracked but not on disk - try to fetch from peers
 	}
 
-	f, blobSize, openErr := r.blobs.Open(ctx, string(digest))
-	switch {
-	case openErr == nil:
-		return newBlobReader(f, ociregistry.Descriptor{
-			MediaType: defaultMediaType,
-			Digest:    digest,
-			Size:      blobSize,
-		}), nil
-	case !errors.Is(openErr, blobstore.ErrBlobNotFound):
-		return nil, fmt.Errorf("opening blob: %w", openErr)
-	}
-
+	// Try federation peers
 	if r.resolver != nil && r.fetcher != nil {
 		reader, err := r.fetchBlobFromPeers(ctx, repo, digest)
 		if err != nil {
 			r.logger.Debug("blob not found on any peer", "digest", string(digest), "error", err)
 		} else if reader != nil {
 			metrics.RegistryBlobPullThru.Add(1)
+			return reader, nil
+		}
+	}
+
+	// Try upstream registry (use original repo to detect upstream prefix like "docker.io/")
+	if r.upstreamFetcher != nil {
+		reader, err := r.fetchBlobFromUpstream(ctx, originalRepo, digest)
+		if err != nil {
+			r.logger.Debug("blob not found on upstream", "repo", originalRepo, "digest", string(digest), "error", err)
+		} else if reader != nil {
 			return reader, nil
 		}
 	}
@@ -326,6 +349,141 @@ func (r *Registry) fetchBlobFromPeers(ctx context.Context, repo string, digest o
 	return nil, fmt.Errorf("no peers have blob %s", string(digest))
 }
 
+func (r *Registry) fetchBlobFromUpstream(ctx context.Context, repo string, digest ociregistry.Digest) (ociregistry.BlobReader, error) {
+	registry, upstreamRepo, ok := upstream.ParseUpstreamRepo(repo)
+	if !ok || !r.upstreamFetcher.HasRegistry(registry) {
+		return nil, nil // not an upstream repo
+	}
+
+	normalizedRepo := r.normalizeRepo(repo)
+
+	fetchStart := time.Now()
+	stream, err := r.upstreamFetcher.FetchBlobStream(ctx, registry, upstreamRepo, string(digest))
+	if err != nil {
+		return nil, fmt.Errorf("fetching from upstream %s: %w", registry, err)
+	}
+
+	storedDigest, size, err := r.blobs.Put(ctx, io.LimitReader(stream.Body, r.maxBlobSize+1), string(digest))
+	if closeErr := stream.Body.Close(); closeErr != nil {
+		r.logger.Warn("failed to close upstream blob stream", "error", closeErr)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("storing upstream blob: %w", err)
+	}
+	if size > r.maxBlobSize {
+		if delErr := r.blobs.Delete(ctx, storedDigest); delErr != nil {
+			r.logger.Warn("failed to delete oversized upstream blob", "digest", storedDigest, "error", delErr)
+		}
+		return nil, fmt.Errorf("upstream blob exceeds max size (%d > %d)", size, r.maxBlobSize)
+	}
+
+	mt := defaultMediaType
+	if err := r.db.PutBlob(ctx, storedDigest, size, &mt, true); err != nil {
+		r.logger.Warn("failed to record upstream blob", "error", err)
+	}
+
+	if _, err := r.db.GetOrCreateRepository(ctx, normalizedRepo, "upstream:"+registry); err != nil {
+		r.logger.Warn("failed to create upstream repo", "error", err)
+	}
+
+	metrics.UpstreamBlobPullThru.WithLabelValues(registry).Inc()
+	metrics.PeerFetchDuration.Observe(time.Since(fetchStart).Seconds())
+	r.logger.Info("fetched blob from upstream",
+		"registry", registry,
+		"repo", upstreamRepo,
+		"digest", storedDigest,
+		"size", size,
+	)
+
+	f, cachedSize, err := r.blobs.Open(ctx, storedDigest)
+	if err != nil {
+		return nil, fmt.Errorf("opening cached upstream blob: %w", err)
+	}
+	return newBlobReader(f, ociregistry.Descriptor{
+		MediaType: defaultMediaType,
+		Digest:    digest,
+		Size:      cachedSize,
+	}), nil
+}
+
+func (r *Registry) fetchManifestFromUpstream(ctx context.Context, repo, reference string) (ociregistry.BlobReader, error) {
+	registry, upstreamRepo, ok := upstream.ParseUpstreamRepo(repo)
+	if !ok || !r.upstreamFetcher.HasRegistry(registry) {
+		return nil, nil // not an upstream repo
+	}
+
+	normalizedRepo := r.normalizeRepo(repo)
+
+	fetchStart := time.Now()
+	data, mediaType, err := r.upstreamFetcher.FetchManifest(ctx, registry, upstreamRepo, reference)
+	if err != nil {
+		return nil, fmt.Errorf("fetching manifest from upstream %s: %w", registry, err)
+	}
+
+	computed := string(godigest.FromBytes(data))
+
+	refDigest, parseErr := godigest.Parse(reference)
+	refIsDigest := parseErr == nil
+	if refIsDigest {
+		if computed != reference && string(refDigest) != computed {
+			return nil, fmt.Errorf("manifest digest mismatch: expected %s, got %s", reference, computed)
+		}
+	}
+
+	repoObj, err := r.db.GetOrCreateRepository(ctx, normalizedRepo, "upstream:"+registry)
+	if err != nil {
+		return nil, fmt.Errorf("creating upstream repo: %w", err)
+	}
+
+	meta := parseManifestMeta(data, r.logger)
+
+	m := &database.Manifest{
+		RepositoryID:  repoObj.ID,
+		Digest:        computed,
+		MediaType:     mediaType,
+		SizeBytes:     int64(len(data)),
+		Content:       data,
+		SubjectDigest: meta.subjectDigest,
+		ArtifactType:  meta.artifactType,
+	}
+	if err := r.db.PutManifest(ctx, m); err != nil {
+		r.logger.Warn("failed to cache upstream manifest", "error", err)
+	}
+
+	if len(meta.layerDigests) > 0 {
+		storedMan, err := r.db.GetManifestByDigest(ctx, repoObj.ID, computed)
+		if err == nil && storedMan != nil {
+			if err := r.db.PutManifestLayers(ctx, storedMan.ID, meta.layerDigests); err != nil {
+				r.logger.Warn("failed to record upstream manifest layers", "error", err)
+			}
+		}
+	}
+
+	// If reference was a tag (not a digest), store the tag mapping
+	if !refIsDigest {
+		if err := r.db.PutTagWithImmutable(ctx, repoObj.ID, reference, computed, false); err != nil {
+			r.logger.Warn("failed to cache upstream tag", "tag", reference, "error", err)
+		}
+	}
+
+	metrics.UpstreamManifestPullThru.WithLabelValues(registry).Inc()
+	metrics.PeerFetchDuration.Observe(time.Since(fetchStart).Seconds())
+	r.logger.Info("fetched manifest from upstream",
+		"registry", registry,
+		"repo", upstreamRepo,
+		"reference", reference,
+		"digest", computed,
+		"size", len(data),
+	)
+
+	desc := ociregistry.Descriptor{
+		MediaType: mediaType,
+		Digest:    ociregistry.Digest(computed),
+		Size:      int64(len(data)),
+	}
+	return ocimem.NewBytesReader(data, desc), nil
+}
+
 func (r *Registry) getBlobRange(ctx context.Context, repo string, digest ociregistry.Digest, offset0, offset1 int64) (ociregistry.BlobReader, error) {
 	repo = r.normalizeRepo(repo)
 
@@ -393,6 +551,7 @@ type limitedReadCloser struct {
 }
 
 func (r *Registry) getManifest(ctx context.Context, repo string, digest ociregistry.Digest) (ociregistry.BlobReader, error) {
+	originalRepo := repo
 	repo = r.normalizeRepo(repo)
 	metrics.RegistryManifestPulls.Add(1)
 	repoObj, err := r.db.GetRepository(ctx, repo)
@@ -442,6 +601,15 @@ func (r *Registry) getManifest(ctx context.Context, repo string, digest ociregis
 		}
 	}
 
+	if r.upstreamFetcher != nil {
+		reader, err := r.fetchManifestFromUpstream(ctx, originalRepo, string(digest))
+		if err != nil {
+			r.logger.Debug("manifest not found on upstream", "repo", originalRepo, "digest", string(digest), "error", err)
+		} else if reader != nil {
+			return reader, nil
+		}
+	}
+
 	// Check if the manifest was deleted — return 410 Gone so clients know it's intentionally absent.
 	// Use a plain error (no OCI code) so ociserver falls back to HTTPError.StatusCode() = 410
 	// rather than overriding with the MANIFEST_UNKNOWN → 404 mapping.
@@ -456,24 +624,38 @@ func (r *Registry) getManifest(ctx context.Context, repo string, digest ociregis
 }
 
 func (r *Registry) getTag(ctx context.Context, repo string, tagName string) (ociregistry.BlobReader, error) {
+	originalRepo := repo
 	repo = r.normalizeRepo(repo)
+
+	// Try local first
 	repoObj, err := r.db.GetRepository(ctx, repo)
 	if err != nil {
 		return nil, fmt.Errorf("getting repository: %w", err)
 	}
+	if repoObj != nil {
+		m, err := r.db.GetManifestByTag(ctx, repoObj.ID, tagName)
+		if err != nil {
+			return nil, fmt.Errorf("getting manifest by tag: %w", err)
+		}
+		if m != nil {
+			return r.serveManifest(ctx, repo, m)
+		}
+	}
+
+	// Try upstream registry (use original repo to detect upstream prefix like "docker.io/")
+	if r.upstreamFetcher != nil {
+		reader, err := r.fetchManifestFromUpstream(ctx, originalRepo, tagName)
+		if err != nil {
+			r.logger.Debug("tag not found on upstream", "repo", originalRepo, "tag", tagName, "error", err)
+		} else if reader != nil {
+			return reader, nil
+		}
+	}
+
 	if repoObj == nil {
 		return nil, ociregistry.ErrNameUnknown
 	}
-
-	m, err := r.db.GetManifestByTag(ctx, repoObj.ID, tagName)
-	if err != nil {
-		return nil, fmt.Errorf("getting manifest by tag: %w", err)
-	}
-	if m == nil {
-		return nil, ociregistry.ErrManifestUnknown
-	}
-
-	return r.serveManifest(ctx, repo, m)
+	return nil, ociregistry.ErrManifestUnknown
 }
 
 // serveManifest returns the manifest content, fetching from the source peer if content is empty.

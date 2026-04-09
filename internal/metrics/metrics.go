@@ -165,6 +165,26 @@ var (
 		Help:      "Total pushes rejected by rate limiter.",
 	})
 
+	// Upstream proxy metrics.
+	UpstreamBlobPullThru = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "upstream",
+		Name:      "blob_pull_throughs_total",
+		Help:      "Total blob pull-throughs from upstream registries.",
+	}, []string{"registry"})
+	UpstreamManifestPullThru = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "upstream",
+		Name:      "manifest_pull_throughs_total",
+		Help:      "Total manifest pull-throughs from upstream registries.",
+	}, []string{"registry"})
+	UpstreamCircuitOpen = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "apoci",
+		Subsystem: "upstream",
+		Name:      "circuit_open",
+		Help:      "Whether circuit breaker is open for an upstream registry (1=open, 0=closed).",
+	}, []string{"registry"})
+
 	// Latency histograms.
 	latencyBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
 
@@ -239,6 +259,9 @@ func init() {
 		RegistryBlobPullThru,
 		RegistryManifestPullThru,
 		RegistryPushRateLimited,
+		UpstreamBlobPullThru,
+		UpstreamManifestPullThru,
+		UpstreamCircuitOpen,
 		DeliveryDuration,
 		BlobFetchDuration,
 		InboxProcessingDuration,

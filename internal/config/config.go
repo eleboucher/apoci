@@ -39,6 +39,7 @@ type Config struct {
 	Metrics       Metrics       `yaml:"metrics"       envPrefix:"APOCI_METRICS_"`
 	GC            GC            `yaml:"gc"            envPrefix:"APOCI_GC_"`
 	Notifications Notifications `yaml:"notifications" envPrefix:"APOCI_NOTIFICATIONS_"`
+	Upstreams     Upstreams     `yaml:"upstreams"     envPrefix:"APOCI_UPSTREAMS_"`
 
 	Domain string `yaml:"-" env:"-"`
 }
@@ -112,6 +113,32 @@ type GC struct {
 	OrphanBatchSize  int           `yaml:"orphanBatchSize"  env:"ORPHAN_BATCH_SIZE"`
 }
 
+// Upstream configures an external OCI registry for pull-through caching.
+type Upstream struct {
+	Name     string `yaml:"name"     env:"NAME"`     // registry name, e.g. "docker.io"
+	Endpoint string `yaml:"endpoint" env:"ENDPOINT"` // registry URL, e.g. "https://registry-1.docker.io"
+	Auth     string `yaml:"auth"     env:"AUTH"`     // "none", "basic", or "token"
+	Username string `yaml:"username" env:"USERNAME"` // for basic/token auth
+	Password string `yaml:"password" env:"PASSWORD"` // for basic/token auth
+}
+
+// String returns a string representation with the password redacted.
+func (u Upstream) String() string {
+	pass := ""
+	if u.Password != "" {
+		pass = "[REDACTED]"
+	}
+	return fmt.Sprintf("Upstream{Name:%s Endpoint:%s Auth:%s Username:%s Password:%s}",
+		u.Name, u.Endpoint, u.Auth, u.Username, pass)
+}
+
+// Upstreams holds configuration for upstream registry proxying.
+type Upstreams struct {
+	Enabled      bool          `yaml:"enabled"      env:"ENABLED"`
+	FetchTimeout time.Duration `yaml:"fetchTimeout" env:"FETCH_TIMEOUT"`
+	Registries   []Upstream    `yaml:"registries"`
+}
+
 func Load(path string) (*Config, error) {
 	cfg := &Config{}
 
@@ -154,6 +181,17 @@ func Load(path string) (*Config, error) {
 }
 
 func applyDefaults(cfg *Config) error {
+	if err := applyServerDefaults(cfg); err != nil {
+		return err
+	}
+	applyPeeringDefaults(cfg)
+	applyLimitsDefaults(cfg)
+	applyGCDefaults(cfg)
+	applyUpstreamDefaults(cfg)
+	return applyTokenDefaults(cfg)
+}
+
+func applyServerDefaults(cfg *Config) error {
 	if cfg.Endpoint != "" {
 		u, err := url.Parse(cfg.Endpoint)
 		if err != nil {
@@ -183,18 +221,6 @@ func applyDefaults(cfg *Config) error {
 	if cfg.LogFormat == "" {
 		cfg.LogFormat = "json"
 	}
-	if cfg.Peering.HealthCheckInterval == 0 {
-		cfg.Peering.HealthCheckInterval = 30 * time.Second
-	}
-	if cfg.Peering.FetchTimeout == 0 {
-		cfg.Peering.FetchTimeout = 60 * time.Second
-	}
-	if cfg.Limits.MaxManifestSize == 0 {
-		cfg.Limits.MaxManifestSize = DefaultMaxManifestSize
-	}
-	if cfg.Limits.MaxBlobSize == 0 {
-		cfg.Limits.MaxBlobSize = DefaultMaxBlobSize
-	}
 	if cfg.Storage.Type == "" {
 		cfg.Storage.Type = "local"
 	}
@@ -204,6 +230,37 @@ func applyDefaults(cfg *Config) error {
 	if cfg.Metrics.Listen == "" {
 		cfg.Metrics.Listen = ":9090"
 	}
+	if cfg.Federation.AutoAccept == "" {
+		cfg.Federation.AutoAccept = "none"
+	}
+	if cfg.AccountDomain == "" {
+		cfg.AccountDomain = cfg.Domain
+	}
+	if cfg.ImmutableTags == "" {
+		cfg.ImmutableTags = `^v[0-9]`
+	}
+	return nil
+}
+
+func applyPeeringDefaults(cfg *Config) {
+	if cfg.Peering.HealthCheckInterval == 0 {
+		cfg.Peering.HealthCheckInterval = 30 * time.Second
+	}
+	if cfg.Peering.FetchTimeout == 0 {
+		cfg.Peering.FetchTimeout = 60 * time.Second
+	}
+}
+
+func applyLimitsDefaults(cfg *Config) {
+	if cfg.Limits.MaxManifestSize == 0 {
+		cfg.Limits.MaxManifestSize = DefaultMaxManifestSize
+	}
+	if cfg.Limits.MaxBlobSize == 0 {
+		cfg.Limits.MaxBlobSize = DefaultMaxBlobSize
+	}
+}
+
+func applyGCDefaults(cfg *Config) {
 	if cfg.GC.Enabled == nil {
 		t := true
 		cfg.GC.Enabled = &t
@@ -217,15 +274,20 @@ func applyDefaults(cfg *Config) error {
 	if cfg.GC.OrphanBatchSize == 0 {
 		cfg.GC.OrphanBatchSize = 500
 	}
-	if cfg.Federation.AutoAccept == "" {
-		cfg.Federation.AutoAccept = "none"
+}
+
+func applyUpstreamDefaults(cfg *Config) {
+	if cfg.Upstreams.FetchTimeout == 0 {
+		cfg.Upstreams.FetchTimeout = 60 * time.Second
 	}
-	if cfg.AccountDomain == "" {
-		cfg.AccountDomain = cfg.Domain
+	for i := range cfg.Upstreams.Registries {
+		if cfg.Upstreams.Registries[i].Auth == "" {
+			cfg.Upstreams.Registries[i].Auth = "none"
+		}
 	}
-	if cfg.ImmutableTags == "" {
-		cfg.ImmutableTags = `^v[0-9]`
-	}
+}
+
+func applyTokenDefaults(cfg *Config) error {
 	if cfg.RegistryToken == "" {
 		token, err := loadOrGenerateToken(filepath.Join(cfg.DataDir, "registry.token"))
 		if err != nil {
@@ -295,6 +357,9 @@ func validate(cfg *Config) error {
 		return err
 	}
 	if err := validateNotificationEvents(cfg); err != nil {
+		return err
+	}
+	if err := validateUpstreams(cfg); err != nil {
 		return err
 	}
 	return nil
@@ -420,6 +485,39 @@ func validateNotificationEvents(cfg *Config) error {
 		if !validNotificationEvents[e] {
 			return fmt.Errorf("notifications.events: unknown event %q", e)
 		}
+	}
+	return nil
+}
+
+func validateUpstreams(cfg *Config) error {
+	if !cfg.Upstreams.Enabled {
+		return nil
+	}
+	validAuthTypes := map[string]bool{"none": true, "basic": true, "token": true}
+	seen := make(map[string]bool)
+	for i, u := range cfg.Upstreams.Registries {
+		if u.Name == "" {
+			return fmt.Errorf("upstreams.registries[%d].name is required", i)
+		}
+		if u.Endpoint == "" {
+			return fmt.Errorf("upstreams.registries[%d].endpoint is required", i)
+		}
+		if _, err := url.ParseRequestURI(u.Endpoint); err != nil {
+			return fmt.Errorf("upstreams.registries[%d].endpoint is not a valid URL: %w", i, err)
+		}
+		if !validAuthTypes[u.Auth] {
+			return fmt.Errorf("upstreams.registries[%d].auth must be 'none', 'basic', or 'token'", i)
+		}
+		if u.Auth == "basic" && (u.Username == "" || u.Password == "") {
+			return fmt.Errorf("upstreams.registries[%d] requires username and password for basic auth", i)
+		}
+		if seen[u.Name] {
+			return fmt.Errorf("upstreams.registries: duplicate registry name %q", u.Name)
+		}
+		seen[u.Name] = true
+	}
+	if cfg.Upstreams.FetchTimeout < 0 {
+		return fmt.Errorf("upstreams.fetchTimeout must not be negative")
 	}
 	return nil
 }

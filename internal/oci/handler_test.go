@@ -2,6 +2,7 @@ package oci
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/config"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/peering"
 )
 
 const testManifestMediaType = "application/vnd.oci.image.manifest.v1+json"
@@ -728,3 +730,229 @@ func TestGetManifestReturns410ForTombstoned(t *testing.T) {
 }
 
 func nopLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// mockUpstreamFetcher implements UpstreamFetcher for testing.
+type mockUpstreamFetcher struct {
+	registries map[string]bool
+	blobs      map[string][]byte       // digest -> data
+	manifests  map[string]mockManifest // "registry/repo/ref" -> manifest
+}
+
+type mockManifest struct {
+	data      []byte
+	mediaType string
+}
+
+func newMockUpstreamFetcher() *mockUpstreamFetcher {
+	return &mockUpstreamFetcher{
+		registries: make(map[string]bool),
+		blobs:      make(map[string][]byte),
+		manifests:  make(map[string]mockManifest),
+	}
+}
+
+func (m *mockUpstreamFetcher) HasRegistry(name string) bool {
+	return m.registries[name]
+}
+
+func (m *mockUpstreamFetcher) FetchBlobStream(_ context.Context, registry, repo, digest string) (*peering.BlobStream, error) {
+	data, ok := m.blobs[digest]
+	if !ok {
+		return nil, fmt.Errorf("blob not found on upstream")
+	}
+	return &peering.BlobStream{
+		Body: io.NopCloser(strings.NewReader(string(data))),
+	}, nil
+}
+
+func (m *mockUpstreamFetcher) FetchManifest(_ context.Context, registry, repo, reference string) ([]byte, string, error) {
+	key := fmt.Sprintf("%s/%s/%s", registry, repo, reference)
+	man, ok := m.manifests[key]
+	if !ok {
+		return nil, "", fmt.Errorf("manifest not found on upstream: key=%s", key)
+	}
+	return man.data, man.mediaType, nil
+}
+
+func TestUpstreamBlobPullThrough(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	blobs, err := blobstore.New(dir, nopLog())
+	require.NoError(t, err)
+
+	reg, err := NewRegistry(db, blobs, "https://test.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
+
+	// Setup mock upstream
+	upstream := newMockUpstreamFetcher()
+	upstream.registries["docker.io"] = true
+	blobData := []byte("upstream blob content")
+	blobDigest := "sha256:" + fmt.Sprintf("%x", sha256.Sum256(blobData))
+	upstream.blobs[blobDigest] = blobData
+	reg.SetUpstreamFetcher(upstream)
+
+	srv := httptest.NewServer(reg.Handler())
+	t.Cleanup(srv.Close)
+
+	// Pull blob through upstream (docker.io/library/nginx is upstream-prefixed)
+	resp, err := http.Get(srv.URL + "/v2/docker.io/library/nginx/blobs/" + blobDigest)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, blobData, body)
+
+	// Verify blob is stored in blobstore
+	f, size, err := blobs.Open(ctx, blobDigest)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(blobData)), size)
+	_ = f.Close()
+
+	// Verify repo was created (domain-scoped repos don't get namespace prefix)
+	repoObj, err := db.GetRepository(ctx, "docker.io/library/nginx")
+	require.NoError(t, err)
+	require.NotNil(t, repoObj, "repo should be created after upstream pull")
+}
+
+func TestUpstreamManifestPullThrough(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	blobs, err := blobstore.New(dir, nopLog())
+	require.NoError(t, err)
+
+	reg, err := NewRegistry(db, blobs, "https://test.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
+
+	// Setup mock upstream
+	upstream := newMockUpstreamFetcher()
+	upstream.registries["ghcr.io"] = true
+
+	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:abc","size":0,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`)
+	manifestDigest := "sha256:" + fmt.Sprintf("%x", sha256.Sum256(manifest))
+
+	// Register manifest by digest
+	upstream.manifests["ghcr.io/owner/repo/"+manifestDigest] = mockManifest{
+		data:      manifest,
+		mediaType: testManifestMediaType,
+	}
+	reg.SetUpstreamFetcher(upstream)
+
+	srv := httptest.NewServer(reg.Handler())
+	t.Cleanup(srv.Close)
+
+	// Pull manifest through upstream
+	req, _ := http.NewRequest("GET", srv.URL+"/v2/ghcr.io/owner/repo/manifests/"+manifestDigest, nil)
+	req.Header.Set("Accept", testManifestMediaType)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, manifest, body)
+
+	// Verify manifest is cached (domain-scoped repos don't get namespace prefix)
+	repoObj, err := db.GetRepository(ctx, "ghcr.io/owner/repo")
+	require.NoError(t, err)
+	require.NotNil(t, repoObj)
+
+	cached, err := db.GetManifestByDigest(ctx, repoObj.ID, manifestDigest)
+	require.NoError(t, err)
+	require.NotNil(t, cached, "manifest should be cached after upstream pull")
+}
+
+func TestUpstreamTagPullThrough(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	blobs, err := blobstore.New(dir, nopLog())
+	require.NoError(t, err)
+
+	reg, err := NewRegistry(db, blobs, "https://test.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
+
+	// Setup mock upstream
+	upstream := newMockUpstreamFetcher()
+	upstream.registries["quay.io"] = true
+
+	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:def","size":0,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`)
+	manifestDigest := "sha256:" + fmt.Sprintf("%x", sha256.Sum256(manifest))
+
+	// Register manifest by tag
+	upstream.manifests["quay.io/org/image/latest"] = mockManifest{
+		data:      manifest,
+		mediaType: testManifestMediaType,
+	}
+	reg.SetUpstreamFetcher(upstream)
+
+	srv := httptest.NewServer(reg.Handler())
+	t.Cleanup(srv.Close)
+
+	// Pull by tag through upstream
+	req, _ := http.NewRequest("GET", srv.URL+"/v2/quay.io/org/image/manifests/latest", nil)
+	req.Header.Set("Accept", testManifestMediaType)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Verify tag is cached (domain-scoped repos don't get namespace prefix)
+	repoObj, err := db.GetRepository(ctx, "quay.io/org/image")
+	require.NoError(t, err)
+	require.NotNil(t, repoObj)
+
+	tag, err := db.GetTag(ctx, repoObj.ID, "latest")
+	require.NoError(t, err)
+	require.NotNil(t, tag, "tag should be cached after upstream pull")
+	require.Equal(t, manifestDigest, tag.ManifestDigest)
+}
+
+func TestNonUpstreamRepoDoesNotTriggerUpstream(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	blobs, err := blobstore.New(dir, nopLog())
+	require.NoError(t, err)
+
+	reg, err := NewRegistry(db, blobs, "https://test.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
+
+	// Setup mock upstream that would fail if called
+	upstream := newMockUpstreamFetcher()
+	upstream.registries["docker.io"] = true
+	// No blobs or manifests registered - will error if called
+	reg.SetUpstreamFetcher(upstream)
+
+	srv := httptest.NewServer(reg.Handler())
+	t.Cleanup(srv.Close)
+
+	// Request a local repo (no dot in first segment) - should NOT trigger upstream
+	// Use a valid digest format
+	fakeDigest := "sha256:" + fmt.Sprintf("%x", sha256.Sum256([]byte("nonexistent")))
+	resp, err := http.Get(srv.URL + "/v2/myrepo/myimage/blobs/" + fakeDigest)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	// Should get 404, not an upstream error
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
