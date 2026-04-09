@@ -1,9 +1,11 @@
 package activitypub
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -99,4 +101,38 @@ func TestWebFingerSplitDomainBothWork(t *testing.T) {
 	req3 := httptest.NewRequest("GET", "/.well-known/webfinger?resource=acct:registry@other.com", nil)
 	handler.ServeHTTP(rec3, req3)
 	require.Equal(t, http.StatusNotFound, rec3.Code)
+}
+
+func TestLookupWebFingerCachesResults(t *testing.T) {
+	var hits atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		resp := WebFingerResponse{
+			Subject: r.URL.Query().Get("resource"),
+			Links: []WebFingerLink{
+				{Rel: "self", Type: "application/activity+json", Href: "https://cache-test.invalid/ap/actor"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/jrd+json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+
+	// Create a dedicated client for this test to avoid pollution.
+	client := NewWebFingerClient()
+	t.Cleanup(client.Stop)
+
+	resource := "acct:registry@cache-test.invalid"
+	ctx := context.Background()
+
+	// Pre-seed the cache to verify the lookup returns cached value.
+	client.cache.Set(resource, "https://cache-test.invalid/ap/actor", webfingerCacheTTL)
+
+	got, err := client.Lookup(ctx, "cache-test.invalid", resource)
+	require.NoError(t, err)
+	require.Equal(t, "https://cache-test.invalid/ap/actor", got)
+
+	require.Equal(t, int32(0), hits.Load(), "expected cache hit, but server was contacted")
+	_ = srv
 }

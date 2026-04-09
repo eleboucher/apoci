@@ -21,7 +21,8 @@ type InboxWorker struct {
 	queue   chan InboxTask
 	logger  *slog.Logger
 	wg      sync.WaitGroup
-	cancel  context.CancelFunc
+	stop    chan struct{}
+	once    sync.Once
 }
 
 func NewInboxWorker(handler *InboxHandler, logger *slog.Logger) *InboxWorker {
@@ -29,6 +30,7 @@ func NewInboxWorker(handler *InboxHandler, logger *slog.Logger) *InboxWorker {
 		handler: handler,
 		queue:   make(chan InboxTask, inboxQueueSize),
 		logger:  logger,
+		stop:    make(chan struct{}),
 	}
 }
 
@@ -43,18 +45,15 @@ func (w *InboxWorker) Enqueue(task InboxTask) bool {
 }
 
 func (w *InboxWorker) Start(ctx context.Context) {
-	childCtx, cancel := context.WithCancel(ctx)
-	w.cancel = cancel
 	for range inboxWorkerCount {
 		w.wg.Add(1)
-		go w.run(childCtx)
+		go w.run(ctx)
 	}
 }
 
+// Stop signals the worker to stop and waits for it to finish. Safe to call multiple times.
 func (w *InboxWorker) Stop() {
-	if w.cancel != nil {
-		w.cancel()
-	}
+	w.once.Do(func() { close(w.stop) })
 	w.wg.Wait()
 }
 
@@ -65,6 +64,9 @@ func (w *InboxWorker) run(ctx context.Context) {
 		case task := <-w.queue:
 			w.process(task)
 		case <-ctx.Done():
+			w.drain()
+			return
+		case <-w.stop:
 			w.drain()
 			return
 		}
@@ -89,7 +91,11 @@ func (w *InboxWorker) process(task InboxTask) {
 	dispatchErr := w.handler.dispatch(ctx, task)
 	metrics.InboxProcessingDuration.Observe(time.Since(start).Seconds())
 	if dispatchErr != nil {
-		w.logger.Warn("inbox worker: processing failed",
+		level := slog.LevelWarn
+		if fe, ok := AsFedError(dispatchErr); ok {
+			level = fe.LogLevel()
+		}
+		w.logger.Log(ctx, level, "inbox worker: processing failed",
 			"type", task.Activity.Type,
 			"id", task.Activity.ID,
 			"actor", task.Activity.Actor,

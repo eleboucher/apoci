@@ -44,6 +44,7 @@ type RegistryRepository interface {
 	GetManifestByTag(ctx context.Context, repoID int64, tag string) (*database.Manifest, error)
 	PutManifest(ctx context.Context, m *database.Manifest) error
 	DeleteManifest(ctx context.Context, repoID int64, digest string) error
+	IsManifestDeleted(ctx context.Context, digest string) (bool, error)
 	ListManifestsBySubject(ctx context.Context, repoID int64, subjectDigest string) ([]database.Manifest, error)
 	PutManifestLayers(ctx context.Context, manifestID int64, layerDigests []string) error
 
@@ -439,6 +440,16 @@ func (r *Registry) getManifest(ctx context.Context, repo string, digest ociregis
 					"expected", string(digest), "got", computed)
 			}
 		}
+	}
+
+	// Check if the manifest was deleted — return 410 Gone so clients know it's intentionally absent.
+	// Use a plain error (no OCI code) so ociserver falls back to HTTPError.StatusCode() = 410
+	// rather than overriding with the MANIFEST_UNKNOWN → 404 mapping.
+	deleted, tombErr := r.db.IsManifestDeleted(ctx, string(digest))
+	if tombErr != nil {
+		r.logger.Warn("checking manifest tombstone failed", "digest", digest, "error", tombErr)
+	} else if deleted {
+		return nil, ociregistry.NewHTTPError(errors.New("manifest deleted"), http.StatusGone, nil, nil)
 	}
 
 	return nil, ociregistry.ErrManifestUnknown

@@ -17,6 +17,7 @@ type GCRepository interface {
 	OrphanedBlobs(ctx context.Context, limit int) ([]string, error)
 	DeleteBlob(ctx context.Context, digest string) error
 	AllBlobDigests(ctx context.Context, pageSize int) (map[string]bool, error)
+	PruneDeletedManifests(ctx context.Context, olderThan time.Duration) (int64, error)
 }
 
 type Notifier interface {
@@ -30,16 +31,15 @@ type GCConfig struct {
 }
 
 type GarbageCollector struct {
-	cfg      GCConfig
-	db       GCRepository
-	blobs    blobstore.BlobStore
-	notifier Notifier
-	logger   *slog.Logger
-	mu       sync.Mutex
-	running  bool
-	wg       sync.WaitGroup
-	stop     chan struct{}
-	once     sync.Once
+	cfg       GCConfig
+	db        GCRepository
+	blobs     blobstore.BlobStore
+	notifier  Notifier
+	logger    *slog.Logger
+	wg        sync.WaitGroup
+	stop      chan struct{}
+	startOnce sync.Once
+	stopOnce  sync.Once
 }
 
 func NewGarbageCollector(cfg GCConfig, db GCRepository, blobs blobstore.BlobStore, notifier Notifier, logger *slog.Logger) *GarbageCollector {
@@ -54,20 +54,14 @@ func NewGarbageCollector(cfg GCConfig, db GCRepository, blobs blobstore.BlobStor
 }
 
 func (gc *GarbageCollector) Start(ctx context.Context) {
-	gc.mu.Lock()
-	if gc.running {
-		gc.mu.Unlock()
-		return
-	}
-	gc.running = true
-	gc.mu.Unlock()
-
-	gc.wg.Add(1)
-	go gc.run(ctx)
+	gc.startOnce.Do(func() {
+		gc.wg.Add(1)
+		go gc.run(ctx)
+	})
 }
 
 func (gc *GarbageCollector) Stop() {
-	gc.once.Do(func() { close(gc.stop) })
+	gc.stopOnce.Do(func() { close(gc.stop) })
 	gc.wg.Wait()
 }
 
@@ -75,7 +69,7 @@ func (gc *GarbageCollector) run(ctx context.Context) {
 	defer gc.wg.Done()
 
 	// Run once shortly after startup.
-	timer := time.NewTimer(1 * time.Minute)
+	timer := time.NewTimer(time.Minute)
 	defer timer.Stop()
 
 	for {
@@ -91,15 +85,29 @@ func (gc *GarbageCollector) run(ctx context.Context) {
 	}
 }
 
+const deletedManifestRetention = 30 * 24 * time.Hour
+
 func (gc *GarbageCollector) collect(ctx context.Context) {
 	gc.logger.Info("starting garbage collection cycle")
 
 	gc.cleanupStalePeerBlobs(ctx)
 	gc.cleanupOrphanedBlobMetadata(ctx)
 	gc.cleanupOrphanedBlobFiles(ctx)
+	gc.pruneDeletedManifests(ctx)
 
 	metrics.GCCyclesCompleted.Add(1)
 	gc.logger.Info("garbage collection cycle complete")
+}
+
+func (gc *GarbageCollector) pruneDeletedManifests(ctx context.Context) {
+	n, err := gc.db.PruneDeletedManifests(ctx, deletedManifestRetention)
+	if err != nil {
+		gc.logger.Error("gc: failed to prune deleted manifest tombstones", "error", err)
+		return
+	}
+	if n > 0 {
+		gc.logger.Info("gc: pruned old manifest tombstones", "count", n)
+	}
 }
 
 // cleanupStalePeerBlobs removes peer blob references not verified in 30 days.

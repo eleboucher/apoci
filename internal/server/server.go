@@ -30,6 +30,7 @@ type Server struct {
 	fedSvc              *federation.Service
 	registry            *oci.Registry
 	workers             *workers.Workers
+	deliveryQueue       *activitypub.DeliveryQueue
 	ociHandler          http.Handler
 	actorHandler        http.Handler
 	webfingerHandler    http.Handler
@@ -152,9 +153,10 @@ func New(cfg *config.Config, db *database.DB, blobs blobstore.BlobStore, identit
 	}
 
 	s := &Server{
-		cfg:      cfg,
-		db:       db,
-		identity: identity,
+		cfg:           cfg,
+		db:            db,
+		identity:      identity,
+		deliveryQueue: deliveryQueue,
 		fedSvc: &federation.Service{
 			Fed:      &federation.RealFederator{Identity: identity, Enqueue: enqueueFunc},
 			DB:       db,
@@ -201,6 +203,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.workers.Start(ctx)
 
+	go s.deliveryQueue.PreWarmCircuit(ctx)
 	go s.fedSvc.RefreshActors(ctx) //nolint:gosec // initial refresh on startup before first periodic run
 
 	if s.cfg.Metrics.Enabled {

@@ -129,6 +129,36 @@ func TestManifestContent(t *testing.T) {
 	}
 }
 
+func TestSanitizeText(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		maxLen int
+		want   string
+	}{
+		{"plain", "hello world", 20, "hello world"},
+		{"truncate", "abcdef", 3, "abc"},
+		{"strip null", "ab\x00cd", 10, "abcd"},
+		{"strip control", "ab\x01\x1fcd", 10, "abcd"},
+		{"keep tab", "a\tb", 10, "a\tb"},
+		{"keep newline", "a\nb", 10, "a\nb"},
+		{"keep cr", "a\rb", 10, "a\rb"},
+		{"strip del", "ab\x7fcd", 10, "abcd"},
+		{"empty", "", 10, ""},
+		{"unicode ok", "héllo", 10, "héllo"},
+		// Permitted control chars must not bypass the length guard.
+		{"tab at boundary", "aa\tb", 2, "aa"},
+		{"newline at boundary", "aa\nb", 2, "aa"},
+		{"cr at boundary", "aa\rb", 2, "aa"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SanitizeText(tt.input, tt.maxLen)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestTag(t *testing.T) {
 	tests := []struct {
 		name    string

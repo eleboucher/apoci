@@ -25,6 +25,8 @@ type FollowersRepository interface {
 // FollowingRepository is the persistence port for the following handler.
 type FollowingRepository interface {
 	ListOutgoingFollows(ctx context.Context, status string) ([]database.OutgoingFollow, error)
+	CountOutgoingFollows(ctx context.Context, status string) (int, error)
+	ListOutgoingFollowsPage(ctx context.Context, status string, limit, offset int) ([]database.OutgoingFollow, error)
 }
 
 type OutboxHandler struct {
@@ -196,25 +198,61 @@ func (h *FollowingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	baseURL := "https://" + h.identity.Domain + "/ap/following"
 
-	outgoing, err := h.db.ListOutgoingFollows(r.Context(), "accepted")
+	offsetParam := r.URL.Query().Get("offset")
+	if offsetParam == "" {
+		// No page param — return collection summary with first link.
+		total, err := h.db.CountOutgoingFollows(r.Context(), "accepted")
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		collection := map[string]any{
+			"@context":   ContextActivityStreams,
+			"type":       "OrderedCollection",
+			"id":         baseURL,
+			"totalItems": total,
+			"first":      fmt.Sprintf("%s?offset=0", baseURL),
+		}
+		w.Header().Set("Content-Type", "application/activity+json")
+		_ = json.NewEncoder(w).Encode(collection)
+		return
+	}
+
+	offset, err := strconv.Atoi(offsetParam)
+	if err != nil || offset < 0 {
+		http.Error(w, "invalid offset", http.StatusBadRequest)
+		return
+	}
+
+	total, err := h.db.CountOutgoingFollows(r.Context(), "accepted")
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	var items []string
-	for _, f := range outgoing {
+	follows, err := h.db.ListOutgoingFollowsPage(r.Context(), "accepted", defaultPageSize, offset)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	items := make([]string, 0, len(follows))
+	for _, f := range follows {
 		items = append(items, f.ActorURL)
 	}
 
-	collection := map[string]any{
+	page := map[string]any{
 		"@context":     ContextActivityStreams,
-		"type":         "OrderedCollection",
-		"id":           baseURL,
-		"totalItems":   len(items),
+		"type":         "OrderedCollectionPage",
+		"id":           fmt.Sprintf("%s?offset=%d", baseURL, offset),
+		"partOf":       baseURL,
+		"totalItems":   total,
 		"orderedItems": items,
+	}
+	if next := offset + defaultPageSize; next < total {
+		page["next"] = fmt.Sprintf("%s?offset=%d", baseURL, next)
 	}
 
 	w.Header().Set("Content-Type", "application/activity+json")
-	_ = json.NewEncoder(w).Encode(collection)
+	_ = json.NewEncoder(w).Encode(page)
 }

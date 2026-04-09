@@ -85,11 +85,19 @@ func (cb *deliveryCircuitBreaker) openCount() int {
 	return count
 }
 
+func (cb *deliveryCircuitBreaker) forceOpen(domain string, duration time.Duration) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.openUntil[domain] = time.Now().Add(duration)
+}
+
 type DeliveryRepository interface {
 	PendingDeliveries(ctx context.Context, limit int) ([]database.Delivery, error)
 	MarkDeliveryFailed(ctx context.Context, id int64, attempts, maxAttempts int, lastError string) error
 	MarkDelivered(ctx context.Context, id int64) error
 	CleanupDeliveries(ctx context.Context, olderThan time.Duration) (int64, error)
+	SetPeerHealthByDomain(ctx context.Context, domain string, healthy bool) error
+	UnhealthyPeerDomains(ctx context.Context) ([]string, error)
 }
 
 type DeliveryQueue struct {
@@ -126,6 +134,24 @@ func (q *DeliveryQueue) Start(ctx context.Context) {
 	go q.run(ctx)
 }
 
+// PreWarmCircuit loads unhealthy peer domains from the DB and opens the
+// circuit breaker for each one. Call this once before Start to ensure a
+// restart during an outage doesn't immediately retry all dead peers.
+func (q *DeliveryQueue) PreWarmCircuit(ctx context.Context) {
+	domains, err := q.db.UnhealthyPeerDomains(ctx)
+	if err != nil {
+		q.logger.Warn("failed to load unhealthy peers for circuit pre-warm", "error", err)
+		return
+	}
+	for _, d := range domains {
+		q.circuit.forceOpen(d, circuitOpenDuration)
+	}
+	if len(domains) > 0 {
+		q.logger.Info("pre-warmed circuit breaker from DB", "domains", len(domains))
+		metrics.DeliveryCircuitOpen.Set(float64(q.circuit.openCount()))
+	}
+}
+
 // Stop signals the worker to stop and waits for it to finish. Safe to call multiple times.
 func (q *DeliveryQueue) Stop() {
 	q.once.Do(func() { close(q.stop) })
@@ -138,7 +164,7 @@ func (q *DeliveryQueue) run(ctx context.Context) {
 	ticker := time.NewTicker(deliveryPollInterval)
 	defer ticker.Stop()
 
-	cleanupTicker := time.NewTicker(1 * time.Hour)
+	cleanupTicker := time.NewTicker(time.Hour)
 	defer cleanupTicker.Stop()
 
 	for {
@@ -200,7 +226,7 @@ func (q *DeliveryQueue) deliver(ctx context.Context, d database.Delivery) {
 			q.logger.Error("failed to mark circuit-skipped delivery failed", "error", dbErr)
 		}
 		if d.Attempts+1 >= d.MaxAttempts {
-			metrics.DeliveryFailed.Add(1)
+			metrics.DeliveryFailed.WithLabelValues(domainLabel(domain)).Add(1)
 		}
 		return
 	}
@@ -223,27 +249,45 @@ func (q *DeliveryQueue) deliver(ctx context.Context, d database.Delivery) {
 					"threshold", circuitBreakerThreshold,
 				)
 				metrics.DeliveryCircuitOpen.Set(float64(q.circuit.openCount()))
+				if dbErr := q.db.SetPeerHealthByDomain(ctx, domain, false); dbErr != nil {
+					q.logger.Warn("failed to persist circuit open state", "domain", domain, "error", dbErr)
+				}
 			}
 		}
 		if dbErr := q.db.MarkDeliveryFailed(ctx, d.ID, d.Attempts, d.MaxAttempts, err.Error()); dbErr != nil {
 			q.logger.Error("failed to mark delivery failed", "error", dbErr)
 		}
 		if d.Attempts+1 >= d.MaxAttempts {
-			metrics.DeliveryFailed.Add(1)
+			metrics.DeliveryFailed.WithLabelValues(domainLabel(domain)).Add(1)
 		}
 		return
 	}
 
 	if domain != "" {
+		wasClosed := q.circuit.isOpen(domain)
 		q.circuit.recordSuccess(domain)
 		metrics.DeliveryCircuitOpen.Set(float64(q.circuit.openCount()))
+		if wasClosed {
+			if dbErr := q.db.SetPeerHealthByDomain(ctx, domain, true); dbErr != nil {
+				q.logger.Warn("failed to persist circuit close state", "domain", domain, "error", dbErr)
+			}
+		}
 	}
-	metrics.DeliverySucceeded.Add(1)
+	metrics.DeliverySucceeded.WithLabelValues(domainLabel(domain)).Add(1)
 	if err := q.db.MarkDelivered(ctx, d.ID); err != nil {
 		q.logger.Error("failed to mark delivery delivered", "error", err)
 	} else {
 		q.logger.Debug("delivered activity", "inbox", d.InboxURL, "activity", d.ActivityID)
 	}
+}
+
+// domainLabel returns the domain for use as a Prometheus label value,
+// falling back to "unknown" when the domain cannot be extracted.
+func domainLabel(domain string) string {
+	if domain == "" {
+		return "unknown"
+	}
+	return domain
 }
 
 // inboxDomain extracts the hostname from an inbox URL for circuit-breaker keying.

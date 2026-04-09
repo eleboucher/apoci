@@ -19,7 +19,7 @@ var (
 
 func Digest(d string) error {
 	if !digestRe.MatchString(d) {
-		return fmt.Errorf("invalid digest format: must match sha256:<64 hex chars>")
+		return fmt.Errorf("invalid digest format, must match sha256:<64 hex chars>")
 	}
 	return nil
 }
@@ -29,18 +29,18 @@ func RepoName(name string) error {
 		return fmt.Errorf("repository name is empty")
 	}
 	if len(name) > 256 {
-		return fmt.Errorf("repository name too long (max 256 chars)")
+		return fmt.Errorf("repository name too long, max 256 chars")
 	}
 	parts := strings.Split(name, "/")
 	if len(parts) > 8 {
-		return fmt.Errorf("repository name has too many path components (max 8)")
+		return fmt.Errorf("repository name has too many path components, max 8")
 	}
 	for _, part := range parts {
 		if part == "" {
 			return fmt.Errorf("repository name has empty path component")
 		}
 		if !repoComponentRe.MatchString(part) {
-			return fmt.Errorf("invalid repository name component %q: must be lowercase alphanumeric with ._- separators", part)
+			return fmt.Errorf("invalid repository name component %q, must be lowercase alphanumeric with ._- separators", part)
 		}
 	}
 	return nil
@@ -170,7 +170,7 @@ func MediaType(s string) bool {
 // ActivityID validates that an ActivityPub activity ID is not too long.
 func ActivityID(id string) error {
 	if len(id) > 2048 {
-		return fmt.Errorf("activity ID too long (max 2048 chars)")
+		return fmt.Errorf("activity ID too long, max 2048 chars")
 	}
 	return nil
 }
@@ -195,4 +195,26 @@ func Tag(tag string) error {
 		return fmt.Errorf("invalid tag %q: must match [a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}", tag)
 	}
 	return nil
+}
+
+// SanitizeText strips ASCII control characters (except \t, \n, \r) from s and
+// truncates to maxLen bytes. Used for free-text fields from remote actors
+// (name, summary) where the spec defines no format constraint.
+func SanitizeText(s string, maxLen int) string {
+	var b strings.Builder
+	b.Grow(min(len(s), maxLen))
+	for _, r := range s {
+		if b.Len() >= maxLen {
+			break
+		}
+		if r == '\t' || r == '\n' || r == '\r' {
+			b.WriteRune(r)
+			continue
+		}
+		if r < 0x20 || r == 0x7f {
+			continue // strip other control chars
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }

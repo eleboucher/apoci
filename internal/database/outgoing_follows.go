@@ -82,3 +82,27 @@ func (db *DB) ListOutgoingFollows(ctx context.Context, status string) ([]Outgoin
 	}
 	return follows, nil
 }
+
+func (db *DB) CountOutgoingFollows(ctx context.Context, status string) (int, error) {
+	var n int
+	err := db.bun.NewRaw(
+		"SELECT COUNT(*) FROM outgoing_follows WHERE status = ?", status).Scan(ctx, &n)
+	if err != nil {
+		return 0, fmt.Errorf("counting outgoing follows: %w", err)
+	}
+	return n, nil
+}
+
+func (db *DB) ListOutgoingFollowsPage(ctx context.Context, status string, limit, offset int) ([]OutgoingFollow, error) {
+	var follows []OutgoingFollow
+	err := db.bun.NewSelect().Model(&follows).
+		Where("status = ?", status).
+		OrderExpr("created_at DESC").
+		Limit(limit).
+		Offset(offset).
+		Scan(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing outgoing follows page: %w", err)
+	}
+	return follows, nil
+}

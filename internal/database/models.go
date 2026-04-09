@@ -159,3 +159,12 @@ type OutgoingFollow struct {
 	CreatedAt  time.Time  `bun:"created_at,notnull,default:current_timestamp"`
 	AcceptedAt *time.Time `bun:"accepted_at"`
 }
+
+type DeletedManifest struct {
+	bun.BaseModel `bun:"table:deleted_manifests"`
+
+	Digest      string    `bun:"digest,pk"`
+	RepoName    string    `bun:"repo_name,notnull"`
+	DeletedAt   time.Time `bun:"deleted_at,notnull,default:current_timestamp"`
+	SourceActor string    `bun:"source_actor,notnull"`
+}

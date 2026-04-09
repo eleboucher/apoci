@@ -142,6 +142,16 @@ func (db *DB) migrate(ctx context.Context) error {
 		}
 		version = 2
 	}
+
+	if version < 3 {
+		if err := db.migrateV3(ctx); err != nil {
+			return fmt.Errorf("migration v3: %w", err)
+		}
+		if _, err := db.bun.ExecContext(ctx, `UPDATE schema_version SET version = 3`); err != nil {
+			return fmt.Errorf("updating schema version to 3: %w", err)
+		}
+		version = 3
+	}
 	_ = version // used by future migrations
 
 	return nil
@@ -212,6 +222,18 @@ func (db *DB) migrateV1(ctx context.Context) error {
 		}
 	}
 
+	return nil
+}
+
+// migrateV3 creates the deleted_manifests table for tombstone tracking.
+func (db *DB) migrateV3(ctx context.Context) error {
+	if _, err := db.bun.NewCreateTable().Model((*DeletedManifest)(nil)).IfNotExists().Exec(ctx); err != nil {
+		return fmt.Errorf("creating deleted_manifests table: %w", err)
+	}
+	if _, err := db.bun.ExecContext(ctx,
+		"CREATE INDEX IF NOT EXISTS idx_deleted_manifests_deleted_at ON deleted_manifests (deleted_at)"); err != nil {
+		return fmt.Errorf("creating deleted_manifests index: %w", err)
+	}
 	return nil
 }
 

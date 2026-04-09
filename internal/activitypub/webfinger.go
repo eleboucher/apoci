@@ -7,7 +7,52 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/jellydator/ttlcache/v3"
+	"golang.org/x/sync/singleflight"
 )
+
+const webfingerCacheTTL = 15 * time.Minute
+
+// WebFingerClient handles WebFinger lookups with caching and deduplication.
+// Call Stop() when done to release the background goroutine.
+type WebFingerClient struct {
+	cache *ttlcache.Cache[string, string]
+	group singleflight.Group
+}
+
+func NewWebFingerClient() *WebFingerClient {
+	cache := ttlcache.New[string, string](
+		ttlcache.WithTTL[string, string](webfingerCacheTTL),
+		ttlcache.WithCapacity[string, string](1000),
+	)
+	go cache.Start()
+	return &WebFingerClient{cache: cache}
+}
+
+func (c *WebFingerClient) Stop() {
+	c.cache.Stop()
+}
+
+var (
+	defaultWebFingerClient     *WebFingerClient
+	defaultWebFingerClientOnce sync.Once
+)
+
+func getDefaultWebFingerClient() *WebFingerClient {
+	defaultWebFingerClientOnce.Do(func() {
+		defaultWebFingerClient = NewWebFingerClient()
+	})
+	return defaultWebFingerClient
+}
+
+func StopDefaultWebFingerClient() {
+	if defaultWebFingerClient != nil {
+		defaultWebFingerClient.Stop()
+	}
+}
 
 type WebFingerResponse struct {
 	Subject string          `json:"subject"`
@@ -21,12 +66,45 @@ type WebFingerLink struct {
 	Href string `json:"href,omitempty"`
 }
 
-// lookupWebFinger resolves a resource via WebFinger and returns the AP actor URL.
-func lookupWebFinger(ctx context.Context, domain, resource string) (string, error) {
+// Lookup resolves a resource via WebFinger and returns the AP actor URL.
+// Results are cached for webfingerCacheTTL to avoid repeated lookups.
+func (c *WebFingerClient) Lookup(_ context.Context, domain, resource string) (string, error) {
 	if strings.ContainsAny(domain, "/:@") {
 		return "", fmt.Errorf("invalid domain %q: must be a bare hostname", domain)
 	}
 
+	if item := c.cache.Get(resource); item != nil {
+		return item.Value(), nil
+	}
+
+	v, err, _ := c.group.Do(resource, func() (any, error) {
+		if item := c.cache.Get(resource); item != nil {
+			return item.Value(), nil
+		}
+		// Use a fresh context so a cancellation by the first caller does not
+		// abort concurrent callers that are still waiting on the same key.
+		fetchCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		actorURL, err := fetchWebFinger(fetchCtx, domain, resource)
+		if err != nil {
+			return "", err
+		}
+		c.cache.Set(resource, actorURL, ttlcache.DefaultTTL)
+		return actorURL, nil
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return v.(string), nil
+}
+
+// lookupWebFinger is a package-level convenience function using the default client.
+func lookupWebFinger(ctx context.Context, domain, resource string) (string, error) {
+	return getDefaultWebFingerClient().Lookup(ctx, domain, resource)
+}
+
+func fetchWebFinger(ctx context.Context, domain, resource string) (string, error) {
 	wfURL := fmt.Sprintf("https://%s/.well-known/webfinger?resource=%s", domain, url.QueryEscape(resource))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wfURL, nil)

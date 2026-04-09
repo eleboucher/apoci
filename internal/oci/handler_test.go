@@ -686,4 +686,45 @@ func pushBlobWithManifest(t *testing.T, reg *Registry, repo string, blobData []b
 	return desc
 }
 
+func TestGetManifestReturns410ForTombstoned(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	blobs, err := blobstore.New(dir, nopLog())
+	require.NoError(t, err)
+
+	reg, err := NewRegistry(db, blobs, "https://test.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
+	srv := httptest.NewServer(reg.Handler())
+	t.Cleanup(srv.Close)
+
+	repo := "test.example.com/test/tombstone"
+
+	// Push a manifest.
+	blobData := []byte("tombstone test blob")
+	blobDesc, err := reg.PushBlob(ctx, repo, descriptorFor(blobData), strings.NewReader(string(blobData)))
+	require.NoError(t, err)
+
+	manifest := fmt.Sprintf(
+		`{"schemaVersion":2,"mediaType":"%s","config":{"digest":"%s","size":%d,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`,
+		testManifestMediaType, blobDesc.Digest, blobDesc.Size,
+	)
+	manifestDesc, err := reg.PushManifest(ctx, repo, "", []byte(manifest), testManifestMediaType)
+	require.NoError(t, err)
+
+	// Delete the manifest (simulating what the AP inbox does after a Delete activity).
+	require.NoError(t, reg.DeleteManifest(ctx, repo, manifestDesc.Digest))
+	require.NoError(t, db.RecordDeletedManifest(ctx, string(manifestDesc.Digest), repo, "https://peer.example.com/ap/actor"))
+
+	// After tombstoning, GET manifest should return 410 Gone instead of 404.
+	resp, err := http.Get(srv.URL + "/v2/test/tombstone/manifests/" + string(manifestDesc.Digest))
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusGone, resp.StatusCode)
+}
+
 func nopLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }

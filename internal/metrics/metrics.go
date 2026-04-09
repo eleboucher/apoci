@@ -38,18 +38,18 @@ var (
 		Name:      "enqueued_total",
 		Help:      "Total deliveries enqueued.",
 	})
-	DeliverySucceeded = prometheus.NewCounter(prometheus.CounterOpts{
+	DeliverySucceeded = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "apoci",
 		Subsystem: "delivery",
 		Name:      "succeeded_total",
-		Help:      "Total deliveries succeeded.",
-	})
-	DeliveryFailed = prometheus.NewCounter(prometheus.CounterOpts{
+		Help:      "Total deliveries succeeded, labelled by peer domain.",
+	}, []string{"domain"})
+	DeliveryFailed = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "apoci",
 		Subsystem: "delivery",
 		Name:      "failed_total",
-		Help:      "Total deliveries permanently failed.",
-	})
+		Help:      "Total deliveries permanently failed, labelled by peer domain.",
+	}, []string{"domain"})
 	DeliveryRetries = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: "apoci",
 		Subsystem: "delivery",

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 )
 
@@ -54,6 +55,53 @@ func (db *DB) SetPeerHealth(ctx context.Context, actorURL string, healthy bool) 
 		return fmt.Errorf("setting peer health: %w", err)
 	}
 	return nil
+}
+
+// SetPeerHealthByDomain updates is_healthy for all peers whose endpoint
+// hostname is exactly domain. The LIKE patterns match:
+//   - https://domain/...   (no explicit port)
+//   - https://domain:port/...
+//
+// Used by the circuit breaker to persist health state.
+func (db *DB) SetPeerHealthByDomain(ctx context.Context, domain string, healthy bool) error {
+	_, err := db.bun.NewRaw(
+		`UPDATE peers SET is_healthy = ?
+		 WHERE endpoint LIKE ? OR endpoint LIKE ?`,
+		healthy,
+		"https://"+domain+"/%",
+		"https://"+domain+":_%/%").Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("setting peer health by domain: %w", err)
+	}
+	return nil
+}
+
+// UnhealthyPeerDomains returns the hostnames (extracted from endpoint) of all
+// peers currently marked is_healthy = false. Used to pre-warm the circuit breaker
+// on startup so a restart during an outage doesn't immediately retry dead peers.
+func (db *DB) UnhealthyPeerDomains(ctx context.Context) ([]string, error) {
+	var peers []Peer
+	if err := db.bun.NewSelect().Model(&peers).
+		Where("is_healthy = false").
+		Column("endpoint").
+		Scan(ctx); err != nil {
+		return nil, fmt.Errorf("querying unhealthy peers: %w", err)
+	}
+	domains := make([]string, 0, len(peers))
+	for _, p := range peers {
+		if u, err := parseEndpointURL(p.Endpoint); err == nil && u != "" {
+			domains = append(domains, u)
+		}
+	}
+	return domains, nil
+}
+
+func parseEndpointURL(endpoint string) (string, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Hostname() == "" {
+		return "", fmt.Errorf("cannot extract hostname from %q", endpoint)
+	}
+	return u.Hostname(), nil
 }
 
 func (db *DB) PutPeerBlob(ctx context.Context, peerActor, blobDigest, peerEndpoint string) error {

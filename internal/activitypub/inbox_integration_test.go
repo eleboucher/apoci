@@ -63,6 +63,7 @@ func setupInboxTest(t *testing.T) (alice *Identity, bob *Identity, inbox *InboxH
 		MaxBlobSize:     config.DefaultMaxBlobSize,
 		AutoAccept:      "none",
 	}, discardLogger())
+	t.Cleanup(inbox.Stop)
 
 	alicePEM, _ := alice.PublicKeyPEM()
 	aliceActor := Actor{
@@ -815,6 +816,7 @@ func TestInboxBlockedActorSilentDrop(t *testing.T) {
 		AutoAccept:      "none",
 		BlockedActors:   []string{alice.ActorURL},
 	}, discardLogger())
+	t.Cleanup(blockedInbox.Stop)
 
 	follow := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
@@ -847,6 +849,7 @@ func TestInboxBlockedDomainSilentDrop(t *testing.T) {
 		AutoAccept:      "none",
 		BlockedDomains:  []string{"127.0.0.1"},
 	}, discardLogger())
+	t.Cleanup(blockedInbox.Stop)
 
 	follow := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
@@ -1156,6 +1159,7 @@ func TestInboxCreateManifestSplitDomainNamespace(t *testing.T) {
 		MaxBlobSize:     config.DefaultMaxBlobSize,
 		AutoAccept:      "none",
 	}, discardLogger())
+	t.Cleanup(inbox.Stop)
 
 	alicePEM, _ := alice.PublicKeyPEM()
 	aliceActor := Actor{
@@ -1233,6 +1237,7 @@ func TestInboxRejectsSpoofedNamespace(t *testing.T) {
 		MaxBlobSize:     config.DefaultMaxBlobSize,
 		AutoAccept:      "none",
 	}, discardLogger())
+	t.Cleanup(inbox.Stop)
 
 	evilPEM, _ := evil.PublicKeyPEM()
 	evilActor := Actor{

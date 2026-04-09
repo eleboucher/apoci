@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -31,6 +32,7 @@ func testInboxSetup(t *testing.T) *InboxHandler {
 		MaxBlobSize:     config.DefaultMaxBlobSize,
 		AutoAccept:      "none",
 	}, discardLogger())
+	t.Cleanup(handler.Stop)
 	return handler
 }
 
@@ -163,6 +165,39 @@ func TestFollowingHandler(t *testing.T) {
 	require.Equal(t, testOrderedCollection, collection["type"])
 	require.Equal(t, float64(0), collection["totalItems"])
 	require.Equal(t, "https://test.example.com/ap/following", collection["id"])
+	require.Equal(t, "https://test.example.com/ap/following?offset=0", collection["first"])
+}
+
+func TestFollowingHandlerPagination(t *testing.T) {
+	dir := t.TempDir()
+	db, err := database.OpenSQLite(dir, 0, 0, discardLogger())
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	// Seed 25 accepted follows.
+	for i := range 25 {
+		actor := fmt.Sprintf("https://peer%02d.example.com/ap/actor", i)
+		require.NoError(t, db.AddOutgoingFollow(ctx, actor))
+		require.NoError(t, db.AcceptOutgoingFollow(ctx, actor))
+	}
+
+	id, _ := LoadOrCreateIdentity("https://test.example.com", "test.example.com", "", "", discardLogger())
+	handler := NewFollowingHandler(id, db)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/ap/following?offset=0", nil)
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var page map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&page))
+	require.Equal(t, "OrderedCollectionPage", page["type"])
+	require.Equal(t, float64(25), page["totalItems"])
+	items := page["orderedItems"].([]any)
+	require.Len(t, items, 20, "first page should contain 20 items")
+	require.Equal(t, "https://test.example.com/ap/following?offset=20", page["next"])
 }
 
 func TestFollowingHandlerRejectsPost(t *testing.T) {
@@ -222,6 +257,7 @@ func TestShouldAutoAcceptMutualPending(t *testing.T) {
 		MaxBlobSize:     1 << 20,
 		AutoAccept:      AutoAcceptMutual,
 	}, discardLogger())
+	t.Cleanup(handler.Stop)
 
 	// Should auto-accept even though our outgoing follow is only pending.
 	require.True(t, handler.shouldAutoAccept(ctx, peerActor),
@@ -248,6 +284,7 @@ func TestShouldAutoAcceptMutualAccepted(t *testing.T) {
 		MaxBlobSize:     1 << 20,
 		AutoAccept:      AutoAcceptMutual,
 	}, discardLogger())
+	t.Cleanup(handler.Stop)
 
 	require.True(t, handler.shouldAutoAccept(ctx, peerActor),
 		"mutual mode must auto-accept when outgoing follow is accepted")
@@ -269,6 +306,7 @@ func TestShouldAutoAcceptMutualNone(t *testing.T) {
 		MaxBlobSize:     1 << 20,
 		AutoAccept:      AutoAcceptMutual,
 	}, discardLogger())
+	t.Cleanup(handler.Stop)
 
 	require.False(t, handler.shouldAutoAccept(ctx, "https://stranger.example.com/ap/actor"),
 		"mutual mode must not auto-accept with no outgoing follow")
