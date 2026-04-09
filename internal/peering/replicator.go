@@ -18,7 +18,7 @@ const maxConcurrentReplications = 10
 // BlobReplicator eagerly fetches blobs from federation peers and stores them locally.
 type BlobReplicator struct {
 	db       *database.DB
-	blobs    *blobstore.Store
+	blobs    blobstore.BlobStore
 	fetcher  *Fetcher
 	notifier *notify.Notifier
 	logger   *slog.Logger
@@ -26,7 +26,7 @@ type BlobReplicator struct {
 	wg       sync.WaitGroup
 }
 
-func NewBlobReplicator(db *database.DB, blobs *blobstore.Store, fetcher *Fetcher, notifier *notify.Notifier, logger *slog.Logger) *BlobReplicator {
+func NewBlobReplicator(db *database.DB, blobs blobstore.BlobStore, fetcher *Fetcher, notifier *notify.Notifier, logger *slog.Logger) *BlobReplicator {
 	return &BlobReplicator{
 		db:       db,
 		blobs:    blobs,
@@ -41,7 +41,10 @@ func NewBlobReplicator(db *database.DB, blobs *blobstore.Store, fetcher *Fetcher
 // The repo is derived from manifest layer references in the database; if none exist
 // yet, replication is skipped and the blob will be fetched on-demand via pull-through.
 func (r *BlobReplicator) ReplicateBlob(ctx context.Context, peerEndpoint, digest string, size int64) {
-	if r.blobs.Exists(digest) {
+	if exists, err := r.blobs.Exists(ctx, digest); err != nil {
+		r.logger.Warn("failed to check blob existence before replication", "digest", digest, "error", err)
+		return
+	} else if exists {
 		return
 	}
 
@@ -94,7 +97,7 @@ func (r *BlobReplicator) replicateBlob(ctx context.Context, peerEndpoint, digest
 		}
 	}()
 
-	storedDigest, size, err := r.blobs.Put(stream.Body, digest)
+	storedDigest, size, err := r.blobs.Put(ctx, stream.Body, digest)
 	if err != nil {
 		metrics.BlobReplicationsFailed.Add(1)
 		r.logger.Warn("failed to store replicated blob",

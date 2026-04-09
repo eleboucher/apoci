@@ -30,6 +30,7 @@ type Config struct {
 	AccountDomain string `yaml:"accountDomain" env:"APOCI_ACCOUNT_DOMAIN"`
 
 	Database Database `yaml:"database"   envPrefix:"APOCI_DB_"`
+	Storage  Storage  `yaml:"storage"    envPrefix:"APOCI_STORAGE_"`
 	TLS      *TLS     `yaml:"tls,omitempty"`
 
 	Peering       Peering       `yaml:"peering"    envPrefix:"APOCI_PEERING_"`
@@ -40,6 +41,22 @@ type Config struct {
 	Notifications Notifications `yaml:"notifications" envPrefix:"APOCI_NOTIFICATIONS_"`
 
 	Domain string `yaml:"-" env:"-"`
+}
+
+type Storage struct {
+	Type string    `yaml:"type" env:"TYPE"` // "local" (default) or "s3"
+	S3   S3Storage `yaml:"s3"   envPrefix:"S3_"`
+}
+
+type S3Storage struct {
+	Bucket         string `yaml:"bucket"         env:"BUCKET"`
+	Region         string `yaml:"region"         env:"REGION"`
+	Endpoint       string `yaml:"endpoint"       env:"ENDPOINT"` // custom endpoint for S3-compatible stores (e.g. MinIO)
+	AccessKey      string `yaml:"accessKey"      env:"ACCESS_KEY"`
+	SecretKey      string `yaml:"secretKey"      env:"SECRET_KEY"`
+	Prefix         string `yaml:"prefix"         env:"PREFIX"`           // key prefix inside the bucket
+	ForcePathStyle bool   `yaml:"forcePathStyle" env:"FORCE_PATH_STYLE"` // required for MinIO and some compatible stores
+	TempDir        string `yaml:"tempDir"        env:"TEMP_DIR"`         // upload staging dir; defaults to os.TempDir()
 }
 
 type Database struct {
@@ -178,6 +195,9 @@ func applyDefaults(cfg *Config) error {
 	if cfg.Limits.MaxBlobSize == 0 {
 		cfg.Limits.MaxBlobSize = DefaultMaxBlobSize
 	}
+	if cfg.Storage.Type == "" {
+		cfg.Storage.Type = "local"
+	}
 	if cfg.Database.Driver == "" {
 		cfg.Database.Driver = "sqlite"
 	}
@@ -250,18 +270,72 @@ func loadOrGenerateToken(path string) (string, error) {
 }
 
 func validate(cfg *Config) error {
+	if err := validateEndpoint(cfg); err != nil {
+		return err
+	}
+	if err := validateStorage(cfg); err != nil {
+		return err
+	}
+	if err := validateDatabase(cfg); err != nil {
+		return err
+	}
+	if err := validateLogging(cfg); err != nil {
+		return err
+	}
+	if err := validateFederation(cfg); err != nil {
+		return err
+	}
+	if err := validateRegex(cfg); err != nil {
+		return err
+	}
+	if err := validateAccountDomain(cfg); err != nil {
+		return err
+	}
+	if err := validateNonNegative(cfg); err != nil {
+		return err
+	}
+	if err := validateNotificationEvents(cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateEndpoint(cfg *Config) error {
 	if cfg.Endpoint == "" {
 		return fmt.Errorf("endpoint is required")
 	}
 	if cfg.Domain == "" {
 		return fmt.Errorf("could not derive domain from endpoint")
 	}
-
 	endpointScheme := strings.ToLower(strings.SplitN(cfg.Endpoint, "://", 2)[0])
 	if endpointScheme != "https" && endpointScheme != "http" {
 		return fmt.Errorf("endpoint scheme must be 'https' or 'http', got %q", endpointScheme)
 	}
+	return nil
+}
 
+func validateStorage(cfg *Config) error {
+	validStorageTypes := map[string]bool{"local": true, "s3": true}
+	if !validStorageTypes[cfg.Storage.Type] {
+		return fmt.Errorf("storage.type must be 'local' or 's3'")
+	}
+	if cfg.Storage.Type == "s3" {
+		if cfg.Storage.S3.Bucket == "" {
+			return fmt.Errorf("storage.s3.bucket is required when storage.type is 's3'")
+		}
+		if cfg.Storage.S3.Region == "" && cfg.Storage.S3.Endpoint == "" {
+			return fmt.Errorf("storage.s3.region is required when no custom endpoint is configured")
+		}
+		if cfg.Storage.S3.Endpoint != "" {
+			if _, err := url.ParseRequestURI(cfg.Storage.S3.Endpoint); err != nil {
+				return fmt.Errorf("storage.s3.endpoint is not a valid URL: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateDatabase(cfg *Config) error {
 	validDrivers := map[string]bool{"sqlite": true, "postgres": true}
 	if !validDrivers[cfg.Database.Driver] {
 		return fmt.Errorf("database.driver must be 'sqlite' or 'postgres'")
@@ -269,34 +343,48 @@ func validate(cfg *Config) error {
 	if cfg.Database.Driver == "postgres" && cfg.Database.DSN == "" {
 		return fmt.Errorf("database.dsn is required when driver is 'postgres'")
 	}
+	return nil
+}
 
+func validateLogging(cfg *Config) error {
 	validLogLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 	if !validLogLevels[cfg.LogLevel] {
 		return fmt.Errorf("logLevel must be one of: debug, info, warn, error")
 	}
-
 	validFormats := map[string]bool{"json": true, "text": true}
 	if !validFormats[cfg.LogFormat] {
 		return fmt.Errorf("logFormat must be 'json' or 'text'")
 	}
+	return nil
+}
 
+func validateFederation(cfg *Config) error {
 	validAutoAccept := map[string]bool{"none": true, "mutual": true, "all": true}
 	if !validAutoAccept[cfg.Federation.AutoAccept] {
 		return fmt.Errorf("federation.autoAccept must be 'none', 'mutual', or 'all'")
 	}
+	return nil
+}
 
+func validateRegex(cfg *Config) error {
 	if cfg.ImmutableTags != "" {
 		if _, err := regexp.Compile(cfg.ImmutableTags); err != nil {
 			return fmt.Errorf("invalid immutableTags regex: %w", err)
 		}
 	}
+	return nil
+}
 
+func validateAccountDomain(cfg *Config) error {
 	if cfg.AccountDomain != cfg.Domain {
 		if strings.Contains(cfg.AccountDomain, "/") || strings.Contains(cfg.AccountDomain, ":") {
 			return fmt.Errorf("accountDomain must be a bare hostname (no scheme, port, or path)")
 		}
 	}
+	return nil
+}
 
+func validateNonNegative(cfg *Config) error {
 	if cfg.Limits.MaxManifestSize < 0 {
 		return fmt.Errorf("limits.maxManifestSize must not be negative")
 	}
@@ -318,7 +406,10 @@ func validate(cfg *Config) error {
 	if cfg.GC.OrphanBatchSize < 0 {
 		return fmt.Errorf("gc.orphanBatchSize must not be negative")
 	}
+	return nil
+}
 
+func validateNotificationEvents(cfg *Config) error {
 	validNotificationEvents := map[string]bool{
 		"peer_health":         true,
 		"follow_request":      true,
@@ -330,6 +421,5 @@ func validate(cfg *Config) error {
 			return fmt.Errorf("notifications.events: unknown event %q", e)
 		}
 	}
-
 	return nil
 }

@@ -76,7 +76,7 @@ func serveCmd(configPath *string) *cobra.Command {
 			}
 			defer func() { _ = db.Close() }()
 
-			blobs, err := blobstore.New(cfg.DataDir, logger)
+			blobs, err := openBlobStore(cfg, logger)
 			if err != nil {
 				return fmt.Errorf("creating blobstore: %w", err)
 			}
@@ -464,6 +464,26 @@ func printTable(headers []string, rows [][]string) {
 		t.Headers(headers...)
 	}
 	_, _ = lipgloss.Println(t)
+}
+
+func openBlobStore(cfg *config.Config, logger *slog.Logger) (blobstore.BlobStore, error) {
+	switch cfg.Storage.Type {
+	case "s3":
+		return blobstore.NewS3(blobstore.S3Config{
+			Bucket:         cfg.Storage.S3.Bucket,
+			Region:         cfg.Storage.S3.Region,
+			Endpoint:       cfg.Storage.S3.Endpoint,
+			AccessKey:      cfg.Storage.S3.AccessKey,
+			SecretKey:      cfg.Storage.S3.SecretKey,
+			Prefix:         cfg.Storage.S3.Prefix,
+			ForcePathStyle: cfg.Storage.S3.ForcePathStyle,
+			TempDir:        cfg.Storage.S3.TempDir,
+		}, logger)
+	case "local":
+		return blobstore.New(cfg.DataDir, logger)
+	default:
+		return nil, fmt.Errorf("unknown storage type: %s", cfg.Storage.Type)
+	}
 }
 
 func openDB(cfg *config.Config, logger *slog.Logger) (*database.DB, error) {

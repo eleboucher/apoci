@@ -86,10 +86,12 @@ func TestGCCleansOrphanedBlobFiles(t *testing.T) {
 	ctx := context.Background()
 
 	// Write a blob to disk but do NOT register it in the database.
-	digest, _, err := blobs.Put(strings.NewReader("orphaned blob data on disk"), "")
+	digest, _, err := blobs.Put(ctx, strings.NewReader("orphaned blob data on disk"), "")
 	require.NoError(t, err)
 
-	require.True(t, blobs.Exists(digest), "expected blob file to exist before cleanup")
+	exists, err := blobs.Exists(ctx, digest)
+	require.NoError(t, err)
+	require.True(t, exists, "expected blob file to exist before cleanup")
 
 	// Check that AllBlobDigests returns nothing (blob not in DB).
 	knownDigests, err := db.AllBlobDigests(ctx, 1000)
@@ -97,9 +99,11 @@ func TestGCCleansOrphanedBlobFiles(t *testing.T) {
 	require.False(t, knownDigests[digest], "expected digest to NOT be in DB")
 
 	// Manually delete the orphaned blob file (simulating what GC should do).
-	require.NoError(t, blobs.Delete(digest))
+	require.NoError(t, blobs.Delete(ctx, digest))
 
-	require.False(t, blobs.Exists(digest), "expected orphaned blob file to be removed")
+	gone, err := blobs.Exists(ctx, digest)
+	require.NoError(t, err)
+	require.False(t, gone, "expected orphaned blob file to be removed")
 }
 
 func TestGCPreservesValidData(t *testing.T) {
@@ -132,7 +136,7 @@ func TestGCPreservesValidData(t *testing.T) {
 	}
 
 	// 3. Blob file on disk with a matching DB record should be preserved.
-	diskDigest, _, err := blobs.Put(strings.NewReader("valid blob on disk"), "")
+	diskDigest, _, err := blobs.Put(ctx, strings.NewReader("valid blob on disk"), "")
 	require.NoError(t, err)
 	require.NoError(t, db.PutBlob(ctx, diskDigest, 18, nil, true))
 
@@ -140,7 +144,9 @@ func TestGCPreservesValidData(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, knownDigests[diskDigest], "expected disk blob digest to be in known digests")
 
-	require.True(t, blobs.Exists(diskDigest), "expected valid blob file to remain on disk")
+	diskExists, err := blobs.Exists(ctx, diskDigest)
+	require.NoError(t, err)
+	require.True(t, diskExists, "expected valid blob file to remain on disk")
 }
 
 func TestGCStartStop(t *testing.T) {

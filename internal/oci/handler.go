@@ -52,7 +52,7 @@ type BlobFetcher interface {
 type Registry struct {
 	*ociregistry.Funcs
 	db              *database.DB
-	blobs           *blobstore.Store
+	blobs           blobstore.BlobStore
 	logger          *slog.Logger
 	localID         string
 	namespace       string
@@ -67,7 +67,7 @@ type Registry struct {
 	uploads   map[string]*ocimem.Buffer
 }
 
-func NewRegistry(db *database.DB, blobs *blobstore.Store, localID, namespace, immutableTagPattern string, maxManifestSize, maxBlobSize int64, logger *slog.Logger) (*Registry, error) {
+func NewRegistry(db *database.DB, blobs blobstore.BlobStore, localID, namespace, immutableTagPattern string, maxManifestSize, maxBlobSize int64, logger *slog.Logger) (*Registry, error) {
 	var immutableRe *regexp.Regexp
 	if immutableTagPattern != "" {
 		var err error
@@ -201,27 +201,23 @@ func (r *Registry) getBlob(ctx context.Context, repo string, digest ociregistry.
 		return nil, ociregistry.ErrBlobUnknown
 	}
 
-	f, err := r.blobs.Open(string(digest))
-	if err != nil && !errors.Is(err, blobstore.ErrBlobNotFound) {
-		return nil, fmt.Errorf("opening blob: %w", err)
-	}
-	if f != nil {
-		info, err := f.Stat()
-		if err != nil {
-			_ = f.Close()
-			return nil, fmt.Errorf("statting blob: %w", err)
-		}
-		desc := ociregistry.Descriptor{
+	f, blobSize, openErr := r.blobs.Open(ctx, string(digest))
+	switch {
+	case openErr == nil:
+		return newBlobReader(f, ociregistry.Descriptor{
 			MediaType: defaultMediaType,
 			Digest:    digest,
-			Size:      info.Size(),
-		}
-		return newBlobReader(f, desc), nil
+			Size:      blobSize,
+		}), nil
+	case !errors.Is(openErr, blobstore.ErrBlobNotFound):
+		return nil, fmt.Errorf("opening blob: %w", openErr)
 	}
 
 	if r.resolver != nil && r.fetcher != nil {
 		reader, err := r.fetchBlobFromPeers(ctx, repo, digest)
-		if err == nil && reader != nil {
+		if err != nil {
+			r.logger.Debug("blob not found on any peer", "digest", string(digest), "error", err)
+		} else if reader != nil {
 			metrics.RegistryBlobPullThru.Add(1)
 			return reader, nil
 		}
@@ -247,7 +243,7 @@ func (r *Registry) fetchBlobFromPeers(ctx context.Context, repo string, digest o
 			continue
 		}
 
-		storedDigest, size, err := r.blobs.Put(io.LimitReader(stream.Body, r.maxBlobSize+1), string(digest))
+		storedDigest, size, err := r.blobs.Put(ctx, io.LimitReader(stream.Body, r.maxBlobSize+1), string(digest))
 		if closeErr := stream.Body.Close(); closeErr != nil {
 			r.logger.Warn("failed to close blob stream", "peer", peer.PeerEndpoint, "error", closeErr)
 		}
@@ -256,7 +252,7 @@ func (r *Registry) fetchBlobFromPeers(ctx context.Context, repo string, digest o
 			continue
 		}
 		if size > r.maxBlobSize {
-			_ = r.blobs.Delete(storedDigest)
+			_ = r.blobs.Delete(ctx, storedDigest)
 			r.logger.Warn("fetched blob exceeds max size", "digest", storedDigest, "size", size, "max", r.maxBlobSize)
 			continue
 		}
@@ -278,7 +274,7 @@ func (r *Registry) fetchBlobFromPeers(ctx context.Context, repo string, digest o
 			"size", size,
 		)
 
-		f, err := r.blobs.Open(storedDigest)
+		f, fetchedSize, err := r.blobs.Open(ctx, storedDigest)
 		if err != nil {
 			if errors.Is(err, blobstore.ErrBlobNotFound) {
 				r.logger.Warn("cached blob disappeared after fetch", "digest", storedDigest)
@@ -287,15 +283,10 @@ func (r *Registry) fetchBlobFromPeers(ctx context.Context, repo string, digest o
 			}
 			continue
 		}
-		info, err := f.Stat()
-		if err != nil {
-			_ = f.Close()
-			continue
-		}
 		desc := ociregistry.Descriptor{
 			MediaType: defaultMediaType,
 			Digest:    digest,
-			Size:      info.Size(),
+			Size:      fetchedSize,
 		}
 		return newBlobReader(f, desc), nil
 	}
@@ -314,7 +305,7 @@ func (r *Registry) getBlobRange(ctx context.Context, repo string, digest ociregi
 		return nil, ociregistry.ErrBlobUnknown
 	}
 
-	f, err := r.blobs.Open(string(digest))
+	f, totalSize, err := r.blobs.Open(ctx, string(digest))
 	if err != nil && !errors.Is(err, blobstore.ErrBlobNotFound) {
 		return nil, fmt.Errorf("opening blob: %w", err)
 	}
@@ -322,10 +313,13 @@ func (r *Registry) getBlobRange(ctx context.Context, repo string, digest ociregi
 		if r.resolver != nil && r.fetcher != nil {
 			reader, fetchErr := r.fetchBlobFromPeers(ctx, repo, digest)
 			if fetchErr == nil && reader != nil {
-				_ = reader.Close()
+				if closeErr := reader.Close(); closeErr != nil {
+					r.logger.Warn("failed to close peer blob reader", "digest", string(digest), "error", closeErr)
+				}
 				metrics.RegistryBlobPullThru.Add(1)
-				f, err = r.blobs.Open(string(digest))
+				f, totalSize, err = r.blobs.Open(ctx, string(digest))
 				if err != nil {
+					r.logger.Warn("failed to open blob after peer fetch", "digest", string(digest), "error", err)
 					return nil, ociregistry.ErrBlobUnknown
 				}
 			}
@@ -335,13 +329,6 @@ func (r *Registry) getBlobRange(ctx context.Context, repo string, digest ociregi
 		}
 	}
 
-	info, err := f.Stat()
-	if err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("statting blob: %w", err)
-	}
-
-	totalSize := info.Size()
 	if offset0 >= totalSize {
 		_ = f.Close()
 		return nil, ociregistry.ErrRangeInvalid
@@ -612,12 +599,12 @@ func (r *Registry) pushBlob(ctx context.Context, repo string, desc ociregistry.D
 	}
 
 	limited := io.LimitReader(rd, r.maxBlobSize+1)
-	digest, size, err := r.blobs.Put(limited, string(desc.Digest))
+	digest, size, err := r.blobs.Put(ctx, limited, string(desc.Digest))
 	if err != nil {
 		return ociregistry.Descriptor{}, fmt.Errorf("storing blob: %w", err)
 	}
 	if size > r.maxBlobSize {
-		_ = r.blobs.Delete(digest)
+		_ = r.blobs.Delete(ctx, digest)
 		return ociregistry.Descriptor{}, fmt.Errorf("%w: blob exceeds maximum size (%d bytes)", ociregistry.ErrBlobUploadInvalid, r.maxBlobSize)
 	}
 
@@ -720,13 +707,15 @@ func (r *Registry) newUploadBuffer(repo, uuid string) *ocimem.Buffer {
 		if int64(len(data)) > r.maxBlobSize {
 			return fmt.Errorf("%w: blob exceeds maximum size (%d bytes)", ociregistry.ErrBlobUploadInvalid, r.maxBlobSize)
 		}
-		_, _, err = r.blobs.Put(bytes.NewReader(data), string(desc.Digest))
+		// This callback runs after the HTTP request context has been released,
+		// so we use a fresh timeout context for storage and DB operations.
+		commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer commitCancel()
+
+		_, _, err = r.blobs.Put(commitCtx, bytes.NewReader(data), string(desc.Digest))
 		if err != nil {
 			return fmt.Errorf("storing chunked blob: %w", err)
 		}
-
-		commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer commitCancel()
 
 		mt := desc.MediaType
 		if err := r.db.PutBlob(commitCtx, string(desc.Digest), desc.Size, &mt, true); err != nil {
@@ -880,7 +869,7 @@ func (r *Registry) deleteBlob(ctx context.Context, repo string, digest ociregist
 	if err := r.db.DeleteBlob(ctx, string(digest)); err != nil {
 		return fmt.Errorf("deleting blob record: %w", err)
 	}
-	if err := r.blobs.Delete(string(digest)); err != nil {
+	if err := r.blobs.Delete(ctx, string(digest)); err != nil {
 		return fmt.Errorf("deleting blob file: %w", err)
 	}
 	return nil

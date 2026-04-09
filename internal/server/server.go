@@ -44,7 +44,7 @@ type Server struct {
 	logger              *slog.Logger
 }
 
-func New(cfg *config.Config, db *database.DB, blobs *blobstore.Store, identity *activitypub.Identity, version string, logger *slog.Logger) (*Server, error) {
+func New(cfg *config.Config, db *database.DB, blobs blobstore.BlobStore, identity *activitypub.Identity, version string, logger *slog.Logger) (*Server, error) {
 	if cfg.Federation.AllowInsecureHTTP {
 		activitypub.SetAllowInsecureHTTP(true)
 		validate.AllowPrivateIPs.Store(true)

@@ -87,7 +87,7 @@ func TestFederatedBlobPull(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete the local blob file to force federation path
-	require.NoError(t, blobs.Delete(string(desc.Digest)))
+	require.NoError(t, blobs.Delete(ctx, string(desc.Digest)))
 
 	// GetBlob should now go through the federation path
 	reader, err := reg.GetBlob(ctx, "local.test/test/fedrepo", desc.Digest)

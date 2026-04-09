@@ -24,7 +24,7 @@ type GCConfig struct {
 type GarbageCollector struct {
 	cfg      GCConfig
 	db       *database.DB
-	blobs    *blobstore.Store
+	blobs    blobstore.BlobStore
 	notifier *notify.Notifier
 	logger   *slog.Logger
 	mu       sync.Mutex
@@ -34,7 +34,7 @@ type GarbageCollector struct {
 	once     sync.Once
 }
 
-func NewGarbageCollector(cfg GCConfig, db *database.DB, blobs *blobstore.Store, notifier *notify.Notifier, logger *slog.Logger) *GarbageCollector {
+func NewGarbageCollector(cfg GCConfig, db *database.DB, blobs blobstore.BlobStore, notifier *notify.Notifier, logger *slog.Logger) *GarbageCollector {
 	return &GarbageCollector{
 		cfg:      cfg,
 		db:       db,
@@ -137,7 +137,7 @@ func (gc *GarbageCollector) cleanupOrphanedBlobMetadata(ctx context.Context) {
 func (gc *GarbageCollector) cleanupOrphanedBlobFiles(ctx context.Context) {
 	// Snapshot disk digests before DB digests to avoid deleting a blob that was
 	// written to disk after the disk snapshot but before the DB snapshot.
-	diskDigests, err := gc.blobs.ListDigests()
+	diskDigests, err := gc.blobs.ListDigests(ctx)
 	if err != nil {
 		gc.logger.Error("gc: failed to list blob files on disk", "error", err)
 		gc.notifier.Send(notify.EventGCError, fmt.Sprintf("GC: failed to list blob files on disk: %v", err))
@@ -156,7 +156,7 @@ func (gc *GarbageCollector) cleanupOrphanedBlobFiles(ctx context.Context) {
 		if knownDigests[digest] {
 			continue
 		}
-		if err := gc.blobs.Delete(digest); err != nil {
+		if err := gc.blobs.Delete(ctx, digest); err != nil {
 			gc.logger.Warn("gc: failed to delete orphaned blob file", "digest", digest, "error", err)
 			continue
 		}

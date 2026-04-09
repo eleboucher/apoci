@@ -10,6 +10,18 @@ endpoint: "https://registry.example.com"
 # adminToken: ""                 # auto-generated to {dataDir}/admin.token if empty (separate from registryToken)
 # accountDomain: "example.com"  # vanity domain for @registry@example.com (defaults to endpoint domain)
 
+# storage:
+#   type: local        # local (default) or s3
+#   s3:
+#     bucket: ""                # required for s3
+#     region: "us-east-1"
+#     endpoint: ""              # custom endpoint for MinIO / S3-compatible stores
+#     accessKey: ""             # leave empty to use the default credential chain
+#     secretKey: ""
+#     prefix: ""                # optional key prefix inside the bucket
+#     forcePathStyle: false     # set to true for MinIO and some compatible stores
+#     tempDir: ""               # temp dir for upload staging; defaults to OS temp dir
+
 # database:
 #   driver: sqlite     # sqlite (default) or postgres
 #   dsn: ""            # required for postgres, e.g. "postgres://user:pass@localhost:5432/apoci?sslmode=disable"

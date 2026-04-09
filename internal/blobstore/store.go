@@ -1,6 +1,7 @@
 package blobstore
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -15,8 +16,23 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
 )
 
-// ErrBlobNotFound is returned by Open when the requested blob does not exist on disk.
+// ErrBlobNotFound is returned by Open when the requested blob does not exist.
 var ErrBlobNotFound = errors.New("blob not found")
+
+// BlobStore is the interface for content-addressable blob storage.
+type BlobStore interface {
+	Put(ctx context.Context, r io.Reader, expectedDigest string) (digest string, size int64, err error)
+	// Open returns a seekable reader for the blob and its size. Returns
+	// ErrBlobNotFound if the blob does not exist. The returned reader is not safe
+	// for concurrent use.
+	Open(ctx context.Context, digest string) (io.ReadSeekCloser, int64, error)
+	// Exists reports whether the blob is present in the store.
+	// Returns an error on storage failure; callers must not treat an error as "not found".
+	Exists(ctx context.Context, digest string) (bool, error)
+	// Delete removes the blob. It is not an error if the blob does not exist.
+	Delete(ctx context.Context, digest string) error
+	ListDigests(ctx context.Context) ([]string, error)
+}
 
 type Store struct {
 	root   string
@@ -31,9 +47,7 @@ func New(dataDir string, logger *slog.Logger) (*Store, error) {
 	return &Store{root: root, logger: logger}, nil
 }
 
-// Put writes content to a temp file, hashes it, and atomically renames to the final path.
-// If expectedDigest is non-empty, the computed hash must match.
-func (s *Store) Put(r io.Reader, expectedDigest string) (digest string, size int64, err error) {
+func (s *Store) Put(_ context.Context, r io.Reader, expectedDigest string) (digest string, size int64, err error) {
 	if expectedDigest != "" {
 		if err := validate.Digest(expectedDigest); err != nil {
 			return "", 0, fmt.Errorf("invalid expected digest: %w", err)
@@ -70,7 +84,10 @@ func (s *Store) Put(r io.Reader, expectedDigest string) (digest string, size int
 		return "", 0, fmt.Errorf("digest mismatch: expected %s, got %s", expectedDigest, computed)
 	}
 
-	finalPath, _ := s.pathForDigest(computed) // computed digest is always valid
+	finalPath, err := s.pathForDigest(computed) // computed digest is always valid
+	if err != nil {
+		return "", 0, fmt.Errorf("unexpected invalid computed digest %s: %w", computed, err)
+	}
 	if err = os.MkdirAll(filepath.Dir(finalPath), 0o750); err != nil {
 		return "", 0, fmt.Errorf("creating blob subdirectory: %w", err)
 	}
@@ -83,36 +100,47 @@ func (s *Store) Put(r io.Reader, expectedDigest string) (digest string, size int
 	return computed, size, nil
 }
 
-func (s *Store) Open(digest string) (*os.File, error) {
+func (s *Store) Open(_ context.Context, digest string) (io.ReadSeekCloser, int64, error) {
 	path, err := s.pathForDigest(digest)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	f, err := os.Open(path) //nolint:gosec // path is constructed from content-addressable digest
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, ErrBlobNotFound
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, 0, ErrBlobNotFound
 		}
-		return nil, fmt.Errorf("opening blob: %w", err)
+		return nil, 0, fmt.Errorf("opening blob: %w", err)
 	}
-	return f, nil
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, fmt.Errorf("statting blob: %w", err)
+	}
+	return f, fi.Size(), nil
 }
 
-func (s *Store) Exists(digest string) bool {
+func (s *Store) Exists(_ context.Context, digest string) (bool, error) {
 	path, err := s.pathForDigest(digest)
 	if err != nil {
-		return false
+		return false, nil // invalid digest is simply not found
 	}
 	_, err = os.Stat(path)
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, fmt.Errorf("checking blob existence: %w", err)
 }
 
-func (s *Store) Delete(digest string) error {
+func (s *Store) Delete(_ context.Context, digest string) error {
 	path, err := s.pathForDigest(digest)
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("deleting blob: %w", err)
 	}
 	return nil
@@ -120,8 +148,7 @@ func (s *Store) Delete(digest string) error {
 
 var hexDigestRe = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
-// ListDigests enumerates all blob digests stored on disk.
-func (s *Store) ListDigests() ([]string, error) {
+func (s *Store) ListDigests(_ context.Context) ([]string, error) {
 	var digests []string
 	var errs []error
 
@@ -149,13 +176,11 @@ func (s *Store) ListDigests() ([]string, error) {
 		}
 	}
 	if len(errs) > 0 {
-		return digests, errors.Join(errs...)
+		return nil, errors.Join(errs...)
 	}
 	return digests, nil
 }
 
-// pathForDigest returns the filesystem path for a validated digest.
-// Rejects any digest that doesn't match sha256:[a-f0-9]{64} to prevent path traversal.
 func (s *Store) pathForDigest(digest string) (string, error) {
 	if err := validate.Digest(digest); err != nil {
 		return "", err
