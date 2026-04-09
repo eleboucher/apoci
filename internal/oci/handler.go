@@ -40,6 +40,7 @@ type RegistryRepository interface {
 	GetRepository(ctx context.Context, name string) (*database.Repository, error)
 	GetOrCreateRepository(ctx context.Context, name, ownerID string) (*database.Repository, error)
 	ListRepositoriesAfter(ctx context.Context, startAfter string, limit int) ([]database.Repository, error)
+	SetRepositoryPrivate(ctx context.Context, id int64, private bool) error
 
 	GetManifestByDigest(ctx context.Context, repoID int64, digest string) (*database.Manifest, error)
 	GetManifestByTag(ctx context.Context, repoID int64, tag string) (*database.Manifest, error)
@@ -84,6 +85,7 @@ type UpstreamFetcher interface {
 	HasRegistry(name string) bool
 	FetchBlobStream(ctx context.Context, registry, repo, digest string) (*peering.BlobStream, error)
 	FetchManifest(ctx context.Context, registry, repo, reference string) ([]byte, string, error)
+	IsRepoPrivate(registry, repo string) bool
 }
 
 type Registry struct {
@@ -382,8 +384,13 @@ func (r *Registry) fetchBlobFromUpstream(ctx context.Context, repo string, diges
 		r.logger.Warn("failed to record upstream blob", "error", err)
 	}
 
-	if _, err := r.db.GetOrCreateRepository(ctx, normalizedRepo, "upstream:"+registry); err != nil {
+	if repoObj, err := r.db.GetOrCreateRepository(ctx, normalizedRepo, "upstream:"+registry); err != nil {
 		r.logger.Warn("failed to create upstream repo", "error", err)
+	} else {
+		private := r.upstreamFetcher.IsRepoPrivate(registry, upstreamRepo)
+		if err := r.db.SetRepositoryPrivate(ctx, repoObj.ID, private); err != nil {
+			r.logger.Warn("failed to update upstream repo privacy", "error", err)
+		}
 	}
 
 	metrics.UpstreamBlobPullThru.WithLabelValues(registry).Inc()
@@ -433,6 +440,11 @@ func (r *Registry) fetchManifestFromUpstream(ctx context.Context, repo, referenc
 	repoObj, err := r.db.GetOrCreateRepository(ctx, normalizedRepo, "upstream:"+registry)
 	if err != nil {
 		return nil, fmt.Errorf("creating upstream repo: %w", err)
+	}
+
+	private := r.upstreamFetcher.IsRepoPrivate(registry, upstreamRepo)
+	if err := r.db.SetRepositoryPrivate(ctx, repoObj.ID, private); err != nil {
+		r.logger.Warn("failed to update upstream repo privacy", "error", err)
 	}
 
 	meta := parseManifestMeta(data, r.logger)

@@ -70,3 +70,19 @@ endpoint: "https://registry.example.com"
 #   enabled: true
 #   listen: ":9090"
 #   token: ""                     # bearer token for /debug/vars (optional, unauthenticated if empty)
+
+# upstreams:
+#   enabled: false
+#   fetchTimeout: 60s
+#   registries:
+#     - name: docker.io
+#       endpoint: "https://registry-1.docker.io"
+#       auth: token               # none, basic, or token (Bearer challenge)
+#       username: ""              # leave empty for anonymous Docker Hub pulls
+#       password: ""
+#     - name: ghcr.io
+#       endpoint: "https://ghcr.io"
+#       auth: token
+#       username: myuser
+#       password: "ghp_yourtoken"
+#       private: true               # require auth to pull cached images through apoci

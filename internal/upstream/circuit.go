@@ -26,21 +26,20 @@ func newCircuitBreaker() *circuitBreaker {
 }
 
 // isOpen reports whether the circuit is currently open for the given registry.
-// If the circuit was open but has since expired, it is cleared and (false, true)
-// is returned so the caller can reset any associated metrics.
-func (cb *circuitBreaker) isOpen(registry string) (open, expired bool) {
+// Expired circuits are cleaned up inline and treated as closed.
+func (cb *circuitBreaker) isOpen(registry string) bool {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	t, ok := cb.openUntil[registry]
 	if !ok {
-		return false, false
+		return false
 	}
 	if time.Now().After(t) {
 		delete(cb.openUntil, registry)
 		delete(cb.failures, registry)
-		return false, true
+		return false
 	}
-	return true, false
+	return true
 }
 
 // recordSuccess resets the failure count and closes the circuit if open.

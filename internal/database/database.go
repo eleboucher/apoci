@@ -152,8 +152,43 @@ func (db *DB) migrate(ctx context.Context) error {
 		}
 		version = 3
 	}
+
+	if version < 4 {
+		if err := db.migrateV4(ctx); err != nil {
+			return fmt.Errorf("migration v4: %w", err)
+		}
+		if _, err := db.bun.ExecContext(ctx, `UPDATE schema_version SET version = 4`); err != nil {
+			return fmt.Errorf("updating schema version to 4: %w", err)
+		}
+		version = 4
+	}
 	_ = version // used by future migrations
 
+	return nil
+}
+
+func (db *DB) migrateV4(ctx context.Context) error {
+	if _, ok := db.bun.Dialect().(*pgdialect.Dialect); ok {
+		_, err := db.bun.ExecContext(ctx,
+			"ALTER TABLE repositories ADD COLUMN IF NOT EXISTS private BOOLEAN NOT NULL DEFAULT FALSE")
+		if err != nil {
+			return fmt.Errorf("adding private column: %w", err)
+		}
+		return nil
+	}
+	var count int
+	if err := db.bun.NewRaw(
+		"SELECT COUNT(*) FROM pragma_table_info('repositories') WHERE name = 'private'").
+		Scan(ctx, &count); err != nil {
+		return fmt.Errorf("checking repositories.private column: %w", err)
+	}
+	if count > 0 {
+		return nil // column already exists (fresh database)
+	}
+	if _, err := db.bun.ExecContext(ctx,
+		"ALTER TABLE repositories ADD COLUMN private BOOLEAN NOT NULL DEFAULT FALSE"); err != nil {
+		return fmt.Errorf("adding private column: %w", err)
+	}
 	return nil
 }
 

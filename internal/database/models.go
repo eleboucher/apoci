@@ -12,6 +12,7 @@ type Repository struct {
 	ID        int64     `bun:"id,pk,autoincrement"`
 	Name      string    `bun:"name,notnull,unique"`
 	OwnerID   string    `bun:"owner_id,notnull"`
+	Private   bool      `bun:"private,notnull,default:false"`
 	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp"`
 }
 

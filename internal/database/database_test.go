@@ -41,6 +41,27 @@ func TestRepositoryCRUD(t *testing.T) {
 	require.Error(t, err, "expected error for different owner")
 }
 
+func TestSetRepositoryPrivate(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	repo, err := db.GetOrCreateRepository(ctx, "ghcr.io/org/myapp", testAliceActor)
+	require.NoError(t, err)
+	require.False(t, repo.Private, "new repos default to public")
+
+	// Mark private
+	require.NoError(t, db.SetRepositoryPrivate(ctx, repo.ID, true))
+	got, err := db.GetRepository(ctx, "ghcr.io/org/myapp")
+	require.NoError(t, err)
+	require.True(t, got.Private)
+
+	// Toggle back to public
+	require.NoError(t, db.SetRepositoryPrivate(ctx, repo.ID, false))
+	got, err = db.GetRepository(ctx, "ghcr.io/org/myapp")
+	require.NoError(t, err)
+	require.False(t, got.Private)
+}
+
 func TestRepositoryOwnership(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()

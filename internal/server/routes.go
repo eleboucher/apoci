@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 func (s *Server) routes() http.Handler {
@@ -19,7 +21,7 @@ func (s *Server) routes() http.Handler {
 			return
 		}
 		registryPushRateLimitMiddleware(s.registryPushLimiter)(
-			registryAuthMiddleware(s.cfg.RegistryToken, s.cfg.Endpoint)(s.ociHandler),
+			registryAuthMiddleware(s.cfg.RegistryToken, s.cfg.Endpoint, s.isPrivateRead)(s.ociHandler),
 		).ServeHTTP(w, r)
 	})
 	mux.Handle("GET /.well-known/webfinger", s.webfingerHandler)
@@ -40,6 +42,67 @@ func (s *Server) routes() http.Handler {
 	handler = recoveryMiddleware(s.logger)(handler)
 
 	return handler
+}
+
+// ociRepoFromPath extracts the full repository name from an OCI v2 API path.
+// E.g. "/v2/ghcr.io/user/repo/manifests/latest" → "ghcr.io/user/repo", true.
+// Uses the last occurrence across all OCI verb separators so that repo names
+// containing verb words as path components (e.g. "org/blobs/repo") are handled
+// correctly.
+func ociRepoFromPath(path string) (string, bool) {
+	tail, ok := strings.CutPrefix(path, "/v2/")
+	if !ok {
+		return "", false
+	}
+	latest := -1
+	for _, suffix := range []string{"/manifests/", "/blobs/uploads/", "/blobs/", "/tags/"} {
+		if idx := strings.LastIndex(tail, suffix); idx > latest {
+			latest = idx
+		}
+	}
+	if latest < 0 {
+		return "", false
+	}
+	return tail[:latest], true
+}
+
+// isPrivateRead reports whether a GET/HEAD request to the given OCI path
+// requires authentication. Config overrides take precedence; for token-auth
+// registries the per-repo flag is read from the DB (populated by the fetcher
+// after the first upstream pull). Fails closed on DB errors.
+func (s *Server) isPrivateRead(ctx context.Context, path string) bool {
+	repoName, ok := ociRepoFromPath(path)
+	if !ok {
+		return false
+	}
+	firstSeg, _, _ := strings.Cut(repoName, "/")
+	if !strings.Contains(firstSeg, ".") {
+		return false // local repo, not an upstream
+	}
+
+	for _, u := range s.cfg.Upstreams.Registries {
+		if u.Name != firstSeg {
+			continue
+		}
+		if u.Private || (u.Auth == "basic" && u.Username != "") {
+			return true
+		}
+		if u.Username == "" {
+			return false // no credentials — all repos are public
+		}
+		// Token auth with credentials: check per-repo privacy from DB.
+		// Require auth conservatively until the first pull records the actual state.
+		repo, err := s.db.GetRepository(ctx, repoName)
+		if err != nil {
+			s.logger.Warn("failed to check repository privacy", "repo", repoName, "error", err)
+			return true // fail closed: deny anonymous access on transient DB error
+		}
+		if repo == nil {
+			return true
+		}
+		return repo.Private
+	}
+	return false // not a configured upstream
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {

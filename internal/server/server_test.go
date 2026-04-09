@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -224,12 +225,127 @@ func TestRateLimiterTracksSeparateIPs(t *testing.T) {
 	require.True(t, rl.allow("10.0.0.2"), "second IP should be allowed independently")
 }
 
+func TestOCIRepoFromPath(t *testing.T) {
+	tests := []struct {
+		path     string
+		wantRepo string
+		wantOK   bool
+	}{
+		{"/v2/ghcr.io/user/repo/manifests/latest", "ghcr.io/user/repo", true},
+		{"/v2/ghcr.io/user/repo/blobs/sha256:abc", "ghcr.io/user/repo", true},
+		{"/v2/ghcr.io/user/repo/tags/list", "ghcr.io/user/repo", true},
+		{"/v2/ghcr.io/user/repo/blobs/uploads/", "ghcr.io/user/repo", true},
+		// Repo name contains an OCI verb as a path component — last separator wins.
+		{"/v2/ghcr.io/org/blobs/repo/manifests/latest", "ghcr.io/org/blobs/repo", true},
+		{"/v2/ghcr.io/org/manifests/repo/manifests/v1", "ghcr.io/org/manifests/repo", true},
+		// Non-OCI paths.
+		{"/v2/noslash", "", false},
+		{"/healthz", "", false},
+		{"", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			repo, ok := ociRepoFromPath(tc.path)
+			require.Equal(t, tc.wantOK, ok)
+			require.Equal(t, tc.wantRepo, repo)
+		})
+	}
+}
+
+func TestIsPrivateRead(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	makeServer := func(auth, username string, cfgPrivate bool) *Server {
+		return &Server{
+			cfg: &config.Config{
+				Upstreams: config.Upstreams{
+					Registries: []config.Upstream{
+						{Name: "reg.io", Auth: auth, Username: username, Private: cfgPrivate},
+					},
+				},
+			},
+			db:     db,
+			logger: nopLog(),
+		}
+	}
+
+	t.Run("non-OCI path returns false", func(t *testing.T) {
+		s := makeServer("token", "user", false)
+		require.False(t, s.isPrivateRead(ctx, "/healthz"))
+	})
+
+	t.Run("local repo (no dot in first segment) returns false", func(t *testing.T) {
+		s := makeServer("token", "user", false)
+		require.False(t, s.isPrivateRead(ctx, "/v2/myrepo/manifests/latest"))
+	})
+
+	t.Run("unknown upstream returns false", func(t *testing.T) {
+		s := makeServer("token", "user", false)
+		require.False(t, s.isPrivateRead(ctx, "/v2/other.io/user/repo/manifests/latest"))
+	})
+
+	t.Run("config private:true returns true", func(t *testing.T) {
+		s := makeServer("none", "", true)
+		require.True(t, s.isPrivateRead(ctx, "/v2/reg.io/user/repo/manifests/latest"))
+	})
+
+	t.Run("basic auth with username returns true", func(t *testing.T) {
+		s := makeServer("basic", "user", false)
+		require.True(t, s.isPrivateRead(ctx, "/v2/reg.io/user/repo/manifests/latest"))
+	})
+
+	t.Run("token auth without credentials returns false", func(t *testing.T) {
+		s := makeServer("token", "", false)
+		require.False(t, s.isPrivateRead(ctx, "/v2/reg.io/user/repo/manifests/latest"))
+	})
+
+	t.Run("token auth with credentials, repo not in DB returns true (conservative)", func(t *testing.T) {
+		s := makeServer("token", "user", false)
+		require.True(t, s.isPrivateRead(ctx, "/v2/reg.io/user/repo/manifests/latest"))
+	})
+
+	t.Run("token auth with credentials, repo in DB as public returns false", func(t *testing.T) {
+		s := makeServer("token", "user", false)
+		repoObj, err := db.GetOrCreateRepository(ctx, "reg.io/public/repo", "upstream:reg.io")
+		require.NoError(t, err)
+		require.NoError(t, db.SetRepositoryPrivate(ctx, repoObj.ID, false))
+		require.False(t, s.isPrivateRead(ctx, "/v2/reg.io/public/repo/manifests/latest"))
+	})
+
+	t.Run("token auth with credentials, repo in DB as private returns true", func(t *testing.T) {
+		s := makeServer("token", "user", false)
+		repoObj, err := db.GetOrCreateRepository(ctx, "reg.io/priv/repo", "upstream:reg.io")
+		require.NoError(t, err)
+		require.NoError(t, db.SetRepositoryPrivate(ctx, repoObj.ID, true))
+		require.True(t, s.isPrivateRead(ctx, "/v2/reg.io/priv/repo/manifests/latest"))
+	})
+
+	t.Run("DB error returns true (fail closed)", func(t *testing.T) {
+		s := makeServer("token", "user", false)
+		// Pre-create the repo so isPrivateRead reaches the DB query (not the nil-repo branch).
+		repoObj, err := db.GetOrCreateRepository(ctx, "reg.io/error/repo", "upstream:reg.io")
+		require.NoError(t, err)
+		require.NoError(t, db.SetRepositoryPrivate(ctx, repoObj.ID, false))
+		// Close the DB to force an error.
+		require.NoError(t, db.Close())
+		require.True(t, s.isPrivateRead(ctx, "/v2/reg.io/error/repo/manifests/latest"))
+		// Reopen for other subtests (t.Cleanup will close again, which is fine).
+		db, err = database.OpenSQLite(dir, 0, 0, nopLog())
+		require.NoError(t, err)
+		s.db = db
+	})
+}
+
 func TestRegistryAuthMiddlewareAllowsReadWithoutToken(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := registryAuthMiddleware("secret-token", "https://registry.example.com")(inner)
+	handler := registryAuthMiddleware("secret-token", "https://registry.example.com", nil)(inner)
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		rec := httptest.NewRecorder()
@@ -244,7 +360,7 @@ func TestRegistryAuthMiddlewareAcceptsValidToken(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 	})
 
-	handler := registryAuthMiddleware("secret-token", "https://registry.example.com")(inner)
+	handler := registryAuthMiddleware("secret-token", "https://registry.example.com", nil)(inner)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/v2/test/manifests/latest", nil)
@@ -259,7 +375,7 @@ func TestRegistryAuthMiddlewareRejectsInvalidToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := registryAuthMiddleware("secret-token", "https://registry.example.com")(inner)
+	handler := registryAuthMiddleware("secret-token", "https://registry.example.com", nil)(inner)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v2/test/blobs/uploads/", nil)
@@ -322,7 +438,7 @@ func TestRegistryAuthMiddlewareEmptyTokenBlocksWrites(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := registryAuthMiddleware("", "https://registry.example.com")(inner)
+	handler := registryAuthMiddleware("", "https://registry.example.com", nil)(inner)
 
 	// Writes should be blocked when no token is configured
 	rec := httptest.NewRecorder()
@@ -342,7 +458,7 @@ func TestRegistryAuthMiddlewareRejectsWriteWithoutToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := registryAuthMiddleware("secret-token", "https://registry.example.com")(inner)
+	handler := registryAuthMiddleware("secret-token", "https://registry.example.com", nil)(inner)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/v2/test/manifests/latest", nil)

@@ -28,8 +28,8 @@ func (db *DB) GetOrCreateRepository(ctx context.Context, name, ownerDID string) 
 
 	var existing Repository
 	err = tx.NewRaw(
-		"SELECT id, name, owner_id, created_at FROM repositories WHERE name = ?", name).
-		Scan(ctx, &existing.ID, &existing.Name, &existing.OwnerID, &existing.CreatedAt)
+		"SELECT id, name, owner_id, private, created_at FROM repositories WHERE name = ?", name).
+		Scan(ctx, &existing.ID, &existing.Name, &existing.OwnerID, &existing.Private, &existing.CreatedAt)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("querying repository in transaction: %w", err)
 	}
@@ -48,7 +48,7 @@ func (db *DB) GetOrCreateRepository(ctx context.Context, name, ownerDID string) 
 
 	var repo Repository
 	err = tx.NewRaw(
-		"SELECT id, name, owner_id, created_at FROM repositories WHERE name = ?", name).Scan(ctx, &repo.ID, &repo.Name, &repo.OwnerID, &repo.CreatedAt)
+		"SELECT id, name, owner_id, private, created_at FROM repositories WHERE name = ?", name).Scan(ctx, &repo.ID, &repo.Name, &repo.OwnerID, &repo.Private, &repo.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("reading repository after create: %w", err)
 	}
@@ -92,4 +92,14 @@ func (db *DB) ListRepositoriesAfter(ctx context.Context, startAfter string, limi
 		return nil, fmt.Errorf("listing repositories: %w", err)
 	}
 	return repos, nil
+}
+
+// SetRepositoryPrivate marks a repository as private or public.
+func (db *DB) SetRepositoryPrivate(ctx context.Context, id int64, private bool) error {
+	_, err := db.bun.NewRaw(
+		"UPDATE repositories SET private = ? WHERE id = ?", private, id).Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("setting repository private: %w", err)
+	}
+	return nil
 }

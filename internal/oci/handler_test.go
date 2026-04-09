@@ -774,6 +774,10 @@ func (m *mockUpstreamFetcher) FetchManifest(_ context.Context, registry, repo, r
 	return man.data, man.mediaType, nil
 }
 
+func (m *mockUpstreamFetcher) IsRepoPrivate(registry, repo string) bool {
+	return false
+}
+
 func TestUpstreamBlobPullThrough(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

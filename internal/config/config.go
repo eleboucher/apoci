@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -120,6 +121,7 @@ type Upstream struct {
 	Auth     string `yaml:"auth"     env:"AUTH"`     // "none", "basic", or "token"
 	Username string `yaml:"username" env:"USERNAME"` // for basic/token auth
 	Password string `yaml:"password" env:"PASSWORD"` // for basic/token auth
+	Private  bool   `yaml:"private"  env:"PRIVATE"`  // require auth to pull images cached from this upstream
 }
 
 // String returns a string representation with the password redacted.
@@ -132,11 +134,20 @@ func (u Upstream) String() string {
 		u.Name, u.Endpoint, u.Auth, u.Username, pass)
 }
 
+// UpstreamList is a slice of Upstream that can be parsed from a JSON env var.
+type UpstreamList []Upstream
+
+// UnmarshalText implements encoding.TextUnmarshaler so cenv can parse
+// APOCI_UPSTREAMS_REGISTRIES as a JSON array of upstream registry configs.
+func (u *UpstreamList) UnmarshalText(text []byte) error {
+	return json.Unmarshal(text, u)
+}
+
 // Upstreams holds configuration for upstream registry proxying.
 type Upstreams struct {
 	Enabled      bool          `yaml:"enabled"      env:"ENABLED"`
 	FetchTimeout time.Duration `yaml:"fetchTimeout" env:"FETCH_TIMEOUT"`
-	Registries   []Upstream    `yaml:"registries"`
+	Registries   UpstreamList  `yaml:"registries"   env:"REGISTRIES"`
 }
 
 func Load(path string) (*Config, error) {

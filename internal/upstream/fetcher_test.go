@@ -546,3 +546,65 @@ func TestFetcher_DiscoverChallenge_FallbackOnNoChallengeHeader(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, manifest, string(data))
 }
+
+func TestIsRepoPrivate(t *testing.T) {
+	makeConfig := func(auth, username string, private bool) config.Upstreams {
+		return config.Upstreams{
+			Enabled:      true,
+			FetchTimeout: 30 * time.Second,
+			Registries: []config.Upstream{
+				{Name: "reg.io", Auth: auth, Username: username, Private: private},
+			},
+		}
+	}
+
+	t.Run("unknown registry returns false", func(t *testing.T) {
+		f := NewFetcher(makeConfig("none", "", false), 0, 0, testLogger())
+		require.False(t, f.IsRepoPrivate("unknown.io", "org/repo"))
+	})
+
+	t.Run("explicit private:true returns true regardless of auth", func(t *testing.T) {
+		f := NewFetcher(makeConfig("none", "", true), 0, 0, testLogger())
+		require.True(t, f.IsRepoPrivate("reg.io", "org/repo"))
+	})
+
+	t.Run("basic auth with username returns true", func(t *testing.T) {
+		f := NewFetcher(makeConfig("basic", "user", false), 0, 0, testLogger())
+		require.True(t, f.IsRepoPrivate("reg.io", "org/repo"))
+	})
+
+	t.Run("basic auth without username returns false", func(t *testing.T) {
+		f := NewFetcher(makeConfig("basic", "", false), 0, 0, testLogger())
+		require.False(t, f.IsRepoPrivate("reg.io", "org/repo"))
+	})
+
+	t.Run("no credentials configured returns false", func(t *testing.T) {
+		f := NewFetcher(makeConfig("token", "", false), 0, 0, testLogger())
+		require.False(t, f.IsRepoPrivate("reg.io", "org/repo"))
+	})
+
+	t.Run("token auth with credentials and no cache returns true (conservative)", func(t *testing.T) {
+		f := NewFetcher(makeConfig("token", "user", false), 0, 0, testLogger())
+		require.True(t, f.IsRepoPrivate("reg.io", "org/repo"))
+	})
+
+	t.Run("token auth: anonymous fetch caches credentialsUsed=false, returns false", func(t *testing.T) {
+		f := NewFetcher(makeConfig("token", "user", false), 0, 0, testLogger())
+		f.registries["reg.io"].tokenCache.Store("org/repo", cachedToken{
+			token:           "anon-token",
+			expiresAt:       time.Now().Add(time.Hour),
+			credentialsUsed: false,
+		})
+		require.False(t, f.IsRepoPrivate("reg.io", "org/repo"))
+	})
+
+	t.Run("token auth: credentialed fetch caches credentialsUsed=true, returns true", func(t *testing.T) {
+		f := NewFetcher(makeConfig("token", "user", false), 0, 0, testLogger())
+		f.registries["reg.io"].tokenCache.Store("org/repo", cachedToken{
+			token:           "cred-token",
+			expiresAt:       time.Now().Add(time.Hour),
+			credentialsUsed: true,
+		})
+		require.True(t, f.IsRepoPrivate("reg.io", "org/repo"))
+	})
+}

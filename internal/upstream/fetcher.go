@@ -42,8 +42,9 @@ type registry struct {
 }
 
 type cachedToken struct {
-	token     string
-	expiresAt time.Time
+	token           string
+	expiresAt       time.Time
+	credentialsUsed bool // true if credentials were required to obtain this token
 }
 
 // Fetcher proxies requests to upstream OCI registries.
@@ -83,27 +84,34 @@ func (f *Fetcher) HasRegistry(name string) bool {
 	return ok
 }
 
+// IsRepoPrivate reports whether pulling the given repo requires authentication.
+// The result is derived from config overrides and, for token-auth registries, from
+// whether credentials were needed on the last upstream fetch (anonymous probe).
+func (f *Fetcher) IsRepoPrivate(registryName, repo string) bool {
+	reg, ok := f.registries[registryName]
+	if !ok {
+		return false
+	}
+	if reg.config.Private {
+		return true
+	}
+	if reg.config.Auth == "basic" && reg.config.Username != "" {
+		return true
+	}
+	if reg.config.Username == "" {
+		return false // no credentials configured — all repos are public
+	}
+	// token auth with credentials: check whether credentials were actually needed
+	if cached, ok := reg.tokenCache.Load(repo); ok {
+		return cached.(cachedToken).credentialsUsed
+	}
+	// conservative default: credentials configured but no probe result yet
+	return true
+}
+
 // CircuitOpenCount returns the number of registries with open circuits.
 func (f *Fetcher) CircuitOpenCount() int {
 	return f.circuit.openCount()
-}
-
-// recordFailureWithMetrics records a failure and updates metrics if circuit opens.
-func (f *Fetcher) recordFailureWithMetrics(registry string) {
-	opened := f.circuit.recordFailure(registry)
-	if opened {
-		metrics.UpstreamCircuitOpen.WithLabelValues(registry).Set(1)
-		f.logger.Warn("circuit breaker opened for upstream", "registry", registry)
-	}
-}
-
-// recordSuccessWithMetrics records a success and updates metrics if circuit was open.
-func (f *Fetcher) recordSuccessWithMetrics(registry string) {
-	wasOpen := f.circuit.recordSuccess(registry)
-	if wasOpen {
-		metrics.UpstreamCircuitOpen.WithLabelValues(registry).Set(0)
-		f.logger.Info("circuit breaker closed for upstream", "registry", registry)
-	}
 }
 
 // FetchManifest fetches a manifest from an upstream registry.
@@ -117,11 +125,8 @@ func (f *Fetcher) fetchManifestWithRetry(ctx context.Context, registryName, repo
 		return nil, "", fmt.Errorf("upstream registry %q not configured", registryName)
 	}
 
-	if open, expired := f.circuit.isOpen(registryName); open {
+	if f.circuit.isOpen(registryName) {
 		return nil, "", fmt.Errorf("circuit open for upstream %s", registryName)
-	} else if expired {
-		metrics.UpstreamCircuitOpen.WithLabelValues(registryName).Set(0)
-		f.logger.Info("circuit breaker expired for upstream", "registry", registryName)
 	}
 
 	reqURL := fmt.Sprintf("%s/v2/%s/manifests/%s",
@@ -134,17 +139,21 @@ func (f *Fetcher) fetchManifestWithRetry(ctx context.Context, registryName, repo
 		return nil, "", fmt.Errorf("creating request: %w", err)
 	}
 
-	// OCI manifest accept header
 	req.Header.Set("Accept", "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, */*")
 	req.Header.Set("User-Agent", upstreamUserAgent)
 
-	if err := f.addAuth(ctx, req, reg, repo); err != nil {
+	// First attempt is anonymous; on 401 retry uses credentials to distinguish private repos.
+	useCredentials := retried
+	if err := f.addAuth(ctx, req, reg, repo, useCredentials); err != nil {
 		return nil, "", fmt.Errorf("adding auth: %w", err)
 	}
 
 	resp, err := f.client.Do(req)
 	if err != nil {
-		f.recordFailureWithMetrics(registryName)
+		if f.circuit.recordFailure(registryName) {
+			metrics.UpstreamCircuitOpen.WithLabelValues(registryName).Set(1)
+			f.logger.Warn("circuit breaker opened for upstream", "registry", registryName)
+		}
 		return nil, "", fmt.Errorf("fetching manifest: %w", err)
 	}
 
@@ -162,12 +171,18 @@ func (f *Fetcher) fetchManifestWithRetry(ctx context.Context, registryName, repo
 	if resp.StatusCode != http.StatusOK {
 		_ = resp.Body.Close()
 		if resp.StatusCode >= 500 {
-			f.recordFailureWithMetrics(registryName)
+			if f.circuit.recordFailure(registryName) {
+				metrics.UpstreamCircuitOpen.WithLabelValues(registryName).Set(1)
+				f.logger.Warn("circuit breaker opened for upstream", "registry", registryName)
+			}
 		}
 		return nil, "", fmt.Errorf("upstream returned %d for %s", resp.StatusCode, reqURL)
 	}
 
-	f.recordSuccessWithMetrics(registryName)
+	if wasOpen := f.circuit.recordSuccess(registryName); wasOpen {
+		metrics.UpstreamCircuitOpen.WithLabelValues(registryName).Set(0)
+		f.logger.Info("circuit breaker closed for upstream", "registry", registryName)
+	}
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, f.maxManifestSize+1))
 	_ = resp.Body.Close()
@@ -204,11 +219,8 @@ func (f *Fetcher) fetchBlobStreamWithRetry(ctx context.Context, registryName, re
 		return nil, fmt.Errorf("upstream registry %q not configured", registryName)
 	}
 
-	if open, expired := f.circuit.isOpen(registryName); open {
+	if f.circuit.isOpen(registryName) {
 		return nil, fmt.Errorf("circuit open for upstream %s", registryName)
-	} else if expired {
-		metrics.UpstreamCircuitOpen.WithLabelValues(registryName).Set(0)
-		f.logger.Info("circuit breaker expired for upstream", "registry", registryName)
 	}
 
 	reqURL := fmt.Sprintf("%s/v2/%s/blobs/%s",
@@ -223,13 +235,18 @@ func (f *Fetcher) fetchBlobStreamWithRetry(ctx context.Context, registryName, re
 
 	req.Header.Set("User-Agent", upstreamUserAgent)
 
-	if err := f.addAuth(ctx, req, reg, repo); err != nil {
+	// First attempt is anonymous; on 401 retry uses credentials to distinguish private repos.
+	useCredentials := retried
+	if err := f.addAuth(ctx, req, reg, repo, useCredentials); err != nil {
 		return nil, fmt.Errorf("adding auth: %w", err)
 	}
 
 	resp, err := f.client.Do(req)
 	if err != nil {
-		f.recordFailureWithMetrics(registryName)
+		if f.circuit.recordFailure(registryName) {
+			metrics.UpstreamCircuitOpen.WithLabelValues(registryName).Set(1)
+			f.logger.Warn("circuit breaker opened for upstream", "registry", registryName)
+		}
 		return nil, fmt.Errorf("fetching blob: %w", err)
 	}
 
@@ -247,12 +264,18 @@ func (f *Fetcher) fetchBlobStreamWithRetry(ctx context.Context, registryName, re
 	if resp.StatusCode != http.StatusOK {
 		_ = resp.Body.Close()
 		if resp.StatusCode >= 500 {
-			f.recordFailureWithMetrics(registryName)
+			if f.circuit.recordFailure(registryName) {
+				metrics.UpstreamCircuitOpen.WithLabelValues(registryName).Set(1)
+				f.logger.Warn("circuit breaker opened for upstream", "registry", registryName)
+			}
 		}
 		return nil, fmt.Errorf("upstream returned %d", resp.StatusCode)
 	}
 
-	f.recordSuccessWithMetrics(registryName)
+	if wasOpen := f.circuit.recordSuccess(registryName); wasOpen {
+		metrics.UpstreamCircuitOpen.WithLabelValues(registryName).Set(0)
+		f.logger.Info("circuit breaker closed for upstream", "registry", registryName)
+	}
 
 	f.logger.Debug("streaming blob from upstream",
 		"registry", registryName,
@@ -269,7 +292,9 @@ func (f *Fetcher) fetchBlobStreamWithRetry(ctx context.Context, registryName, re
 }
 
 // addAuth adds authentication to the request based on registry config.
-func (f *Fetcher) addAuth(ctx context.Context, req *http.Request, reg *registry, repo string) error {
+// When useCredentials is false, token auth is attempted anonymously even if
+// credentials are configured.
+func (f *Fetcher) addAuth(ctx context.Context, req *http.Request, reg *registry, repo string, useCredentials bool) error {
 	switch reg.config.Auth {
 	case "none":
 		return nil
@@ -277,7 +302,7 @@ func (f *Fetcher) addAuth(ctx context.Context, req *http.Request, reg *registry,
 		req.SetBasicAuth(reg.config.Username, reg.config.Password)
 		return nil
 	case "token":
-		token, err := f.getToken(ctx, reg, repo)
+		token, err := f.getToken(ctx, reg, repo, useCredentials)
 		if err != nil {
 			return err
 		}
@@ -292,11 +317,14 @@ func (f *Fetcher) addAuth(ctx context.Context, req *http.Request, reg *registry,
 // Docker Registry v2 auth. It first discovers the token endpoint via a
 // WWW-Authenticate challenge on GET /v2/ (result is cached per registry),
 // then exchanges credentials for a scoped pull token (cached per repo).
-func (f *Fetcher) getToken(ctx context.Context, reg *registry, repo string) (string, error) {
-	// Check per-repo token cache first.
+// When useCredentials is false, the token request is made anonymously even if
+// credentials are configured.
+func (f *Fetcher) getToken(ctx context.Context, reg *registry, repo string, useCredentials bool) (string, error) {
+	// A credentialed token works for public repos too, so reuse it even when an
+	// anonymous token was requested. Don't reuse an anonymous token when credentials are required.
 	if cached, ok := reg.tokenCache.Load(repo); ok {
 		ct := cached.(cachedToken)
-		if time.Now().Before(ct.expiresAt) {
+		if time.Now().Before(ct.expiresAt) && (ct.credentialsUsed || !useCredentials) {
 			return ct.token, nil
 		}
 	}
@@ -304,11 +332,13 @@ func (f *Fetcher) getToken(ctx context.Context, reg *registry, repo string) (str
 	// Discover the token endpoint via WWW-Authenticate challenge (once per registry).
 	realm, service, err := f.discoverChallenge(ctx, reg)
 	if err != nil {
-		f.recordFailureWithMetrics(reg.config.Name)
+		if f.circuit.recordFailure(reg.config.Name) {
+			metrics.UpstreamCircuitOpen.WithLabelValues(reg.config.Name).Set(1)
+			f.logger.Warn("circuit breaker opened for upstream", "registry", reg.config.Name)
+		}
 		return "", fmt.Errorf("discovering auth challenge: %w", err)
 	}
 
-	// Build the token request URL.
 	scope := fmt.Sprintf("repository:%s:pull", repo)
 	tokenURL, err := url.Parse(realm)
 	if err != nil {
@@ -328,7 +358,7 @@ func (f *Fetcher) getToken(ctx context.Context, reg *registry, repo string) (str
 
 	req.Header.Set("User-Agent", upstreamUserAgent)
 
-	if reg.config.Username != "" {
+	if useCredentials && reg.config.Username != "" {
 		req.SetBasicAuth(reg.config.Username, reg.config.Password)
 	}
 
@@ -373,8 +403,9 @@ func (f *Fetcher) getToken(ctx context.Context, reg *registry, repo string) (str
 		cacheBuffer = 1
 	}
 	reg.tokenCache.Store(repo, cachedToken{
-		token:     token,
-		expiresAt: time.Now().Add(time.Duration(expiresIn-cacheBuffer) * time.Second),
+		token:           token,
+		expiresAt:       time.Now().Add(time.Duration(expiresIn-cacheBuffer) * time.Second),
+		credentialsUsed: useCredentials,
 	})
 
 	f.logger.Debug("obtained token from upstream",

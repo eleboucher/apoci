@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"log/slog"
@@ -76,16 +77,19 @@ func loggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 }
 
 // registryAuthMiddleware requires a Bearer token for mutating OCI registry requests.
-// Read-only requests (GET, HEAD) are intentionally allowed without authentication
-// to support anonymous image pulls from public registries.
+// Read-only requests (GET, HEAD) are allowed without authentication to support
+// anonymous image pulls from public registries, unless isPrivateRead returns true
+// for the request path (used to protect private upstream images stored in apoci).
 // Basic auth is also accepted, with the password treated as the token, to support
 // OCI clients (e.g. flux) that only support Basic auth.
-func registryAuthMiddleware(token, endpoint string) func(http.Handler) http.Handler {
+func registryAuthMiddleware(token, endpoint string, isPrivateRead func(context.Context, string) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet || r.Method == http.MethodHead {
-				next.ServeHTTP(w, r)
-				return
+				if isPrivateRead == nil || !isPrivateRead(r.Context(), r.URL.Path) {
+					next.ServeHTTP(w, r)
+					return
+				}
 			}
 			if token == "" {
 				http.Error(w, "registry write access requires a configured token", http.StatusForbidden)

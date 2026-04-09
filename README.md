@@ -164,6 +164,79 @@ apoci identity show
 
 This hits the admin API (`/api/admin/...`) on the remote node, authenticated with the admin token (separate from the registry push token). Useful for managing headless or containerized instances.
 
+## Upstream proxy
+
+apoci can act as a pull-through cache for any external OCI registry — Docker Hub, GHCR, Quay, a private Harbor, or anything speaking OCI Distribution v2. Configure the registries you want to proxy, then pull images through your node using the upstream registry hostname as the leading path segment:
+
+```bash
+docker pull foo.com/docker.io/library/nginx:latest
+docker pull foo.com/ghcr.io/user/repo:tag
+docker pull foo.com/quay.io/prometheus/prometheus:v2.51.0
+```
+
+On first pull, apoci fetches the manifest and streams the blobs from the upstream, caches them locally, and serves them. Subsequent pulls are fully local — the upstream never sees the second request.
+
+### Configure
+
+```yaml
+upstreams:
+  enabled: true
+  fetchTimeout: 60s
+  registries:
+    - name: docker.io
+      endpoint: "https://registry-1.docker.io"
+      auth: token         # Bearer challenge; works anonymously for public images
+
+    - name: ghcr.io
+      endpoint: "https://ghcr.io"
+      auth: token
+      username: myuser
+      password: "ghp_yourtoken"
+
+    - name: harbor.corp.example
+      endpoint: "https://harbor.corp.example"
+      auth: basic
+      username: robot$apoci
+      password: "robot-password"
+      private: true    # require auth to pull images from this upstream through apoci
+```
+
+Alternatively, configure via env vars using a JSON array:
+
+```bash
+APOCI_UPSTREAMS_ENABLED=true
+APOCI_UPSTREAMS_REGISTRIES='[{"name":"docker.io","endpoint":"https://registry-1.docker.io","auth":"token"},{"name":"ghcr.io","endpoint":"https://ghcr.io","auth":"token","username":"myuser","password":"ghp_yourtoken","private":true}]'
+```
+
+`auth` must be one of:
+
+| Value | Description |
+|-------|-------------|
+| `none` | No authentication |
+| `basic` | HTTP Basic Auth (`username` + `password` required) |
+| `token` | Docker Bearer token challenge (used by Docker Hub, GHCR, Quay) |
+
+### Private upstream images
+
+By default, apoci serves cached images to anyone (no auth required for pulls), matching the behavior of a public registry. If you configure an upstream with credentials to access **private** images, set `private: true` — apoci will then require your registry token to pull any image cached from that upstream.
+
+`private` is enforced at the registry level, not per-image. Registries like GHCR or Docker Hub host both public and private packages under the same hostname. If you need to pull private packages from such a registry, your options are:
+
+- `private: true` — all images cached from that registry require auth on your node (public packages included)
+- `private: false` (default) — cached images are publicly accessible; only use this if you are not proxying private content
+
+### Pull syntax
+
+```
+docker pull <your-node>/<upstream-registry>/<image>:<tag>
+```
+
+The first path segment after your node must match a configured registry `name`. Any path that does not match a known registry name falls through to normal local/federated lookup.
+
+### Circuit breaker
+
+If an upstream becomes unreachable, apoci opens a circuit breaker for that registry. Pulls that would hit an open circuit return a 404 immediately rather than blocking. The circuit probes the upstream again after a backoff period and closes on success.
+
 ## Security
 
 1. **Follow gate** -- only approved peers can send activities
@@ -305,6 +378,9 @@ Key metrics to monitor:
 | `delivery_failed` | counter | Permanently failed outbound deliveries |
 | `registry_manifest_pushes` | counter | Total manifest pushes |
 | `registry_blob_pull_throughs` | counter | Blobs fetched from peers on demand |
+| `upstream_blob_pull_throughs_total` | counter | Blobs fetched from upstream registries (labelled by registry) |
+| `upstream_manifest_pull_throughs_total` | counter | Manifests fetched from upstream registries (labelled by registry) |
+| `upstream_circuit_open` | gauge | Circuit breaker state per upstream registry (1 = open, 0 = closed) |
 
 ## Backup and restore
 
@@ -362,6 +438,9 @@ All settings can be configured via YAML file, environment variables, or both. En
 | `metrics.enabled` | `APOCI_METRICS_ENABLED` | `false` | Expose `/debug/vars` on the metrics port |
 | `metrics.listen` | `APOCI_METRICS_LISTEN` | `:9090` | Metrics bind address |
 | `metrics.token` | `APOCI_METRICS_TOKEN` | | Bearer token for `/debug/vars` (unauthenticated if empty) |
+| `upstreams.enabled` | `APOCI_UPSTREAMS_ENABLED` | `false` | Enable pull-through proxy for upstream registries |
+| `upstreams.fetchTimeout` | `APOCI_UPSTREAMS_FETCH_TIMEOUT` | `60s` | Timeout for upstream registry requests |
+| `upstreams.registries` | `APOCI_UPSTREAMS_REGISTRIES` | `[]` | JSON array of upstream registry configs — each entry: `name`, `endpoint`, `auth`, `username`, `password`, `private` |
 
 **CLI-only env vars** (no YAML equivalent, used by `follow` and `identity` subcommands):
 
