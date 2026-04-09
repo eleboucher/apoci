@@ -97,7 +97,7 @@ func (f *Fetcher) FetchManifest(ctx context.Context, peerEndpoint, repo, referen
 	if err != nil {
 		return nil, "", fmt.Errorf("creating request: %w", err)
 	}
-	req.Header.Set("Accept", "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, */*")
+	req.Header.Set("Accept", "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, */*")
 
 	resp, err := f.client.Do(req)
 	if err != nil {
