@@ -118,7 +118,7 @@ type GC struct {
 type Upstream struct {
 	Name     string `yaml:"name"     env:"NAME"`     // registry name, e.g. "docker.io"
 	Endpoint string `yaml:"endpoint" env:"ENDPOINT"` // registry URL, e.g. "https://registry-1.docker.io"
-	Auth     string `yaml:"auth"     env:"AUTH"`     // "none", "basic", or "token"
+	Auth     string `yaml:"auth"     env:"AUTH"`     // "none", "basic", or "token" (default: "token")
 	Username string `yaml:"username" env:"USERNAME"` // for basic/token auth
 	Password string `yaml:"password" env:"PASSWORD"` // for basic/token auth
 	Private  bool   `yaml:"private"  env:"PRIVATE"`  // require auth to pull images cached from this upstream
@@ -293,7 +293,7 @@ func applyUpstreamDefaults(cfg *Config) {
 	}
 	for i := range cfg.Upstreams.Registries {
 		if cfg.Upstreams.Registries[i].Auth == "" {
-			cfg.Upstreams.Registries[i].Auth = "none"
+			cfg.Upstreams.Registries[i].Auth = "token"
 		}
 	}
 }
