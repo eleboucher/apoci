@@ -960,3 +960,100 @@ func TestNonUpstreamRepoDoesNotTriggerUpstream(t *testing.T) {
 	// Should get 404, not an upstream error
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
+
+func TestUpstreamManifestHEADPullThrough(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	blobs, err := blobstore.New(dir, nopLog())
+	require.NoError(t, err)
+
+	reg, err := NewRegistry(db, blobs, "https://test.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
+
+	upstream := newMockUpstreamFetcher()
+	upstream.registries["ghcr.io"] = true
+
+	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:abc","size":0,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`)
+	manifestDigest := "sha256:" + fmt.Sprintf("%x", sha256.Sum256(manifest))
+
+	upstream.manifests["ghcr.io/owner/repo/"+manifestDigest] = mockManifest{
+		data:      manifest,
+		mediaType: testManifestMediaType,
+	}
+	reg.SetUpstreamFetcher(upstream)
+
+	srv := httptest.NewServer(reg.Handler())
+	t.Cleanup(srv.Close)
+
+	// HEAD request for an uncached upstream manifest should succeed
+	req, _ := http.NewRequest("HEAD", srv.URL+"/v2/ghcr.io/owner/repo/manifests/"+manifestDigest, nil)
+	req.Header.Set("Accept", testManifestMediaType)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, int64(len(manifest)), resp.ContentLength)
+
+	// Verify the manifest was cached locally
+	repoObj, err := db.GetRepository(ctx, "ghcr.io/owner/repo")
+	require.NoError(t, err)
+	require.NotNil(t, repoObj)
+
+	cached, err := db.GetManifestByDigest(ctx, repoObj.ID, manifestDigest)
+	require.NoError(t, err)
+	require.NotNil(t, cached, "manifest should be cached after HEAD pull-through")
+}
+
+func TestUpstreamTagHEADPullThrough(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	blobs, err := blobstore.New(dir, nopLog())
+	require.NoError(t, err)
+
+	reg, err := NewRegistry(db, blobs, "https://test.example.com", "", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
+
+	upstream := newMockUpstreamFetcher()
+	upstream.registries["quay.io"] = true
+
+	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:def","size":0,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`)
+	manifestDigest := "sha256:" + fmt.Sprintf("%x", sha256.Sum256(manifest))
+
+	upstream.manifests["quay.io/org/image/v2.0"] = mockManifest{
+		data:      manifest,
+		mediaType: testManifestMediaType,
+	}
+	reg.SetUpstreamFetcher(upstream)
+
+	srv := httptest.NewServer(reg.Handler())
+	t.Cleanup(srv.Close)
+
+	// HEAD request for an uncached upstream tag should succeed
+	req, _ := http.NewRequest("HEAD", srv.URL+"/v2/quay.io/org/image/manifests/v2.0", nil)
+	req.Header.Set("Accept", testManifestMediaType)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, int64(len(manifest)), resp.ContentLength)
+
+	// Verify the tag was cached locally
+	repoObj, err := db.GetRepository(ctx, "quay.io/org/image")
+	require.NoError(t, err)
+	require.NotNil(t, repoObj)
+
+	tag, err := db.GetTag(ctx, repoObj.ID, "v2.0")
+	require.NoError(t, err)
+	require.NotNil(t, tag, "tag should be cached after HEAD pull-through")
+	require.Equal(t, manifestDigest, tag.ManifestDigest)
+}

@@ -771,53 +771,79 @@ func (r *Registry) resolveBlob(ctx context.Context, repo string, digest ociregis
 }
 
 func (r *Registry) resolveManifest(ctx context.Context, repo string, digest ociregistry.Digest) (ociregistry.Descriptor, error) {
+	originalRepo := repo
 	repo = r.normalizeRepo(repo)
 	repoObj, err := r.db.GetRepository(ctx, repo)
 	if err != nil {
 		return ociregistry.Descriptor{}, fmt.Errorf("resolving manifest: %w", err)
 	}
+	if repoObj != nil {
+		m, err := r.db.GetManifestByDigest(ctx, repoObj.ID, string(digest))
+		if err != nil {
+			return ociregistry.Descriptor{}, fmt.Errorf("resolving manifest: %w", err)
+		}
+		if m != nil {
+			return ociregistry.Descriptor{
+				MediaType: m.MediaType,
+				Digest:    ociregistry.Digest(m.Digest),
+				Size:      m.SizeBytes,
+			}, nil
+		}
+	}
+
+	if r.upstreamFetcher != nil {
+		reader, err := r.fetchManifestFromUpstream(ctx, originalRepo, string(digest))
+		if err != nil {
+			r.logger.Debug("resolve manifest not found on upstream", "repo", originalRepo, "digest", string(digest), "error", err)
+		} else if reader != nil {
+			desc := reader.Descriptor()
+			_ = reader.Close()
+			return desc, nil
+		}
+	}
+
 	if repoObj == nil {
 		return ociregistry.Descriptor{}, ociregistry.ErrNameUnknown
 	}
-
-	m, err := r.db.GetManifestByDigest(ctx, repoObj.ID, string(digest))
-	if err != nil {
-		return ociregistry.Descriptor{}, fmt.Errorf("resolving manifest: %w", err)
-	}
-	if m == nil {
-		return ociregistry.Descriptor{}, ociregistry.ErrManifestUnknown
-	}
-
-	return ociregistry.Descriptor{
-		MediaType: m.MediaType,
-		Digest:    ociregistry.Digest(m.Digest),
-		Size:      m.SizeBytes,
-	}, nil
+	return ociregistry.Descriptor{}, ociregistry.ErrManifestUnknown
 }
 
 func (r *Registry) resolveTag(ctx context.Context, repo string, tagName string) (ociregistry.Descriptor, error) {
+	originalRepo := repo
 	repo = r.normalizeRepo(repo)
 	repoObj, err := r.db.GetRepository(ctx, repo)
 	if err != nil {
 		return ociregistry.Descriptor{}, fmt.Errorf("resolving tag: %w", err)
 	}
+	if repoObj != nil {
+		m, err := r.db.GetManifestByTag(ctx, repoObj.ID, tagName)
+		if err != nil {
+			return ociregistry.Descriptor{}, fmt.Errorf("resolving tag: %w", err)
+		}
+		if m != nil {
+			return ociregistry.Descriptor{
+				MediaType: m.MediaType,
+				Digest:    ociregistry.Digest(m.Digest),
+				Size:      m.SizeBytes,
+			}, nil
+		}
+	}
+
+	if r.upstreamFetcher != nil {
+		reader, err := r.fetchManifestFromUpstream(ctx, originalRepo, tagName)
+		if err != nil {
+			r.logger.Debug("resolve tag not found on upstream", "repo", originalRepo, "tag", tagName, "error", err)
+		} else if reader != nil {
+			desc := reader.Descriptor()
+			_ = reader.Close()
+			return desc, nil
+		}
+	}
+
 	if repoObj == nil {
 		return ociregistry.Descriptor{}, ociregistry.ErrNameUnknown
 	}
-
-	m, err := r.db.GetManifestByTag(ctx, repoObj.ID, tagName)
-	if err != nil {
-		return ociregistry.Descriptor{}, fmt.Errorf("resolving tag: %w", err)
-	}
-	if m == nil {
-		return ociregistry.Descriptor{}, ociregistry.ErrManifestUnknown
-	}
-
-	return ociregistry.Descriptor{
-		MediaType: m.MediaType,
-		Digest:    ociregistry.Digest(m.Digest),
-		Size:      m.SizeBytes,
-	}, nil
+	return ociregistry.Descriptor{}, ociregistry.ErrManifestUnknown
 }
 
 func (r *Registry) pushBlob(ctx context.Context, repo string, desc ociregistry.Descriptor, rd io.Reader) (ociregistry.Descriptor, error) {
