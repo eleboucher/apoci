@@ -41,6 +41,7 @@ type Config struct {
 	GC            GC            `yaml:"gc"            envPrefix:"APOCI_GC_"`
 	Notifications Notifications `yaml:"notifications" envPrefix:"APOCI_NOTIFICATIONS_"`
 	Upstreams     Upstreams     `yaml:"upstreams"     envPrefix:"APOCI_UPSTREAMS_"`
+	UI            UI            `yaml:"ui"            envPrefix:"APOCI_UI_"`
 
 	Domain string `yaml:"-" env:"-"`
 }
@@ -148,6 +149,11 @@ type Upstreams struct {
 	Enabled      bool          `yaml:"enabled"      env:"ENABLED"`
 	FetchTimeout time.Duration `yaml:"fetchTimeout" env:"FETCH_TIMEOUT"`
 	Registries   UpstreamList  `yaml:"registries"   env:"REGISTRIES"`
+}
+
+// UI holds configuration for the web UI.
+type UI struct {
+	Enabled bool `yaml:"enabled" env:"ENABLED"`
 }
 
 func Load(path string) (*Config, error) {

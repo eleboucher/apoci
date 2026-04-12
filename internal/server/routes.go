@@ -4,12 +4,29 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"strings"
+
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/server/ui"
 )
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
+
+	// UI routes
+	if s.cfg.UI.Enabled {
+		staticFS, err := fs.Sub(ui.StaticFS, "static")
+		if err != nil {
+			panic(fmt.Sprintf("failed to get static sub-fs: %v", err))
+		}
+		mux.HandleFunc("GET /{$}", s.handleUIIndex)
+		mux.HandleFunc("GET /ui/search", s.handleUISearch)
+		mux.Handle("GET /ui/static/", http.StripPrefix("/ui/static/", http.FileServer(http.FS(staticFS))))
+	} else {
+		mux.HandleFunc("GET /{$}", s.handleMinimalRoot)
+	}
 
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)

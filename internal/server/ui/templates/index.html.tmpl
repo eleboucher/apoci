@@ -1,0 +1,22 @@
+{{define "content"}}
+<header>
+    <h1>{{.RegistryName}}</h1>
+    <p>OCI Registry &bull; {{.TotalRepos}} repositories</p>
+</header>
+
+<search>
+    <input type="search"
+           name="q"
+           placeholder="Search repositories..."
+           hx-get="/ui/search"
+           hx-target="#repo-list"
+           hx-trigger="keyup changed delay:300ms, search"
+           hx-indicator="#search-spinner"
+           aria-label="Search repositories">
+    <span id="search-spinner" class="htmx-indicator" aria-busy="true"></span>
+</search>
+
+<div id="repo-list">
+    {{template "_repo_list.html.tmpl" .}}
+</div>
+{{end}}

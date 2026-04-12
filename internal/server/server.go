@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"html/template"
 	"log/slog"
 	"net"
 	"net/http"
@@ -43,6 +44,7 @@ type Server struct {
 	inboxLimiter        *ipRateLimiter
 	registryPushLimiter *ipRateLimiter
 	httpServer          *http.Server
+	uiTemplates         *template.Template
 	logger              *slog.Logger
 }
 
@@ -184,6 +186,12 @@ func New(cfg *config.Config, db *database.DB, blobs blobstore.BlobStore, identit
 		inboxLimiter:        inboxLimiter,
 		registryPushLimiter: registryPushLimiter,
 		logger:              logger,
+	}
+
+	if cfg.UI.Enabled {
+		if err := s.initUITemplates(); err != nil {
+			return nil, fmt.Errorf("initializing UI templates: %w", err)
+		}
 	}
 
 	scheduler.Add(workers.PeriodicTask{

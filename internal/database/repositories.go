@@ -5,6 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
+
+	"github.com/uptrace/bun/dialect/pgdialect"
 )
 
 func (db *DB) GetRepository(ctx context.Context, name string) (*Repository, error) {
@@ -102,4 +106,105 @@ func (db *DB) SetRepositoryPrivate(ctx context.Context, id int64, private bool) 
 		return fmt.Errorf("setting repository private: %w", err)
 	}
 	return nil
+}
+
+// RepoWithStats holds repository data with computed stats for UI display.
+type RepoWithStats struct {
+	ID        int64
+	Name      string
+	OwnerID   string
+	Tags      []string
+	SizeBytes int64
+	UpdatedAt time.Time
+}
+
+// ListReposWithStats returns all public repositories with their tags, total size, and last update time.
+// If query is non-empty, filters by name (case-insensitive substring match).
+// Private repositories are excluded from the results.
+func (db *DB) ListReposWithStats(ctx context.Context, query string) ([]RepoWithStats, error) {
+	_, isPostgres := db.bun.Dialect().(*pgdialect.Dialect)
+
+	// Use dialect-specific tag aggregation
+	var tagAgg string
+	if isPostgres {
+		tagAgg = `COALESCE(
+			(SELECT STRING_AGG(t.name, ',') FROM (
+				SELECT name FROM tags WHERE repository_id = r.id ORDER BY updated_at DESC LIMIT 10
+			) t),
+			''
+		)`
+	} else {
+		tagAgg = `COALESCE(
+			(SELECT GROUP_CONCAT(t.name, ',') FROM (
+				SELECT name FROM tags WHERE repository_id = r.id ORDER BY updated_at DESC LIMIT 10
+			) t),
+			''
+		)`
+	}
+
+	baseQuery := `
+		SELECT
+			r.id,
+			r.name,
+			r.owner_id,
+			` + tagAgg + ` as tags,
+			COALESCE(
+				(SELECT SUM(b.size_bytes) FROM blobs b
+				 JOIN manifest_layers ml ON ml.blob_digest = b.digest
+				 JOIN manifests m ON m.id = ml.manifest_id
+				 WHERE m.repository_id = r.id),
+				0
+			) as size_bytes,
+			COALESCE(
+				(SELECT MAX(updated_at) FROM tags WHERE repository_id = r.id),
+				r.created_at
+			) as updated_at
+		FROM repositories r
+		WHERE r.private = false
+	`
+
+	var rows []struct {
+		ID        int64     `bun:"id"`
+		Name      string    `bun:"name"`
+		OwnerID   string    `bun:"owner_id"`
+		Tags      string    `bun:"tags"`
+		SizeBytes int64     `bun:"size_bytes"`
+		UpdatedAt time.Time `bun:"updated_at"`
+	}
+
+	var err error
+	if query != "" {
+		likePattern := "%" + query + "%"
+		if isPostgres {
+			baseQuery += " AND r.name ILIKE ? ORDER BY r.name"
+		} else {
+			baseQuery += " AND r.name LIKE ? COLLATE NOCASE ORDER BY r.name"
+		}
+		err = db.bun.NewRaw(baseQuery, likePattern).Scan(ctx, &rows)
+	} else {
+		baseQuery += " ORDER BY r.name"
+		err = db.bun.NewRaw(baseQuery).Scan(ctx, &rows)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("listing repos with stats: %w", err)
+	}
+
+	result := make([]RepoWithStats, len(rows))
+	for i, row := range rows {
+		var tags []string
+		if row.Tags != "" {
+			tags = strings.Split(row.Tags, ",")
+		}
+		result[i] = RepoWithStats{
+			ID:        row.ID,
+			Name:      row.Name,
+			OwnerID:   row.OwnerID,
+			Tags:      tags,
+			SizeBytes: row.SizeBytes,
+			UpdatedAt: row.UpdatedAt,
+		}
+	}
+
+	return result, nil
 }

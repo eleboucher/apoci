@@ -210,7 +210,13 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'")
+
+		// UI routes need a more permissive CSP to load styles and scripts
+		if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/ui/") {
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'")
+		} else {
+			w.Header().Set("Content-Security-Policy", "default-src 'none'")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

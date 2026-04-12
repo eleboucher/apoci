@@ -382,6 +382,31 @@ Key metrics to monitor:
 | `upstream_manifest_pull_throughs_total` | counter | Manifests fetched from upstream registries (labelled by registry) |
 | `upstream_circuit_open` | gauge | Circuit breaker state per upstream registry (1 = open, 0 = closed) |
 
+## Web UI
+
+Enable a browser-based image browser at the root path:
+
+```yaml
+ui:
+  enabled: true
+```
+
+When enabled, visiting your registry in a browser shows:
+
+- **My Images** — repositories you've pushed locally
+- **Federated Images** — repositories mirrored from peers, grouped by source
+
+Features:
+
+- Server-side search with instant filtering
+- Pull commands for easy copy-paste
+- Automatic dark/light mode based on system preference
+- No JavaScript required for basic browsing (htmx enhances search)
+
+Private repositories (marked `private: true` in the database) are excluded from the listing. The UI is read-only — it doesn't expose any write operations.
+
+When disabled (default), the root path returns a minimal JSON status response.
+
 ## Backup and restore
 
 Back up the `dataDir` directory (default `/apoci/storage`). It contains:
@@ -441,6 +466,7 @@ All settings can be configured via YAML file, environment variables, or both. En
 | `upstreams.enabled` | `APOCI_UPSTREAMS_ENABLED` | `false` | Enable pull-through proxy for upstream registries |
 | `upstreams.fetchTimeout` | `APOCI_UPSTREAMS_FETCH_TIMEOUT` | `60s` | Timeout for upstream registry requests |
 | `upstreams.registries` | `APOCI_UPSTREAMS_REGISTRIES` | `[]` | JSON array of upstream registry configs — each entry: `name`, `endpoint`, `auth`, `username`, `password`, `private` |
+| `ui.enabled` | `APOCI_UI_ENABLED` | `false` | Enable web UI at `/` to browse images |
 
 **CLI-only env vars** (no YAML equivalent, used by `follow` and `identity` subcommands):
 

@@ -85,3 +85,6 @@ endpoint: "https://registry.example.com"
 #       username: myuser          # optional: for private repos
 #       password: "ghp_yourtoken"
 #       private: true             # require auth to pull cached images through apoci
+
+# ui:
+#   enabled: false               # enable web UI at / to browse images

@@ -1,0 +1,43 @@
+{{if and (eq (len .LocalRepos) 0) (eq (len .FederatedGroups) 0)}}
+<div class="empty-state">
+    {{if .Query}}
+    <p>No repositories match "{{.Query}}"</p>
+    {{else}}
+    <p>No repositories yet. Push an image to get started.</p>
+    {{end}}
+</div>
+{{else}}
+
+{{if gt (len .LocalRepos) 0}}
+<section>
+    <h2 class="section-header">My Images</h2>
+    {{range .LocalRepos}}
+    <article class="repo-card">
+        <header>
+            <strong>{{.Name}}</strong>
+        </header>
+        <p class="repo-tags">Tags: {{range $i, $t := .Tags}}{{if $i}}, {{end}}{{$t}}{{end}}</p>
+        <p class="repo-meta">{{.SizeHuman}} &bull; Updated {{.UpdatedAgo}}</p>
+        <pre><code>docker pull {{$.Endpoint}}/{{.Name}}</code></pre>
+    </article>
+    {{end}}
+</section>
+{{end}}
+
+{{range .FederatedGroups}}
+<section>
+    <h2 class="section-header">Federated: {{.PeerDomain}}</h2>
+    {{range .Repos}}
+    <article class="repo-card">
+        <header>
+            <strong>{{.Name}}</strong>
+        </header>
+        <p class="repo-tags">Tags: {{range $i, $t := .Tags}}{{if $i}}, {{end}}{{$t}}{{end}}</p>
+        <p class="repo-meta">{{.SizeHuman}} &bull; Updated {{.UpdatedAgo}}</p>
+        <pre><code>docker pull {{$.Endpoint}}/{{.Name}}</code></pre>
+    </article>
+    {{end}}
+</section>
+{{end}}
+
+{{end}}
