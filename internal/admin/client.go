@@ -41,6 +41,15 @@ func (c *Client) ListPending(ctx context.Context) (json.RawMessage, error) {
 	return out, c.get(ctx, "/follows/pending", &out)
 }
 
+func (c *Client) ListOutgoingFollows(ctx context.Context, status string) (json.RawMessage, error) {
+	var out json.RawMessage
+	path := "/follows/outgoing"
+	if status != "" {
+		path += "?status=" + status
+	}
+	return out, c.get(ctx, path, &out)
+}
+
 func (c *Client) AddFollow(ctx context.Context, target string) (map[string]string, error) {
 	var out map[string]string
 	return out, c.post(ctx, "/follows", map[string]string{"target": target}, &out)

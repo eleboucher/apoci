@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -122,4 +123,127 @@ func TestRemoveOutgoingFollowNotFound(t *testing.T) {
 
 	err := db.RemoveOutgoingFollow(ctx, "https://nonexistent.example.com/ap/actor")
 	require.Error(t, err, "removing a non-existent outgoing follow should return an error")
+}
+
+func TestOutgoingFollowRetryAfterRejection(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	url := "https://retry-rejected.example.com/ap/actor"
+
+	// Add and reject
+	require.NoError(t, db.AddOutgoingFollow(ctx, url))
+	require.NoError(t, db.RejectOutgoingFollow(ctx, url))
+
+	f, err := db.GetOutgoingFollow(ctx, url)
+	require.NoError(t, err)
+	require.Equal(t, "rejected", f.Status)
+
+	// Retry: adding again should reset to pending
+	require.NoError(t, db.AddOutgoingFollow(ctx, url))
+
+	f, err = db.GetOutgoingFollow(ctx, url)
+	require.NoError(t, err)
+	require.Equal(t, "pending", f.Status,
+		"AddOutgoingFollow should reset rejected follows back to pending")
+}
+
+func TestListAllOutgoingFollows(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	urls := []string{
+		"https://all-a.example.com/ap/actor",
+		"https://all-b.example.com/ap/actor",
+		"https://all-c.example.com/ap/actor",
+	}
+
+	for _, u := range urls {
+		require.NoError(t, db.AddOutgoingFollow(ctx, u))
+	}
+
+	// Accept one, reject another
+	require.NoError(t, db.AcceptOutgoingFollow(ctx, urls[0]))
+	require.NoError(t, db.RejectOutgoingFollow(ctx, urls[1]))
+
+	// ListAllOutgoingFollows should return all 3
+	all, err := db.ListAllOutgoingFollows(ctx)
+	require.NoError(t, err)
+	require.Len(t, all, 3)
+
+	// Verify we have all three statuses
+	statuses := make(map[string]int)
+	for _, f := range all {
+		statuses[f.Status]++
+	}
+	require.Equal(t, 1, statuses["accepted"])
+	require.Equal(t, 1, statuses["rejected"])
+	require.Equal(t, 1, statuses["pending"])
+}
+
+func TestDeleteStaleOutgoingFollows(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	// Create follows with different statuses
+	pendingURL := "https://stale-pending.example.com/ap/actor"
+	rejectedURL := "https://stale-rejected.example.com/ap/actor"
+	acceptedURL := "https://stale-accepted.example.com/ap/actor"
+
+	require.NoError(t, db.AddOutgoingFollow(ctx, pendingURL))
+	require.NoError(t, db.AddOutgoingFollow(ctx, rejectedURL))
+	require.NoError(t, db.AddOutgoingFollow(ctx, acceptedURL))
+
+	require.NoError(t, db.RejectOutgoingFollow(ctx, rejectedURL))
+	require.NoError(t, db.AcceptOutgoingFollow(ctx, acceptedURL))
+
+	// Backdate the created_at timestamps to simulate old records
+	_, err := db.bun.NewRaw(
+		`UPDATE outgoing_follows SET created_at = ? WHERE actor_url IN (?, ?, ?)`,
+		time.Now().Add(-48*time.Hour), pendingURL, rejectedURL, acceptedURL).Exec(ctx)
+	require.NoError(t, err)
+
+	// Delete with TTLs: pending 7 days, rejected 24 hours
+	// Our records are 48h old, so rejected should be deleted but not pending
+	n, err := db.DeleteStaleOutgoingFollows(ctx, 7*24*time.Hour, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n, "should delete only the rejected follow")
+
+	// Verify rejected is gone
+	f, err := db.GetOutgoingFollow(ctx, rejectedURL)
+	require.NoError(t, err)
+	require.Nil(t, f, "rejected follow should be deleted")
+
+	// Verify pending and accepted remain
+	f, err = db.GetOutgoingFollow(ctx, pendingURL)
+	require.NoError(t, err)
+	require.NotNil(t, f, "pending follow should remain (not old enough)")
+
+	f, err = db.GetOutgoingFollow(ctx, acceptedURL)
+	require.NoError(t, err)
+	require.NotNil(t, f, "accepted follow should never be deleted")
+}
+
+func TestDeleteStaleOutgoingFollowsKeepsAccepted(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	acceptedURL := "https://old-accepted.example.com/ap/actor"
+	require.NoError(t, db.AddOutgoingFollow(ctx, acceptedURL))
+	require.NoError(t, db.AcceptOutgoingFollow(ctx, acceptedURL))
+
+	// Backdate to very old
+	_, err := db.bun.NewRaw(
+		`UPDATE outgoing_follows SET created_at = ? WHERE actor_url = ?`,
+		time.Now().Add(-365*24*time.Hour), acceptedURL).Exec(ctx)
+	require.NoError(t, err)
+
+	// Delete with short TTLs
+	n, err := db.DeleteStaleOutgoingFollows(ctx, 1*time.Hour, 1*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), n, "accepted follows should never be deleted regardless of age")
+
+	f, err := db.GetOutgoingFollow(ctx, acceptedURL)
+	require.NoError(t, err)
+	require.NotNil(t, f)
+	require.Equal(t, "accepted", f.Status)
 }

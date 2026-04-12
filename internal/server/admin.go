@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 )
 
 const adminMaxBody int64 = 4 * 1024 // 4 KB
@@ -18,6 +20,7 @@ func (s *Server) adminRouter() http.Handler {
 	r.Get("/identity", s.adminGetIdentity)
 	r.Get("/follows", s.adminListFollows)
 	r.Get("/follows/pending", s.adminListPending)
+	r.Get("/follows/outgoing", s.adminListOutgoingFollows)
 	r.Post("/follows", s.adminAddFollow)
 	r.Post("/follows/accept", s.adminAcceptFollow)
 	r.Post("/follows/reject", s.adminRejectFollow)
@@ -62,6 +65,24 @@ func (s *Server) adminListPending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, requests)
+}
+
+func (s *Server) adminListOutgoingFollows(w http.ResponseWriter, r *http.Request) {
+	status := r.URL.Query().Get("status")
+	var follows []database.OutgoingFollow
+	var err error
+
+	if status != "" {
+		follows, err = s.db.ListOutgoingFollows(r.Context(), status)
+	} else {
+		follows, err = s.db.ListAllOutgoingFollows(r.Context())
+	}
+	if err != nil {
+		s.logger.Error("listing outgoing follows", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, follows)
 }
 
 type adminFollowRequest struct {

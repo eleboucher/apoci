@@ -830,3 +830,84 @@ func TestAdminAllEndpointsRejectWrongToken(t *testing.T) {
 
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
+
+func TestAdminListOutgoingFollowsEmpty(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/admin/follows/outgoing", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var follows []any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&follows))
+	require.Empty(t, follows)
+}
+
+func TestAdminListOutgoingFollowsWithData(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
+	ctx := context.Background()
+
+	// Add some outgoing follows with different statuses
+	require.NoError(t, s.db.AddOutgoingFollow(ctx, "https://pending.example.com/ap/actor"))
+	require.NoError(t, s.db.AddOutgoingFollow(ctx, "https://accepted.example.com/ap/actor"))
+	require.NoError(t, s.db.AcceptOutgoingFollow(ctx, "https://accepted.example.com/ap/actor"))
+	require.NoError(t, s.db.AddOutgoingFollow(ctx, "https://rejected.example.com/ap/actor"))
+	require.NoError(t, s.db.RejectOutgoingFollow(ctx, "https://rejected.example.com/ap/actor"))
+
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	// Test listing all
+	req, _ := http.NewRequest("GET", srv.URL+"/api/admin/follows/outgoing", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var follows []map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&follows))
+	require.Len(t, follows, 3)
+}
+
+func TestAdminListOutgoingFollowsFilterByStatus(t *testing.T) {
+	s := testServerWithMock(t, &mockAPFederator{})
+	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
+	ctx := context.Background()
+
+	require.NoError(t, s.db.AddOutgoingFollow(ctx, "https://pending1.example.com/ap/actor"))
+	require.NoError(t, s.db.AddOutgoingFollow(ctx, "https://pending2.example.com/ap/actor"))
+	require.NoError(t, s.db.AddOutgoingFollow(ctx, "https://accepted.example.com/ap/actor"))
+	require.NoError(t, s.db.AcceptOutgoingFollow(ctx, "https://accepted.example.com/ap/actor"))
+
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	// Test filtering by pending status
+	req, _ := http.NewRequest("GET", srv.URL+"/api/admin/follows/outgoing?status=pending", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var follows []map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&follows))
+	require.Len(t, follows, 2)
+	for _, f := range follows {
+		require.Equal(t, "pending", f["Status"])
+	}
+}

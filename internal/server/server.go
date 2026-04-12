@@ -158,6 +158,19 @@ func New(cfg *config.Config, db *database.DB, blobs blobstore.BlobStore, identit
 			}
 		},
 	})
+	scheduler.Add(workers.PeriodicTask{
+		Interval: 1 * time.Hour,
+		Fn: func(ctx context.Context) {
+			n, err := db.DeleteStaleOutgoingFollows(ctx,
+				cfg.Federation.OutgoingFollowPendingTTL,
+				cfg.Federation.OutgoingFollowRejectedTTL)
+			if err != nil {
+				logger.Warn("stale outgoing follow cleanup failed", "error", err)
+			} else if n > 0 {
+				logger.Info("cleaned up stale outgoing follows", "count", n)
+			}
+		},
+	})
 	services := []workers.Service{healthChecker, scheduler}
 	if *cfg.GC.Enabled {
 		services = append(services, gc)

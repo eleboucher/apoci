@@ -224,6 +224,30 @@ func followCmd(configPath *string) *cobra.Command {
 		},
 	})
 
+	outgoingCmd := &cobra.Command{
+		Use:   "outgoing",
+		Short: "List outgoing follow requests and their status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			status, _ := cmd.Flags().GetString("status")
+			if c := remoteClient(remote, token); c != nil {
+				data, err := c.ListOutgoingFollows(cmd.Context(), status)
+				if err != nil {
+					return err
+				}
+				var follows []database.OutgoingFollow
+				if err := json.Unmarshal(data, &follows); err != nil {
+					fmt.Println(string(data))
+					return nil
+				}
+				printOutgoingFollows(follows)
+				return nil
+			}
+			return runFollowOutgoing(cmd.Context(), *configPath, status)
+		},
+	}
+	outgoingCmd.Flags().String("status", "", "filter by status (pending, accepted, rejected)")
+	cmd.AddCommand(outgoingCmd)
+
 	return cmd
 }
 
@@ -358,6 +382,42 @@ func runFollowReject(ctx context.Context, configPath, arg string) error {
 	}
 	_, _ = lipgloss.Println(successStyle.Render("Rejected follow from " + actorURL))
 	return nil
+}
+
+func runFollowOutgoing(ctx context.Context, configPath, status string) error {
+	db, _, _, err := openAll(configPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	var follows []database.OutgoingFollow
+	if status != "" {
+		follows, err = db.ListOutgoingFollows(ctx, status)
+	} else {
+		follows, err = db.ListAllOutgoingFollows(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	printOutgoingFollows(follows)
+	return nil
+}
+
+func printOutgoingFollows(follows []database.OutgoingFollow) {
+	if len(follows) == 0 {
+		_, _ = lipgloss.Println(dimStyle.Render("No outgoing follow requests."))
+		return
+	}
+	rows := make([][]string, len(follows))
+	for i, f := range follows {
+		acceptedAt := "-"
+		if f.AcceptedAt != nil {
+			acceptedAt = f.AcceptedAt.Format("2006-01-02 15:04")
+		}
+		rows[i] = []string{f.ActorURL, f.Status, f.CreatedAt.Format("2006-01-02 15:04"), acceptedAt}
+	}
+	printTable([]string{"ACTOR", "STATUS", "CREATED", "ACCEPTED"}, rows)
 }
 
 func identityCmd(configPath *string) *cobra.Command {

@@ -276,3 +276,31 @@ gc:
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "gc.interval")
 }
+
+func TestFederationDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, fmt.Sprintf(`
+endpoint: "https://test.example.com"
+dataDir: %q
+`, dir))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "none", cfg.Federation.AutoAccept)
+	require.Equal(t, 7*24*time.Hour, cfg.Federation.OutgoingFollowPendingTTL)
+	require.Equal(t, 24*time.Hour, cfg.Federation.OutgoingFollowRejectedTTL)
+}
+
+func TestFederationCustomTTLs(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, fmt.Sprintf(`
+endpoint: "https://test.example.com"
+dataDir: %q
+federation:
+  outgoingFollowPendingTTL: 48h
+  outgoingFollowRejectedTTL: 12h
+`, dir))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, 48*time.Hour, cfg.Federation.OutgoingFollowPendingTTL)
+	require.Equal(t, 12*time.Hour, cfg.Federation.OutgoingFollowRejectedTTL)
+}

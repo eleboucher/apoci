@@ -5,13 +5,17 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 func (db *DB) AddOutgoingFollow(ctx context.Context, actorURL string) error {
 	_, err := db.bun.NewRaw(
-		`INSERT INTO outgoing_follows (actor_url, status)
-		 VALUES (?, 'pending')
-		 ON CONFLICT(actor_url) DO NOTHING`,
+		`INSERT INTO outgoing_follows (actor_url, status, created_at)
+		 VALUES (?, 'pending', CURRENT_TIMESTAMP)
+		 ON CONFLICT(actor_url) DO UPDATE SET
+		   status = CASE WHEN outgoing_follows.status = 'accepted' THEN 'accepted' ELSE 'pending' END,
+		   created_at = CASE WHEN outgoing_follows.status = 'accepted' THEN outgoing_follows.created_at ELSE CURRENT_TIMESTAMP END,
+		   accepted_at = CASE WHEN outgoing_follows.status = 'accepted' THEN outgoing_follows.accepted_at ELSE NULL END`,
 		actorURL).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("adding outgoing follow: %w", err)
@@ -105,4 +109,35 @@ func (db *DB) ListOutgoingFollowsPage(ctx context.Context, status string, limit,
 		return nil, fmt.Errorf("listing outgoing follows page: %w", err)
 	}
 	return follows, nil
+}
+
+// ListAllOutgoingFollows returns all outgoing follows regardless of status.
+func (db *DB) ListAllOutgoingFollows(ctx context.Context) ([]OutgoingFollow, error) {
+	var follows []OutgoingFollow
+	err := db.bun.NewSelect().Model(&follows).
+		OrderExpr("created_at DESC").
+		Scan(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing all outgoing follows: %w", err)
+	}
+	return follows, nil
+}
+
+// DeleteStaleOutgoingFollows removes pending follows older than pendingTTL
+// and rejected follows older than rejectedTTL. Returns the number of deleted records.
+func (db *DB) DeleteStaleOutgoingFollows(ctx context.Context, pendingTTL, rejectedTTL time.Duration) (int64, error) {
+	now := time.Now()
+	pendingCutoff := now.Add(-pendingTTL)
+	rejectedCutoff := now.Add(-rejectedTTL)
+
+	res, err := db.bun.NewRaw(
+		`DELETE FROM outgoing_follows
+		 WHERE (status = 'pending' AND created_at < ?)
+		    OR (status = 'rejected' AND created_at < ?)`,
+		pendingCutoff, rejectedCutoff).Exec(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("deleting stale outgoing follows: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }

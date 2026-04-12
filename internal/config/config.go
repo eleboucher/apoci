@@ -87,11 +87,13 @@ const (
 )
 
 type Federation struct {
-	AutoAccept        string   `yaml:"autoAccept"        env:"AUTO_ACCEPT"`                      // "none" (default), "mutual", "all"
-	AllowInsecureHTTP bool     `yaml:"allowInsecureHTTP" env:"ALLOW_INSECURE_HTTP"`              // allow plain HTTP federation (testing only)
-	AllowedDomains    []string `yaml:"allowedDomains"    env:"ALLOWED_DOMAINS" envSeparator:","` // always auto-accept from these domains
-	BlockedDomains    []string `yaml:"blockedDomains"    env:"BLOCKED_DOMAINS" envSeparator:","` // silently drop all activities from these domains
-	BlockedActors     []string `yaml:"blockedActors"     env:"BLOCKED_ACTORS"  envSeparator:","` // silently drop all activities from these actor URLs
+	AutoAccept                string        `yaml:"autoAccept"             env:"AUTO_ACCEPT"`                      // "none" (default), "mutual", "all"
+	AllowInsecureHTTP         bool          `yaml:"allowInsecureHTTP"      env:"ALLOW_INSECURE_HTTP"`              // allow plain HTTP federation (testing only)
+	AllowedDomains            []string      `yaml:"allowedDomains"         env:"ALLOWED_DOMAINS" envSeparator:","` // always auto-accept from these domains
+	BlockedDomains            []string      `yaml:"blockedDomains"         env:"BLOCKED_DOMAINS" envSeparator:","` // silently drop all activities from these domains
+	BlockedActors             []string      `yaml:"blockedActors"          env:"BLOCKED_ACTORS"  envSeparator:","` // silently drop all activities from these actor URLs
+	OutgoingFollowPendingTTL  time.Duration `yaml:"outgoingFollowPendingTTL"  env:"OUTGOING_FOLLOW_PENDING_TTL"`   // TTL for pending outgoing follows (default: 7 days)
+	OutgoingFollowRejectedTTL time.Duration `yaml:"outgoingFollowRejectedTTL" env:"OUTGOING_FOLLOW_REJECTED_TTL"`  // TTL for rejected outgoing follows (default: 24 hours)
 }
 
 type Limits struct {
@@ -216,6 +218,7 @@ func applyDefaults(cfg *Config) error {
 	applyRateLimitsDefaults(cfg)
 	applyGCDefaults(cfg)
 	applyUpstreamDefaults(cfg)
+	applyFederationDefaults(cfg)
 	return applyTokenDefaults(cfg)
 }
 
@@ -276,6 +279,15 @@ func applyPeeringDefaults(cfg *Config) {
 	}
 	if cfg.Peering.FetchTimeout == 0 {
 		cfg.Peering.FetchTimeout = 60 * time.Second
+	}
+}
+
+func applyFederationDefaults(cfg *Config) {
+	if cfg.Federation.OutgoingFollowPendingTTL == 0 {
+		cfg.Federation.OutgoingFollowPendingTTL = 7 * 24 * time.Hour // 7 days
+	}
+	if cfg.Federation.OutgoingFollowRejectedTTL == 0 {
+		cfg.Federation.OutgoingFollowRejectedTTL = 24 * time.Hour // 24 hours
 	}
 }
 

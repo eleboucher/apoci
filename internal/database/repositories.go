@@ -118,6 +118,15 @@ type RepoWithStats struct {
 	UpdatedAt time.Time
 }
 
+// ReposPage holds paginated repository results.
+type ReposPage struct {
+	Repos      []RepoWithStats
+	TotalCount int
+	Page       int
+	PageSize   int
+	TotalPages int
+}
+
 // ListReposWithStats returns all public repositories with their tags, total size, and last update time.
 // If query is non-empty, filters by name (case-insensitive substring match).
 // Private repositories are excluded from the results.
@@ -207,4 +216,133 @@ func (db *DB) ListReposWithStats(ctx context.Context, query string) ([]RepoWithS
 	}
 
 	return result, nil
+}
+
+// ListReposWithStatsPaginated returns paginated public repositories with stats.
+// If query is non-empty, filters by name (case-insensitive substring match).
+func (db *DB) ListReposWithStatsPaginated(ctx context.Context, query string, page, pageSize int) (*ReposPage, error) {
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if page <= 0 {
+		page = 1
+	}
+
+	_, isPostgres := db.bun.Dialect().(*pgdialect.Dialect)
+
+	// Count total matching repos
+	countQuery := `SELECT COUNT(*) FROM repositories r WHERE r.private = false`
+	var totalCount int
+	var err error
+
+	if query != "" {
+		likePattern := "%" + query + "%"
+		if isPostgres {
+			countQuery += " AND r.name ILIKE ?"
+		} else {
+			countQuery += " AND r.name LIKE ? COLLATE NOCASE"
+		}
+		err = db.bun.NewRaw(countQuery, likePattern).Scan(ctx, &totalCount)
+	} else {
+		err = db.bun.NewRaw(countQuery).Scan(ctx, &totalCount)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("counting repos: %w", err)
+	}
+
+	totalPages := (totalCount + pageSize - 1) / pageSize
+	if totalPages == 0 {
+		totalPages = 1
+	}
+
+	// Fetch paginated results
+	var tagAgg string
+	if isPostgres {
+		tagAgg = `COALESCE(
+			(SELECT STRING_AGG(t.name, ',') FROM (
+				SELECT name FROM tags WHERE repository_id = r.id ORDER BY updated_at DESC LIMIT 10
+			) t),
+			''
+		)`
+	} else {
+		tagAgg = `COALESCE(
+			(SELECT GROUP_CONCAT(t.name, ',') FROM (
+				SELECT name FROM tags WHERE repository_id = r.id ORDER BY updated_at DESC LIMIT 10
+			) t),
+			''
+		)`
+	}
+
+	baseQuery := `
+		SELECT
+			r.id,
+			r.name,
+			r.owner_id,
+			` + tagAgg + ` as tags,
+			COALESCE(
+				(SELECT SUM(b.size_bytes) FROM blobs b
+				 JOIN manifest_layers ml ON ml.blob_digest = b.digest
+				 JOIN manifests m ON m.id = ml.manifest_id
+				 WHERE m.repository_id = r.id),
+				0
+			) as size_bytes,
+			COALESCE(
+				(SELECT MAX(updated_at) FROM tags WHERE repository_id = r.id),
+				r.created_at
+			) as updated_at
+		FROM repositories r
+		WHERE r.private = false
+	`
+
+	var rows []struct {
+		ID        int64     `bun:"id"`
+		Name      string    `bun:"name"`
+		OwnerID   string    `bun:"owner_id"`
+		Tags      string    `bun:"tags"`
+		SizeBytes int64     `bun:"size_bytes"`
+		UpdatedAt time.Time `bun:"updated_at"`
+	}
+
+	offset := (page - 1) * pageSize
+
+	if query != "" {
+		likePattern := "%" + query + "%"
+		if isPostgres {
+			baseQuery += " AND r.name ILIKE ? ORDER BY r.name LIMIT ? OFFSET ?"
+		} else {
+			baseQuery += " AND r.name LIKE ? COLLATE NOCASE ORDER BY r.name LIMIT ? OFFSET ?"
+		}
+		err = db.bun.NewRaw(baseQuery, likePattern, pageSize, offset).Scan(ctx, &rows)
+	} else {
+		baseQuery += " ORDER BY r.name LIMIT ? OFFSET ?"
+		err = db.bun.NewRaw(baseQuery, pageSize, offset).Scan(ctx, &rows)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("listing repos with stats paginated: %w", err)
+	}
+
+	repos := make([]RepoWithStats, len(rows))
+	for i, row := range rows {
+		var tags []string
+		if row.Tags != "" {
+			tags = strings.Split(row.Tags, ",")
+		}
+		repos[i] = RepoWithStats{
+			ID:        row.ID,
+			Name:      row.Name,
+			OwnerID:   row.OwnerID,
+			Tags:      tags,
+			SizeBytes: row.SizeBytes,
+			UpdatedAt: row.UpdatedAt,
+		}
+	}
+
+	return &ReposPage{
+		Repos:      repos,
+		TotalCount: totalCount,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+	}, nil
 }
