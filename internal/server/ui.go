@@ -31,6 +31,8 @@ type IndexData struct {
 	RegistryName    string
 	Endpoint        string
 	TotalRepos      int
+	FollowerCount   int
+	FollowingCount  int
 	Query           string
 	LocalRepos      []RepoView
 	FederatedGroups []FederatedGroup
@@ -59,7 +61,21 @@ func (s *Server) handleUIIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := s.buildIndexData(repos, "")
+	followerCount, err := s.db.CountFollows(ctx)
+	if err != nil {
+		s.logger.Error("failed to count followers for UI", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	followingCount, err := s.db.CountPeers(ctx)
+	if err != nil {
+		s.logger.Error("failed to count following for UI", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	data := s.buildIndexData(repos, "", followerCount, followingCount)
 	s.renderTemplate(w, "layout.html.tmpl", data)
 }
 
@@ -80,7 +96,7 @@ func (s *Server) handleUISearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := s.buildIndexData(repos, query)
+	data := s.buildIndexData(repos, query, 0, 0)
 	s.renderTemplate(w, "_repo_list.html.tmpl", data)
 }
 
@@ -89,7 +105,7 @@ func (s *Server) handleMinimalRoot(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintf(w, `{"name":%q,"status":"ok"}`, s.cfg.Name)
 }
 
-func (s *Server) buildIndexData(repos []database.RepoWithStats, query string) IndexData {
+func (s *Server) buildIndexData(repos []database.RepoWithStats, query string, followerCount, followingCount int) IndexData {
 	selfActor := s.identity.ActorURL
 	var localRepos []RepoView
 	federatedMap := make(map[string][]RepoView)
@@ -128,6 +144,8 @@ func (s *Server) buildIndexData(repos []database.RepoWithStats, query string) In
 		RegistryName:    s.cfg.Name,
 		Endpoint:        s.cfg.Endpoint,
 		TotalRepos:      len(repos),
+		FollowerCount:   followerCount,
+		FollowingCount:  followingCount,
 		Query:           query,
 		LocalRepos:      localRepos,
 		FederatedGroups: federatedGroups,

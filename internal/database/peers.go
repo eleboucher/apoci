@@ -130,6 +130,14 @@ func (db *DB) CleanupStalePeerBlobs(ctx context.Context, olderThan time.Duration
 	return n, nil
 }
 
+func (db *DB) CountPeers(ctx context.Context) (int, error) {
+	var count int
+	if err := db.bun.NewRaw("SELECT COUNT(*) FROM peers").Scan(ctx, &count); err != nil {
+		return 0, fmt.Errorf("counting peers: %w", err)
+	}
+	return count, nil
+}
+
 func (db *DB) FindPeersWithBlob(ctx context.Context, blobDigest string) ([]PeerBlob, error) {
 	var blobs []PeerBlob
 	err := db.bun.NewRaw(
