@@ -159,9 +159,12 @@ func (db *DB) ListReposWithStats(ctx context.Context, query string) ([]RepoWithS
 			` + tagAgg + ` as tags,
 			COALESCE(
 				(SELECT SUM(b.size_bytes) FROM blobs b
-				 JOIN manifest_layers ml ON ml.blob_digest = b.digest
-				 JOIN manifests m ON m.id = ml.manifest_id
-				 WHERE m.repository_id = r.id),
+				 WHERE b.digest IN (
+					SELECT DISTINCT ml.blob_digest
+					FROM manifest_layers ml
+					JOIN manifests m ON m.id = ml.manifest_id
+					WHERE m.repository_id = r.id
+				 )),
 				0
 			) as size_bytes,
 			COALESCE(
@@ -281,9 +284,12 @@ func (db *DB) ListReposWithStatsPaginated(ctx context.Context, query string, pag
 			` + tagAgg + ` as tags,
 			COALESCE(
 				(SELECT SUM(b.size_bytes) FROM blobs b
-				 JOIN manifest_layers ml ON ml.blob_digest = b.digest
-				 JOIN manifests m ON m.id = ml.manifest_id
-				 WHERE m.repository_id = r.id),
+				 WHERE b.digest IN (
+					SELECT DISTINCT ml.blob_digest
+					FROM manifest_layers ml
+					JOIN manifests m ON m.id = ml.manifest_id
+					WHERE m.repository_id = r.id
+				 )),
 				0
 			) as size_bytes,
 			COALESCE(
