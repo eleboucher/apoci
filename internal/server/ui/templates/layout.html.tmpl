@@ -10,16 +10,31 @@
         .repo-card { margin-bottom: 1rem; }
         .repo-card pre { margin: 0.5rem 0 0 0; font-size: 0.85em; }
         .repo-tags { font-size: 0.9em; color: var(--pico-muted-color); }
+        .repo-tags a { color: var(--pico-primary); text-decoration: none; }
+        .repo-tags a:hover { text-decoration: underline; }
         .repo-meta { font-size: 0.85em; color: var(--pico-muted-color); }
         .section-header { margin-top: 2rem; margin-bottom: 1rem; }
         .htmx-indicator { display: none; }
         .htmx-request .htmx-indicator { display: inline; }
         .empty-state { text-align: center; padding: 3rem; color: var(--pico-muted-color); }
+        .pull-cmd { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
+        .pull-cmd code { flex: 1; padding: 0.5rem; background: var(--pico-code-background-color); border-radius: var(--pico-border-radius); font-size: 0.85em; overflow-x: auto; white-space: nowrap; }
+        .copy-btn { cursor: pointer; padding: 0.4rem 0.6rem; background: var(--pico-secondary-background); border: none; border-radius: var(--pico-border-radius); font-size: 0.8em; }
+        .copy-btn:hover { background: var(--pico-secondary-hover-background); }
+        .copy-btn.copied { background: var(--pico-ins-color); color: white; }
+        .muted { color: var(--pico-muted-color); }
+        .pagination { display: flex; justify-content: center; align-items: center; gap: 1rem; margin-top: 2rem; }
+        .pagination a, .pagination span { padding: 0.5rem 1rem; border-radius: var(--pico-border-radius); text-decoration: none; }
+        .pagination a { background: var(--pico-secondary-background); color: var(--pico-color); }
+        .pagination a:hover { background: var(--pico-secondary-hover-background); }
+        .pagination .current { background: var(--pico-primary); color: white; }
+        .pagination .disabled { color: var(--pico-muted-color); cursor: not-allowed; }
     </style>
 </head>
 <body>
     <main class="container">
         {{template "content" .}}
     </main>
+    <script src="/ui/static/copy.js" defer></script>
 </body>
 </html>

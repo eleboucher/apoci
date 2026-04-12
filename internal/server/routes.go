@@ -23,6 +23,7 @@ func (s *Server) routes() http.Handler {
 		}
 		mux.HandleFunc("GET /{$}", s.handleUIIndex)
 		mux.HandleFunc("GET /ui/search", s.handleUISearch)
+		mux.HandleFunc("GET /ui/tags/{repo...}", s.handleUIRepoTags)
 		mux.Handle("GET /ui/static/", http.StripPrefix("/ui/static/", http.FileServer(http.FS(staticFS))))
 	} else {
 		mux.HandleFunc("GET /{$}", s.handleMinimalRoot)

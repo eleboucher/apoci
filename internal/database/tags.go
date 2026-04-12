@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 var ErrTagImmutable = errors.New("tag is immutable and cannot be overwritten")
@@ -100,4 +101,90 @@ func (db *DB) ListTagsAfter(ctx context.Context, repoID int64, startAfter string
 		return nil, fmt.Errorf("listing tags: %w", err)
 	}
 	return tags, nil
+}
+
+// TagWithDetails holds tag data with manifest info for UI display.
+type TagWithDetails struct {
+	Name            string
+	Digest          string
+	MediaType       string
+	ArtifactType    *string
+	SizeBytes       int64
+	UpdatedAt       time.Time
+	ManifestContent []byte // Raw manifest JSON for platform extraction
+}
+
+// TagsPage holds paginated tag results.
+type TagsPage struct {
+	Tags       []TagWithDetails
+	TotalCount int
+	Page       int
+	PageSize   int
+	TotalPages int
+}
+
+func (db *DB) ListTagsWithDetails(ctx context.Context, repoID int64, page, pageSize int) (*TagsPage, error) {
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if page <= 0 {
+		page = 1
+	}
+
+	// Get total count
+	var totalCount int
+	err := db.bun.NewRaw(`SELECT COUNT(*) FROM tags WHERE repository_id = ?`, repoID).Scan(ctx, &totalCount)
+	if err != nil {
+		return nil, fmt.Errorf("counting tags: %w", err)
+	}
+
+	totalPages := (totalCount + pageSize - 1) / pageSize
+	if totalPages == 0 {
+		totalPages = 1
+	}
+
+	offset := (page - 1) * pageSize
+
+	var rows []struct {
+		Name            string    `bun:"name"`
+		Digest          string    `bun:"digest"`
+		MediaType       string    `bun:"media_type"`
+		ArtifactType    *string   `bun:"artifact_type"`
+		SizeBytes       int64     `bun:"size_bytes"`
+		UpdatedAt       time.Time `bun:"updated_at"`
+		ManifestContent []byte    `bun:"content"`
+	}
+
+	err = db.bun.NewRaw(`
+		SELECT t.name, t.manifest_digest as digest, m.media_type, m.artifact_type, m.size_bytes, t.updated_at, m.content
+		FROM tags t
+		JOIN manifests m ON m.digest = t.manifest_digest AND m.repository_id = t.repository_id
+		WHERE t.repository_id = ?
+		ORDER BY t.updated_at DESC
+		LIMIT ? OFFSET ?
+	`, repoID, pageSize, offset).Scan(ctx, &rows)
+	if err != nil {
+		return nil, fmt.Errorf("listing tags with details: %w", err)
+	}
+
+	tags := make([]TagWithDetails, len(rows))
+	for i, row := range rows {
+		tags[i] = TagWithDetails{
+			Name:            row.Name,
+			Digest:          row.Digest,
+			MediaType:       row.MediaType,
+			ArtifactType:    row.ArtifactType,
+			SizeBytes:       row.SizeBytes,
+			UpdatedAt:       row.UpdatedAt,
+			ManifestContent: row.ManifestContent,
+		}
+	}
+
+	return &TagsPage{
+		Tags:       tags,
+		TotalCount: totalCount,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+	}, nil
 }

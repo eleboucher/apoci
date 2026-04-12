@@ -16,9 +16,20 @@
         <header>
             <strong>{{.Name}}</strong>
         </header>
-        <p class="repo-tags">Tags: {{range $i, $t := .Tags}}{{if $i}}, {{end}}{{$t}}{{end}}</p>
+        <p class="repo-tags">
+            {{if gt .TagCount 0}}
+            <a href="/ui/tags/{{.Name}}">{{.TagCount}} tag{{if gt .TagCount 1}}s{{end}}</a>
+            {{else}}
+            <span class="muted">No tags</span>
+            {{end}}
+        </p>
         <p class="repo-meta">{{.SizeHuman}} &bull; Updated {{.UpdatedAgo}}</p>
-        <pre><code>docker pull {{$.Endpoint}}/{{.Name}}</code></pre>
+        {{if .FirstTag}}
+        <div class="pull-cmd">
+            <code>docker pull {{$.RegistryHost}}/{{.Name}}:{{.FirstTag}}</code>
+            <button class="copy-btn" data-copy="docker pull {{$.RegistryHost}}/{{.Name}}:{{.FirstTag}}">Copy</button>
+        </div>
+        {{end}}
     </article>
     {{end}}
 </section>
@@ -32,12 +43,47 @@
         <header>
             <strong>{{.Name}}</strong>
         </header>
-        <p class="repo-tags">Tags: {{range $i, $t := .Tags}}{{if $i}}, {{end}}{{$t}}{{end}}</p>
+        <p class="repo-tags">
+            {{if gt .TagCount 0}}
+            <a href="/ui/tags/{{.Name}}">{{.TagCount}} tag{{if gt .TagCount 1}}s{{end}}</a>
+            {{else}}
+            <span class="muted">No tags</span>
+            {{end}}
+        </p>
         <p class="repo-meta">{{.SizeHuman}} &bull; Updated {{.UpdatedAgo}}</p>
-        <pre><code>docker pull {{$.Endpoint}}/{{.Name}}</code></pre>
+        {{if .FirstTag}}
+        <div class="pull-cmd">
+            <code>docker pull {{$.RegistryHost}}/{{.Name}}:{{.FirstTag}}</code>
+            <button class="copy-btn" data-copy="docker pull {{$.RegistryHost}}/{{.Name}}:{{.FirstTag}}">Copy</button>
+        </div>
+        {{end}}
     </article>
     {{end}}
 </section>
+{{end}}
+
+{{if gt .TotalPages 1}}
+<nav class="pagination">
+    {{if .HasPrev}}
+    <a href="?page={{subtract .Page 1}}{{if .Query}}&q={{.Query}}{{end}}"
+       hx-get="/ui/search?page={{subtract .Page 1}}{{if .Query}}&q={{.Query}}{{end}}"
+       hx-target="#repo-list"
+       hx-push-url="?page={{subtract .Page 1}}{{if .Query}}&q={{.Query}}{{end}}">&larr; Previous</a>
+    {{else}}
+    <span class="disabled">&larr; Previous</span>
+    {{end}}
+
+    <span class="current">Page {{.Page}} of {{.TotalPages}}</span>
+
+    {{if .HasNext}}
+    <a href="?page={{add .Page 1}}{{if .Query}}&q={{.Query}}{{end}}"
+       hx-get="/ui/search?page={{add .Page 1}}{{if .Query}}&q={{.Query}}{{end}}"
+       hx-target="#repo-list"
+       hx-push-url="?page={{add .Page 1}}{{if .Query}}&q={{.Query}}{{end}}">Next &rarr;</a>
+    {{else}}
+    <span class="disabled">Next &rarr;</span>
+    {{end}}
+</nav>
 {{end}}
 
 {{end}}
