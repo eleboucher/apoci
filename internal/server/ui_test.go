@@ -51,6 +51,12 @@ func testServerWithUI(t *testing.T, uiEnabled bool) *Server {
 			MaxManifestSize: config.DefaultMaxManifestSize,
 			MaxBlobSize:     config.DefaultMaxBlobSize,
 		},
+		RateLimits: config.RateLimits{
+			InboxRate:         1000,
+			InboxBurst:        1000,
+			RegistryPushRate:  1000,
+			RegistryPushBurst: 1000,
+		},
 		GC: config.GC{
 			Enabled:          &gcEnabled,
 			Interval:         6 * time.Hour,

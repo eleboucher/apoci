@@ -52,6 +52,12 @@ func testServer(t *testing.T) *Server {
 			MaxManifestSize: config.DefaultMaxManifestSize,
 			MaxBlobSize:     config.DefaultMaxBlobSize,
 		},
+		RateLimits: config.RateLimits{
+			InboxRate:         1000,
+			InboxBurst:        1000,
+			RegistryPushRate:  1000,
+			RegistryPushBurst: 1000,
+		},
 		GC: config.GC{
 			Enabled:          new(true),
 			Interval:         6 * time.Hour,
@@ -206,7 +212,7 @@ func TestAPEndpointsExist(t *testing.T) {
 }
 
 func TestRateLimiterAllowsUpToBurst(t *testing.T) {
-	rl := newIPRateLimiter(10, 5)
+	rl := newIPRateLimiter(10, 5, nil)
 	defer rl.Stop()
 
 	for i := range 5 {
@@ -218,11 +224,30 @@ func TestRateLimiterAllowsUpToBurst(t *testing.T) {
 }
 
 func TestRateLimiterTracksSeparateIPs(t *testing.T) {
-	rl := newIPRateLimiter(10, 2)
+	rl := newIPRateLimiter(10, 2, nil)
 	defer rl.Stop()
 
 	require.True(t, rl.allow("10.0.0.1"), "first IP should be allowed")
 	require.True(t, rl.allow("10.0.0.2"), "second IP should be allowed independently")
+}
+
+func TestRateLimiterTrustedIPs(t *testing.T) {
+	rl := newIPRateLimiter(10, 1, []string{"192.168.1.100", "10.0.0.0/8"})
+	defer rl.Stop()
+
+	// Trusted single IP should always be allowed
+	for range 10 {
+		require.True(t, rl.allow("192.168.1.100"), "trusted IP should bypass rate limit")
+	}
+
+	// Trusted CIDR should always be allowed
+	for range 10 {
+		require.True(t, rl.allow("10.5.5.5"), "IP in trusted CIDR should bypass rate limit")
+	}
+
+	// Non-trusted IP should be rate limited
+	require.True(t, rl.allow("8.8.8.8"), "first request from untrusted IP allowed")
+	require.False(t, rl.allow("8.8.8.8"), "second request from untrusted IP should be limited")
 }
 
 func TestOCIRepoFromPath(t *testing.T) {

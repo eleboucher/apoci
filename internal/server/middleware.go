@@ -119,25 +119,63 @@ func registryAuthMiddleware(token, endpoint string, isPrivateRead func(context.C
 // ipRateLimiter provides per-IP rate limiting using x/time/rate with automatic
 // eviction of stale entries via ttlcache.
 type ipRateLimiter struct {
-	cache *ttlcache.Cache[string, *rate.Limiter]
-	rate  rate.Limit
-	burst int
+	cache      *ttlcache.Cache[string, *rate.Limiter]
+	rate       rate.Limit
+	burst      int
+	trustedIPs []net.IPNet
 }
 
-func newIPRateLimiter(r rate.Limit, burst int) *ipRateLimiter {
+func newIPRateLimiter(r rate.Limit, burst int, trustedIPs []string) *ipRateLimiter {
 	cache := ttlcache.New[string, *rate.Limiter](
 		ttlcache.WithTTL[string, *rate.Limiter](10 * time.Minute),
 	)
 	go cache.Start()
 
+	var trusted []net.IPNet
+	for _, entry := range trustedIPs {
+		if strings.Contains(entry, "/") {
+			_, ipNet, err := net.ParseCIDR(entry)
+			if err == nil {
+				trusted = append(trusted, *ipNet)
+			}
+		} else {
+			ip := net.ParseIP(entry)
+			if ip != nil {
+				// Convert single IP to /32 or /128 CIDR
+				bits := 32
+				if ip.To4() == nil {
+					bits = 128
+				}
+				trusted = append(trusted, net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+			}
+		}
+	}
+
 	return &ipRateLimiter{
-		cache: cache,
-		rate:  r,
-		burst: burst,
+		cache:      cache,
+		rate:       r,
+		burst:      burst,
+		trustedIPs: trusted,
 	}
 }
 
+func (rl *ipRateLimiter) isTrusted(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	for _, trusted := range rl.trustedIPs {
+		if trusted.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 func (rl *ipRateLimiter) allow(ip string) bool {
+	if rl.isTrusted(ip) {
+		return true
+	}
 	item, _ := rl.cache.GetOrSet(ip, rate.NewLimiter(rl.rate, rl.burst))
 	return item.Value().Allow()
 }

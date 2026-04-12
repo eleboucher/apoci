@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/time/rate"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/activitypub"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
@@ -137,8 +138,16 @@ func New(cfg *config.Config, db *database.DB, blobs blobstore.BlobStore, identit
 	inboxWorker := activitypub.NewInboxWorker(inboxHandler, logger)
 	inboxHandler.SetWorker(inboxWorker)
 
-	inboxLimiter := newIPRateLimiter(10, 50)       // 10 req/sec, burst of 50
-	registryPushLimiter := newIPRateLimiter(5, 20) // 5 req/sec, burst of 20 for push ops
+	inboxLimiter := newIPRateLimiter(
+		rate.Limit(cfg.RateLimits.InboxRate),
+		cfg.RateLimits.InboxBurst,
+		cfg.RateLimits.TrustedIPs,
+	)
+	registryPushLimiter := newIPRateLimiter(
+		rate.Limit(cfg.RateLimits.RegistryPushRate),
+		cfg.RateLimits.RegistryPushBurst,
+		cfg.RateLimits.TrustedIPs,
+	)
 
 	scheduler := workers.NewScheduler(logger)
 	scheduler.Add(workers.PeriodicTask{

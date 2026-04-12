@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -37,6 +38,7 @@ type Config struct {
 	Peering       Peering       `yaml:"peering"    envPrefix:"APOCI_PEERING_"`
 	Federation    Federation    `yaml:"federation" envPrefix:"APOCI_FEDERATION_"`
 	Limits        Limits        `yaml:"limits"     envPrefix:"APOCI_"`
+	RateLimits    RateLimits    `yaml:"rateLimits" envPrefix:"APOCI_RATELIMIT_"`
 	Metrics       Metrics       `yaml:"metrics"       envPrefix:"APOCI_METRICS_"`
 	GC            GC            `yaml:"gc"            envPrefix:"APOCI_GC_"`
 	Notifications Notifications `yaml:"notifications" envPrefix:"APOCI_NOTIFICATIONS_"`
@@ -95,6 +97,14 @@ type Federation struct {
 type Limits struct {
 	MaxManifestSize int64 `yaml:"maxManifestSize" env:"MAX_MANIFEST_SIZE"`
 	MaxBlobSize     int64 `yaml:"maxBlobSize"     env:"MAX_BLOB_SIZE"`
+}
+
+type RateLimits struct {
+	InboxRate         float64  `yaml:"inboxRate"         env:"INBOX_RATE"`                          // requests per second for inbox
+	InboxBurst        int      `yaml:"inboxBurst"        env:"INBOX_BURST"`                         // burst capacity for inbox
+	RegistryPushRate  float64  `yaml:"registryPushRate"  env:"REGISTRY_PUSH_RATE"`                  // requests per second for registry push
+	RegistryPushBurst int      `yaml:"registryPushBurst" env:"REGISTRY_PUSH_BURST"`                 // burst capacity for registry push
+	TrustedIPs        []string `yaml:"trustedIPs"        env:"TRUSTED_IPS"        envSeparator:","` // IPs/CIDRs that bypass rate limiting
 }
 
 type Metrics struct {
@@ -203,6 +213,7 @@ func applyDefaults(cfg *Config) error {
 	}
 	applyPeeringDefaults(cfg)
 	applyLimitsDefaults(cfg)
+	applyRateLimitsDefaults(cfg)
 	applyGCDefaults(cfg)
 	applyUpstreamDefaults(cfg)
 	return applyTokenDefaults(cfg)
@@ -274,6 +285,21 @@ func applyLimitsDefaults(cfg *Config) {
 	}
 	if cfg.Limits.MaxBlobSize == 0 {
 		cfg.Limits.MaxBlobSize = DefaultMaxBlobSize
+	}
+}
+
+func applyRateLimitsDefaults(cfg *Config) {
+	if cfg.RateLimits.InboxRate == 0 {
+		cfg.RateLimits.InboxRate = 30 // 30 req/sec
+	}
+	if cfg.RateLimits.InboxBurst == 0 {
+		cfg.RateLimits.InboxBurst = 100
+	}
+	if cfg.RateLimits.RegistryPushRate == 0 {
+		cfg.RateLimits.RegistryPushRate = 50 // 50 req/sec
+	}
+	if cfg.RateLimits.RegistryPushBurst == 0 {
+		cfg.RateLimits.RegistryPushBurst = 100
 	}
 }
 
@@ -362,6 +388,9 @@ func validate(cfg *Config) error {
 		return err
 	}
 	if err := validateFederation(cfg); err != nil {
+		return err
+	}
+	if err := validateRateLimits(cfg); err != nil {
 		return err
 	}
 	if err := validateRegex(cfg); err != nil {
@@ -461,6 +490,33 @@ func validateAccountDomain(cfg *Config) error {
 	if cfg.AccountDomain != cfg.Domain {
 		if strings.Contains(cfg.AccountDomain, "/") || strings.Contains(cfg.AccountDomain, ":") {
 			return fmt.Errorf("accountDomain must be a bare hostname (no scheme, port, or path)")
+		}
+	}
+	return nil
+}
+
+func validateRateLimits(cfg *Config) error {
+	if cfg.RateLimits.InboxRate < 0 {
+		return fmt.Errorf("rateLimits.inboxRate must not be negative")
+	}
+	if cfg.RateLimits.InboxBurst < 0 {
+		return fmt.Errorf("rateLimits.inboxBurst must not be negative")
+	}
+	if cfg.RateLimits.RegistryPushRate < 0 {
+		return fmt.Errorf("rateLimits.registryPushRate must not be negative")
+	}
+	if cfg.RateLimits.RegistryPushBurst < 0 {
+		return fmt.Errorf("rateLimits.registryPushBurst must not be negative")
+	}
+	for i, entry := range cfg.RateLimits.TrustedIPs {
+		if strings.Contains(entry, "/") {
+			if _, _, err := net.ParseCIDR(entry); err != nil {
+				return fmt.Errorf("rateLimits.trustedIPs[%d] is not a valid CIDR: %w", i, err)
+			}
+		} else {
+			if net.ParseIP(entry) == nil {
+				return fmt.Errorf("rateLimits.trustedIPs[%d] is not a valid IP address", i)
+			}
 		}
 	}
 	return nil
