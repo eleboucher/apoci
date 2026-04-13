@@ -16,6 +16,7 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/metrics"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/peering"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/version"
 )
 
 // challengeCache holds a cached auth challenge discovery result.
@@ -29,7 +30,6 @@ type challengeCache struct {
 }
 
 const (
-	upstreamUserAgent      = "apoci/upstream-proxy"
 	defaultTokenExpirySecd = 300 // 5 min; used when expires_in is absent
 	tokenCacheBufferSec    = 30  // refresh token this many seconds before expiry
 )
@@ -140,7 +140,7 @@ func (f *Fetcher) fetchManifestWithRetry(ctx context.Context, registryName, repo
 	}
 
 	req.Header.Set("Accept", "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, */*")
-	req.Header.Set("User-Agent", upstreamUserAgent)
+	req.Header.Set("User-Agent", version.UserAgent)
 
 	// First attempt is anonymous; on 401 retry uses credentials to distinguish private repos.
 	useCredentials := retried
@@ -233,7 +233,7 @@ func (f *Fetcher) fetchBlobStreamWithRetry(ctx context.Context, registryName, re
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 
-	req.Header.Set("User-Agent", upstreamUserAgent)
+	req.Header.Set("User-Agent", version.UserAgent)
 
 	// First attempt is anonymous; on 401 retry uses credentials to distinguish private repos.
 	useCredentials := retried
@@ -356,7 +356,7 @@ func (f *Fetcher) getToken(ctx context.Context, reg *registry, repo string, useC
 		return "", fmt.Errorf("creating token request: %w", err)
 	}
 
-	req.Header.Set("User-Agent", upstreamUserAgent)
+	req.Header.Set("User-Agent", version.UserAgent)
 
 	if useCredentials && reg.config.Username != "" {
 		req.SetBasicAuth(reg.config.Username, reg.config.Password)
@@ -436,7 +436,7 @@ func (f *Fetcher) discoverChallenge(ctx context.Context, reg *registry) (realm, 
 	if reqErr != nil {
 		return "", "", fmt.Errorf("creating challenge probe request: %w", reqErr)
 	}
-	req.Header.Set("User-Agent", upstreamUserAgent)
+	req.Header.Set("User-Agent", version.UserAgent)
 
 	resp, doErr := f.client.Do(req)
 	if doErr != nil {

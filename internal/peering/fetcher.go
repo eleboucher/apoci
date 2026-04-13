@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/version"
 )
 
 type Fetcher struct {
@@ -66,6 +67,7 @@ func (f *Fetcher) FetchBlobStream(ctx context.Context, peerEndpoint, repo, diges
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
+	req.Header.Set("User-Agent", version.UserAgent)
 
 	resp, err := f.client.Do(req)
 	if err != nil {
@@ -98,6 +100,7 @@ func (f *Fetcher) FetchManifest(ctx context.Context, peerEndpoint, repo, referen
 		return nil, "", fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, */*")
+	req.Header.Set("User-Agent", version.UserAgent)
 
 	resp, err := f.client.Do(req)
 	if err != nil {
@@ -146,6 +149,7 @@ func (f *Fetcher) CheckHealth(ctx context.Context, peerEndpoint string) error {
 	if err != nil {
 		return fmt.Errorf("creating health check request: %w", err)
 	}
+	req.Header.Set("User-Agent", version.UserAgent)
 
 	resp, err := f.client.Do(req)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/version"
 )
 
 var httpClient = &http.Client{
@@ -33,6 +34,7 @@ func DeliverActivity(ctx context.Context, inboxURL string, activityJSON []byte, 
 	}
 	req.Header.Set("Content-Type", "application/activity+json")
 	req.Header.Set("Accept", "application/activity+json")
+	req.Header.Set("User-Agent", version.UserAgent)
 
 	if err := SignRequest(req, identity.KeyID(), identity.PrivateKey, activityJSON); err != nil {
 		return fmt.Errorf("signing request: %w", err)
@@ -69,6 +71,7 @@ func FetchActorSigned(ctx context.Context, actorURL string, identity *Identity) 
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Accept", "application/activity+json, application/ld+json")
+	req.Header.Set("User-Agent", version.UserAgent)
 
 	if identity != nil {
 		if err := SignRequest(req, identity.KeyID(), identity.PrivateKey, nil); err != nil {

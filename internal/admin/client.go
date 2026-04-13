@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/version"
 )
 
 type Client struct {
@@ -97,6 +99,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("User-Agent", version.UserAgent)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
