@@ -132,13 +132,17 @@ func (s *Service) AddFollow(ctx context.Context, input string) (*AddFollowResult
 
 // RemoveFollow sends an Undo(Follow) and removes both inbound and outgoing
 // follow records. Returns an error only when neither table had a record.
-func (s *Service) RemoveFollow(ctx context.Context, input string) (string, error) {
+func (s *Service) RemoveFollow(ctx context.Context, input string, force bool) (string, error) {
 	actorURL, err := s.Fed.ResolveFollowTarget(ctx, input)
 	if err != nil {
-		return "", fmt.Errorf("resolving target: %w", err)
+		if !force {
+			return "", fmt.Errorf("resolving target: %w", err)
+		}
+		// Force mode: skip network resolution and treat input as the actor URL directly.
+		actorURL = input
 	}
 
-	if err := s.Fed.SendUndo(ctx, actorURL); err != nil {
+	if err := s.Fed.SendUndo(ctx, actorURL); err != nil && !force {
 		s.Logger.Warn("failed to send Undo to peer", "actor", actorURL, "error", err)
 	}
 

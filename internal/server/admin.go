@@ -87,6 +87,7 @@ func (s *Server) adminListOutgoingFollows(w http.ResponseWriter, r *http.Request
 
 type adminFollowRequest struct {
 	Target string `json:"target"`
+	Force  bool   `json:"force,omitempty"`
 }
 
 // decodeTarget reads the follow request body and returns the raw target string.
@@ -153,14 +154,16 @@ func (s *Server) adminRejectFollow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminRemoveFollow(w http.ResponseWriter, r *http.Request) {
-	target, ok := decodeTarget(w, r)
-	if !ok {
+	var req adminFollowRequest
+	r.Body = http.MaxBytesReader(w, r.Body, adminMaxBody)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Target == "" {
+		http.Error(w, "missing target", http.StatusBadRequest)
 		return
 	}
 
-	actorURL, err := s.fedSvc.RemoveFollow(r.Context(), target)
+	actorURL, err := s.fedSvc.RemoveFollow(r.Context(), req.Target, req.Force)
 	if err != nil {
-		s.logger.Error("removing follow", "target", target, "error", err)
+		s.logger.Error("removing follow", "target", req.Target, "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

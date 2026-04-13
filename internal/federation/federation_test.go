@@ -224,7 +224,7 @@ func TestRemoveFollowWithInboundFollow(t *testing.T) {
 	// Simulate an accepted inbound follow.
 	require.NoError(t, db.AddFollow(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
 
-	actorURL, err := svc.RemoveFollow(ctx, peerActorURL)
+	actorURL, err := svc.RemoveFollow(ctx, peerActorURL, false)
 	require.NoError(t, err)
 	require.Equal(t, peerActorURL, actorURL)
 
@@ -240,7 +240,7 @@ func TestRemoveFollowWithOutgoingFollow(t *testing.T) {
 
 	require.NoError(t, svc.DB.AddOutgoingFollow(ctx, peerActorURL))
 
-	actorURL, err := svc.RemoveFollow(ctx, peerActorURL)
+	actorURL, err := svc.RemoveFollow(ctx, peerActorURL, false)
 	require.NoError(t, err)
 	require.Equal(t, peerActorURL, actorURL)
 
@@ -257,7 +257,7 @@ func TestRemoveFollowBothTables(t *testing.T) {
 	require.NoError(t, db.AddFollow(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
 	require.NoError(t, svc.DB.AddOutgoingFollow(ctx, peerActorURL))
 
-	_, err := svc.RemoveFollow(ctx, peerActorURL)
+	_, err := svc.RemoveFollow(ctx, peerActorURL, false)
 	require.NoError(t, err)
 
 	f, err := db.GetFollow(ctx, peerActorURL)
@@ -273,7 +273,7 @@ func TestRemoveFollowNeitherTableReturnsError(t *testing.T) {
 	fed := &mockFed{}
 	svc, _ := testService(t, fed)
 
-	_, err := svc.RemoveFollow(context.Background(), peerActorURL)
+	_, err := svc.RemoveFollow(context.Background(), peerActorURL, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "removing follow")
 }
@@ -289,7 +289,7 @@ func TestRemoveFollowUndoFailureDoesNotBlock(t *testing.T) {
 
 	require.NoError(t, svc.DB.AddOutgoingFollow(ctx, peerActorURL))
 
-	actorURL, err := svc.RemoveFollow(ctx, peerActorURL)
+	actorURL, err := svc.RemoveFollow(ctx, peerActorURL, false)
 	require.NoError(t, err, "Undo failure should not block local removal")
 	require.Equal(t, peerActorURL, actorURL)
 }
@@ -302,9 +302,50 @@ func TestRemoveFollowResolveError(t *testing.T) {
 	}
 	svc, _ := testService(t, fed)
 
-	_, err := svc.RemoveFollow(context.Background(), "bad")
+	_, err := svc.RemoveFollow(context.Background(), "bad", false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "resolving target")
+}
+
+func TestRemoveFollowForceSkipsResolveError(t *testing.T) {
+	fed := &mockFed{
+		resolveFollowTargetFn: func(_ context.Context, _ string) (string, error) {
+			return "", errors.New("resolve failed")
+		},
+	}
+	svc, db := testService(t, fed)
+	ctx := context.Background()
+
+	require.NoError(t, db.AddFollow(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
+
+	// With force=true, a resolve error must not prevent local record removal.
+	_, err := svc.RemoveFollow(ctx, peerActorURL, true)
+	require.NoError(t, err)
+
+	f, err := db.GetFollow(ctx, peerActorURL)
+	require.NoError(t, err)
+	require.Nil(t, f, "follow should be removed despite resolve failure")
+}
+
+func TestRemoveFollowForceSkipsUndoError(t *testing.T) {
+	fed := &mockFed{
+		sendUndoFn: func(_ context.Context, _ string) error {
+			return errors.New("peer unreachable")
+		},
+	}
+	svc, db := testService(t, fed)
+	ctx := context.Background()
+
+	require.NoError(t, db.AddFollow(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
+
+	// With force=true, an Undo delivery failure must not prevent local record removal.
+	actorURL, err := svc.RemoveFollow(ctx, peerActorURL, true)
+	require.NoError(t, err)
+	require.Equal(t, peerActorURL, actorURL)
+
+	f, err := db.GetFollow(ctx, peerActorURL)
+	require.NoError(t, err)
+	require.Nil(t, f, "follow should be removed despite Undo failure")
 }
 
 func TestAcceptFollowSuccess(t *testing.T) {

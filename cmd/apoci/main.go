@@ -131,22 +131,25 @@ func followCmd(configPath *string) *cobra.Command {
 		},
 	})
 
-	cmd.AddCommand(&cobra.Command{
+	removeCmd := &cobra.Command{
 		Use:   "remove <domain|handle|actor-url>",
 		Short: "Unfollow a peer",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			force, _ := cmd.Flags().GetBool("force")
 			if c := remoteClient(remote, token); c != nil {
-				res, err := c.RemoveFollow(cmd.Context(), args[0])
+				res, err := c.RemoveFollow(cmd.Context(), args[0], force)
 				if err != nil {
 					return err
 				}
 				_, _ = lipgloss.Println(successStyle.Render("Unfollowed " + res["removed"]))
 				return nil
 			}
-			return runFollowRemove(cmd.Context(), *configPath, args[0])
+			return runFollowRemove(cmd.Context(), *configPath, args[0], force)
 		},
-	})
+	}
+	removeCmd.Flags().Bool("force", false, "remove local records even if the peer is unreachable")
+	cmd.AddCommand(removeCmd)
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "list",
@@ -267,14 +270,14 @@ func runFollowAdd(ctx context.Context, configPath, input string) error {
 	return nil
 }
 
-func runFollowRemove(ctx context.Context, configPath, arg string) error {
+func runFollowRemove(ctx context.Context, configPath, arg string, force bool) error {
 	svc, cleanup, err := openFedService(configPath)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	actorURL, err := svc.RemoveFollow(ctx, arg)
+	actorURL, err := svc.RemoveFollow(ctx, arg, force)
 	if err != nil {
 		return err
 	}

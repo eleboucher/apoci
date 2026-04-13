@@ -65,9 +65,13 @@ func (c *Client) RejectFollow(ctx context.Context, target string) (map[string]st
 	return out, c.post(ctx, "/follows/reject", map[string]string{"target": target}, &out)
 }
 
-func (c *Client) RemoveFollow(ctx context.Context, target string) (map[string]string, error) {
+func (c *Client) RemoveFollow(ctx context.Context, target string, force bool) (map[string]string, error) {
 	var out map[string]string
-	return out, c.do(ctx, http.MethodDelete, "/follows", map[string]string{"target": target}, &out)
+	body := map[string]any{"target": target}
+	if force {
+		body["force"] = true
+	}
+	return out, c.do(ctx, http.MethodDelete, "/follows", body, &out)
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) error {

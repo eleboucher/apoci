@@ -741,6 +741,68 @@ func TestAdminRemoveFollowBothTables(t *testing.T) {
 	require.Nil(t, of, "outgoing follow should be removed")
 }
 
+func TestAdminRemoveFollowForceRemovesDespiteUnreachablePeer(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	ctx := context.Background()
+
+	// Federator that always fails to resolve and send Undo.
+	fed := &mockAPFederator{
+		resolveFollowTargetFn: func(_ context.Context, _ string) (string, error) {
+			return "", errors.New("peer unreachable")
+		},
+	}
+	s := testServerWithMock(t, fed)
+	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
+	require.NoError(t, s.db.AddFollow(ctx, actorURL, "pubkey-peer", "https://peer.example.com", nil))
+
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `","force":true}`
+	req, _ := http.NewRequest("DELETE", srv.URL+"/api/admin/follows", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	f, err := s.db.GetFollow(ctx, actorURL)
+	require.NoError(t, err)
+	require.Nil(t, f, "follow should be removed even when peer is unreachable")
+}
+
+func TestAdminRemoveFollowWithoutForceFailsOnUnreachablePeer(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	ctx := context.Background()
+
+	fed := &mockAPFederator{
+		resolveFollowTargetFn: func(_ context.Context, _ string) (string, error) {
+			return "", errors.New("peer unreachable")
+		},
+	}
+	s := testServerWithMock(t, fed)
+	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
+	require.NoError(t, s.db.AddFollow(ctx, actorURL, "pubkey-peer", "https://peer.example.com", nil))
+
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	// No force flag — the resolve error should surface as a 500.
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("DELETE", srv.URL+"/api/admin/follows", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+}
+
 func TestAdminAddFollowCreatesOutgoingNotInbound(t *testing.T) {
 	const actorURL = "https://peer.example.com/ap/actor"
 	const inboxURL = "https://peer.example.com/ap/inbox"
