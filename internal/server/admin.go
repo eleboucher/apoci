@@ -31,6 +31,7 @@ func (s *Server) adminRouter() http.Handler {
 }
 
 func (s *Server) adminGetIdentity(w http.ResponseWriter, r *http.Request) {
+	s.logger.Debug("admin: GET /identity")
 	pubPEM, err := s.identity.PublicKeyPEM()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -49,37 +50,44 @@ func (s *Server) adminGetIdentity(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminListActors(w http.ResponseWriter, r *http.Request) {
+	s.logger.Debug("admin: GET /actors")
 	actors, err := s.db.ListActors(r.Context())
 	if err != nil {
 		s.logger.Error("listing actors", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	s.logger.Debug("admin: GET /actors done", "count", len(actors))
 	writeJSON(w, actors)
 }
 
 func (s *Server) adminListFollows(w http.ResponseWriter, r *http.Request) {
+	s.logger.Debug("admin: GET /follows")
 	follows, err := s.db.ListFollows(r.Context())
 	if err != nil {
 		s.logger.Error("listing follows", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	s.logger.Debug("admin: GET /follows done", "count", len(follows))
 	writeJSON(w, follows)
 }
 
 func (s *Server) adminListPending(w http.ResponseWriter, r *http.Request) {
+	s.logger.Debug("admin: GET /follows/pending")
 	requests, err := s.db.ListFollowRequests(r.Context())
 	if err != nil {
 		s.logger.Error("listing pending requests", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	s.logger.Debug("admin: GET /follows/pending done", "count", len(requests))
 	writeJSON(w, requests)
 }
 
 func (s *Server) adminListOutgoingFollows(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
+	s.logger.Debug("admin: GET /follows/outgoing", "status", status)
 	var follows []database.Actor
 	var err error
 
@@ -93,6 +101,7 @@ func (s *Server) adminListOutgoingFollows(w http.ResponseWriter, r *http.Request
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	s.logger.Debug("admin: GET /follows/outgoing done", "count", len(follows))
 	writeJSON(w, follows)
 }
 
@@ -117,6 +126,7 @@ func (s *Server) adminAddFollow(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.logger.Debug("admin: POST /follows", "target", target)
 
 	result, err := s.fedSvc.AddFollow(r.Context(), target)
 	if err != nil {
@@ -124,6 +134,7 @@ func (s *Server) adminAddFollow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not add follow", classifyError(err))
 		return
 	}
+	s.logger.Debug("admin: POST /follows done", "target", target, "actorID", result.ActorID)
 
 	writeJSON(w, map[string]string{"followed": result.ActorID})
 }
@@ -133,6 +144,7 @@ func (s *Server) adminAcceptFollow(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.logger.Debug("admin: POST /follows/accept", "target", target)
 
 	result, err := s.fedSvc.AcceptFollow(r.Context(), target, s.cfg.Federation.AutoAccept)
 	if err != nil {
@@ -140,6 +152,7 @@ func (s *Server) adminAcceptFollow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	s.logger.Debug("admin: POST /follows/accept done", "actorURL", result.ActorURL, "followedBack", result.FollowedBack)
 
 	resp := map[string]string{"accepted": result.ActorURL}
 	if result.FollowedBack {
@@ -153,6 +166,7 @@ func (s *Server) adminRejectFollow(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.logger.Debug("admin: POST /follows/reject", "target", target)
 
 	actorURL, err := s.fedSvc.RejectFollow(r.Context(), target)
 	if err != nil {
@@ -160,6 +174,7 @@ func (s *Server) adminRejectFollow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	s.logger.Debug("admin: POST /follows/reject done", "actorURL", actorURL)
 
 	writeJSON(w, map[string]string{"rejected": actorURL})
 }
@@ -171,6 +186,7 @@ func (s *Server) adminRemoveFollow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing target", http.StatusBadRequest)
 		return
 	}
+	s.logger.Debug("admin: DELETE /follows", "target", req.Target, "force", req.Force)
 
 	actorURL, err := s.fedSvc.RemoveFollow(r.Context(), req.Target, req.Force)
 	if err != nil {
@@ -178,6 +194,7 @@ func (s *Server) adminRemoveFollow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	s.logger.Debug("admin: DELETE /follows done", "actorURL", actorURL)
 
 	writeJSON(w, map[string]string{"removed": actorURL})
 }

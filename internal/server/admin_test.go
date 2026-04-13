@@ -745,7 +745,6 @@ func TestAdminRemoveFollowForceRemovesDespiteUnreachablePeer(t *testing.T) {
 	const actorURL = "https://peer.example.com/ap/actor"
 	ctx := context.Background()
 
-	// Federator that always fails to resolve and send Undo.
 	fed := &mockAPFederator{
 		resolveFollowTargetFn: func(_ context.Context, _ string) (string, error) {
 			return "", errors.New("peer unreachable")
@@ -771,11 +770,11 @@ func TestAdminRemoveFollowForceRemovesDespiteUnreachablePeer(t *testing.T) {
 
 	f, err := s.db.GetFollow(ctx, actorURL)
 	require.NoError(t, err)
-	require.Nil(t, f, "follow should be removed even when peer is unreachable")
+	require.Nil(t, f)
 
 	a, err := s.db.GetActor(ctx, actorURL)
 	require.NoError(t, err)
-	require.Nil(t, a, "actor row should be fully deleted on force")
+	require.Nil(t, a)
 }
 
 func TestAdminRemoveFollowWithoutForceFailsOnUnreachablePeer(t *testing.T) {
@@ -795,7 +794,6 @@ func TestAdminRemoveFollowWithoutForceFailsOnUnreachablePeer(t *testing.T) {
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
-	// No force flag — the resolve error should surface as a 500.
 	body := `{"target":"` + actorURL + `"}`
 	req, _ := http.NewRequest("DELETE", srv.URL+"/api/admin/follows", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer test-token")

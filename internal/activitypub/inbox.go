@@ -211,6 +211,8 @@ type RawActivity struct {
 }
 
 func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.logger.Debug("inbox: request received", "method", r.Method, "remote", r.RemoteAddr)
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -226,6 +228,7 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read body", http.StatusBadRequest)
 		return
 	}
+	h.logger.Debug("inbox: body read", "bytes", len(body))
 
 	keyID, err := ExtractKeyID(r)
 	if err != nil {
@@ -353,6 +356,7 @@ func (h *InboxHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *InboxHandler) dispatch(ctx context.Context, task InboxTask) error {
+	h.logger.Debug("inbox dispatch", "type", task.Activity.Type, "id", task.Activity.ID, "actor", task.Activity.Actor)
 	switch task.Activity.Type {
 	case ActivityFollow:
 		return h.processFollow(ctx, &task.Activity, task.PubKeyPEM)

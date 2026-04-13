@@ -10,6 +10,8 @@ import (
 
 // processFollow handles incoming Follow requests.
 func (h *InboxHandler) processFollow(ctx context.Context, activity *RawActivity, pubKeyPEM string) error {
+	h.logger.Debug("processFollow", "actor", activity.Actor, "id", activity.ID)
+
 	target, ok := activity.Object.(string)
 	if !ok {
 		return fmt.Errorf("invalid Follow object")
@@ -31,6 +33,7 @@ func (h *InboxHandler) processFollow(ctx context.Context, activity *RawActivity,
 			alias = &a
 		}
 	}
+	h.logger.Debug("processFollow resolved", "actor", activity.Actor, "endpoint", actorEndpoint, "alias", alias)
 
 	if err := h.db.AddFollowRequest(ctx, activity.Actor, pubKeyPEM, actorEndpoint, alias); err != nil {
 		return fmt.Errorf("storing follow request: %w", err)

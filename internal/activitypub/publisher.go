@@ -120,6 +120,7 @@ func (p *APPublisher) createAndDeliver(ctx context.Context, activityType string,
 	metrics.OutboundActivities.WithLabelValues(activityType).Inc()
 	activityID := p.activityURL()
 	followersURL := p.endpoint + "/ap/followers"
+	p.logger.Debug("publisher: createAndDeliver", "activityType", activityType, "activityID", activityID)
 
 	activity := map[string]any{
 		"@context": ContextActivityStreams,
@@ -187,11 +188,13 @@ func (p *APPublisher) enqueueToFollowers(ctx context.Context, activityID string,
 		}
 	}
 
+	p.logger.Debug("publisher: resolved inboxes", "activityID", activityID, "count", len(inboxes))
 	for inbox := range inboxes {
 		if err := p.db.EnqueueDelivery(ctx, activityID, inbox, activityJSON); err != nil {
 			p.logger.Error("failed to enqueue delivery", "inbox", inbox, "error", err)
 		} else {
 			metrics.DeliveryEnqueued.Add(1)
+			p.logger.Debug("publisher: enqueued delivery", "activityID", activityID, "inbox", inbox)
 		}
 	}
 

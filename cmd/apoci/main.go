@@ -34,6 +34,8 @@ var (
 	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 )
 
+var verbose bool
+
 func main() {
 	rootCmd := &cobra.Command{
 		Use:     "apoci",
@@ -48,6 +50,7 @@ func main() {
 
 	var configPath string
 	rootCmd.PersistentFlags().StringVarP(&configPath, "config", "c", defaultConfig, "config file path")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable debug logging")
 
 	rootCmd.AddCommand(serveCmd(&configPath))
 	rootCmd.AddCommand(followCmd(&configPath))
@@ -310,7 +313,7 @@ func printFollows(follows []database.Actor) {
 }
 
 func runFollowList(ctx context.Context, configPath string) error {
-	db, _, _, err := openAll(configPath)
+	db, _, _, err := openAll(configPath, cliLogger())
 	if err != nil {
 		return err
 	}
@@ -337,7 +340,7 @@ func printFollowRequests(requests []database.FollowRequest) {
 }
 
 func runFollowPending(ctx context.Context, configPath string) error {
-	db, _, _, err := openAll(configPath)
+	db, _, _, err := openAll(configPath, cliLogger())
 	if err != nil {
 		return err
 	}
@@ -352,7 +355,7 @@ func runFollowPending(ctx context.Context, configPath string) error {
 }
 
 func runFollowAccept(ctx context.Context, configPath, arg string) error {
-	db, identity, cfg, err := openAll(configPath)
+	db, identity, cfg, err := openAll(configPath, cliLogger())
 	if err != nil {
 		return err
 	}
@@ -393,7 +396,7 @@ func runFollowReject(ctx context.Context, configPath, arg string) error {
 }
 
 func runFollowOutgoing(ctx context.Context, configPath, status string) error {
-	db, _, _, err := openAll(configPath)
+	db, _, _, err := openAll(configPath, cliLogger())
 	if err != nil {
 		return err
 	}
@@ -468,7 +471,7 @@ func actorCmd(configPath *string) *cobra.Command {
 }
 
 func runActorList(ctx context.Context, configPath string) error {
-	db, _, _, err := openAll(configPath)
+	db, _, _, err := openAll(configPath, cliLogger())
 	if err != nil {
 		return err
 	}
@@ -594,6 +597,14 @@ func nopLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+func cliLogger() *slog.Logger {
+	if verbose {
+		opts := &slog.HandlerOptions{Level: slog.LevelDebug}
+		return slog.New(slog.NewTextHandler(os.Stderr, opts))
+	}
+	return nopLogger()
+}
+
 func remoteClient(remote, token string) *admin.Client {
 	if remote == "" {
 		remote = os.Getenv("APOCI_REMOTE_URL")
@@ -656,19 +667,20 @@ func openDB(cfg *config.Config, logger *slog.Logger) (*database.DB, error) {
 	}
 }
 
-func openAll(configPath string) (*database.DB, *activitypub.Identity, *config.Config, error) {
+func openAll(configPath string, logger *slog.Logger) (*database.DB, *activitypub.Identity, *config.Config, error) {
+	logger.Debug("loading config", "path", configPath)
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	logger := nopLogger()
-
+	logger.Debug("opening database", "driver", cfg.Database.Driver)
 	db, err := openDB(cfg, logger)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("opening database: %w", err)
 	}
 
+	logger.Debug("loading identity", "endpoint", cfg.Endpoint, "domain", cfg.Domain)
 	identity, err := activitypub.LoadOrCreateIdentity(cfg.Endpoint, cfg.Domain, cfg.AccountDomain, cfg.KeyPath, logger)
 	if err != nil {
 		_ = db.Close()
@@ -679,15 +691,17 @@ func openAll(configPath string) (*database.DB, *activitypub.Identity, *config.Co
 }
 
 func openFedService(configPath string) (*federation.Service, func(), error) {
-	db, identity, _, err := openAll(configPath)
+	logger := cliLogger()
+	db, identity, _, err := openAll(configPath, logger)
 	if err != nil {
 		return nil, nil, err
 	}
+	logger.Debug("federation service ready", "actorURL", identity.ActorURL)
 	svc := &federation.Service{
 		Fed:      &federation.RealFederator{Identity: identity, Enqueue: nil},
 		DB:       db,
 		ActorURL: identity.ActorURL,
-		Logger:   nopLogger(),
+		Logger:   logger,
 	}
 	return svc, func() { _ = db.Close() }, nil
 }
