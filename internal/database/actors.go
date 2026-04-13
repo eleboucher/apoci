@@ -54,15 +54,71 @@ func (db *DB) GetActor(ctx context.Context, actorURL string) (*Actor, error) {
 }
 
 // DeleteActor permanently removes the actor row for the given actorURL.
-// It returns nil if the actor did not exist.
 func (db *DB) DeleteActor(ctx context.Context, actorURL string) error {
-	_, err := db.bun.NewDelete().Model((*Actor)(nil)).
+	db.logger.Debug("DeleteActor", "actorURL", actorURL)
+	res, err := db.bun.NewDelete().Model((*Actor)(nil)).
 		Where("actor_url = ?", actorURL).
 		Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("deleting actor: %w", err)
 	}
+	n, _ := res.RowsAffected()
+	db.logger.Debug("DeleteActor done", "actorURL", actorURL, "rowsAffected", n)
 	return nil
+}
+
+// endpointDomainConds returns WHERE args matching an actor endpoint by domain:
+// https://domain, https://domain/*, and https://domain:* (with port).
+func endpointDomainConds(domain string) (exact, withPath, withPort string) {
+	base := "https://" + domain
+	return base, base + "/%", base + ":%"
+}
+
+// FindActorByInput looks up an actor by: exact actor_url, alias, name, or endpoint domain.
+func (db *DB) FindActorByInput(ctx context.Context, input string) (*Actor, error) {
+	db.logger.Debug("FindActorByInput", "input", input)
+
+	// Exact actor_url match
+	a := &Actor{}
+	if err := db.bun.NewSelect().Model(a).Where("actor_url = ?", input).Scan(ctx); err == nil {
+		db.logger.Debug("FindActorByInput matched by actor_url", "actorURL", a.ActorURL)
+		return a, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("querying actor by url: %w", err)
+	}
+
+	// Alias match
+	a = &Actor{}
+	if err := db.bun.NewSelect().Model(a).Where("alias = ?", input).Limit(1).Scan(ctx); err == nil {
+		db.logger.Debug("FindActorByInput matched by alias", "actorURL", a.ActorURL, "alias", input)
+		return a, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("querying actor by alias: %w", err)
+	}
+
+	// Name match
+	a = &Actor{}
+	if err := db.bun.NewSelect().Model(a).Where("name = ?", input).Limit(1).Scan(ctx); err == nil {
+		db.logger.Debug("FindActorByInput matched by name", "actorURL", a.ActorURL, "name", input)
+		return a, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("querying actor by name: %w", err)
+	}
+
+	// Endpoint domain match
+	a = &Actor{}
+	exact, withPath, withPort := endpointDomainConds(input)
+	if err := db.bun.NewSelect().Model(a).
+		Where("endpoint = ? OR endpoint LIKE ? OR endpoint LIKE ?", exact, withPath, withPort).
+		Limit(1).Scan(ctx); err == nil {
+		db.logger.Debug("FindActorByInput matched by endpoint", "actorURL", a.ActorURL, "endpoint", a.Endpoint)
+		return a, nil
+	} else if errors.Is(err, sql.ErrNoRows) {
+		db.logger.Debug("FindActorByInput no match", "input", input)
+		return nil, nil
+	} else {
+		return nil, fmt.Errorf("querying actor by endpoint: %w", err)
+	}
 }
 
 // ListActors returns all actors.
@@ -222,6 +278,7 @@ func (db *DB) AddFollow(ctx context.Context, actorURL, publicKeyPEM, endpoint st
 
 // RemoveFollow removes an inbound follower.
 func (db *DB) RemoveFollow(ctx context.Context, actorURL string) error {
+	db.logger.Debug("RemoveFollow", "actorURL", actorURL)
 	res, err := db.bun.NewUpdate().Model((*Actor)(nil)).
 		Set("they_follow_us = FALSE").
 		Set("they_follow_us_at = NULL").
@@ -231,6 +288,7 @@ func (db *DB) RemoveFollow(ctx context.Context, actorURL string) error {
 		return fmt.Errorf("removing follow: %w", err)
 	}
 	n, _ := res.RowsAffected()
+	db.logger.Debug("RemoveFollow done", "actorURL", actorURL, "rowsAffected", n)
 	if n == 0 {
 		return fmt.Errorf("no follow found for %q", actorURL)
 	}
@@ -386,6 +444,7 @@ func (db *DB) RejectOutgoingFollow(ctx context.Context, actorURL string) error {
 
 // RemoveOutgoingFollow removes an outgoing follow.
 func (db *DB) RemoveOutgoingFollow(ctx context.Context, actorURL string) error {
+	db.logger.Debug("RemoveOutgoingFollow", "actorURL", actorURL)
 	res, err := db.bun.NewUpdate().Model((*Actor)(nil)).
 		Set("we_follow_them = FALSE").
 		Set("we_follow_status = NULL").
@@ -396,6 +455,7 @@ func (db *DB) RemoveOutgoingFollow(ctx context.Context, actorURL string) error {
 		return fmt.Errorf("removing outgoing follow: %w", err)
 	}
 	n, _ := res.RowsAffected()
+	db.logger.Debug("RemoveOutgoingFollow done", "actorURL", actorURL, "rowsAffected", n)
 	if n == 0 {
 		return fmt.Errorf("no outgoing follow found for %q", actorURL)
 	}
@@ -518,20 +578,13 @@ func (db *DB) SetPeerHealth(ctx context.Context, actorURL string, healthy bool) 
 // SetPeerHealthByDomain updates is_healthy for all actors whose endpoint hostname matches.
 // Matches endpoints like https://domain/..., https://domain:port/..., and https://domain (no path).
 func (db *DB) SetPeerHealthByDomain(ctx context.Context, domain string, healthy bool) error {
-	// Match patterns:
-	// - https://domain (exact, no trailing path)
-	// - https://domain/ (with trailing slash)
-	// - https://domain/% (with path)
-	// - https://domain:% (with port, any suffix)
+	exact, withPath, withPort := endpointDomainConds(domain)
 	_, err := db.bun.NewRaw(
 		`UPDATE actors SET is_healthy = ?
 		 WHERE endpoint = ?
 		    OR endpoint LIKE ?
 		    OR endpoint LIKE ?`,
-		healthy,
-		"https://"+domain,
-		"https://"+domain+"/%",
-		"https://"+domain+":%").Exec(ctx)
+		healthy, exact, withPath, withPort).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("setting actor health by domain: %w", err)
 	}

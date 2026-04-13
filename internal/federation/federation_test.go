@@ -318,17 +318,16 @@ func TestRemoveFollowForceSkipsResolveError(t *testing.T) {
 
 	require.NoError(t, db.AddFollow(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
 
-	// With force=true, a resolve error must not prevent local record removal.
 	_, err := svc.RemoveFollow(ctx, peerActorURL, true)
 	require.NoError(t, err)
 
 	f, err := db.GetFollow(ctx, peerActorURL)
 	require.NoError(t, err)
-	require.Nil(t, f, "follow should be removed despite resolve failure")
+	require.Nil(t, f)
 
 	a, err := db.GetActor(ctx, peerActorURL)
 	require.NoError(t, err)
-	require.Nil(t, a, "actor row should be fully deleted on force")
+	require.Nil(t, a)
 }
 
 func TestRemoveFollowForceSkipsUndoError(t *testing.T) {
@@ -342,18 +341,17 @@ func TestRemoveFollowForceSkipsUndoError(t *testing.T) {
 
 	require.NoError(t, db.AddFollow(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
 
-	// With force=true, an Undo delivery failure must not prevent local record removal.
 	actorURL, err := svc.RemoveFollow(ctx, peerActorURL, true)
 	require.NoError(t, err)
 	require.Equal(t, peerActorURL, actorURL)
 
 	f, err := db.GetFollow(ctx, peerActorURL)
 	require.NoError(t, err)
-	require.Nil(t, f, "follow should be removed despite Undo failure")
+	require.Nil(t, f)
 
 	a, err := db.GetActor(ctx, peerActorURL)
 	require.NoError(t, err)
-	require.Nil(t, a, "actor row should be fully deleted on force")
+	require.Nil(t, a)
 }
 
 func TestRemoveFollowForceDeletesActorRow(t *testing.T) {
@@ -368,7 +366,7 @@ func TestRemoveFollowForceDeletesActorRow(t *testing.T) {
 
 	a, err := db.GetActor(ctx, peerActorURL)
 	require.NoError(t, err)
-	require.Nil(t, a, "actor row should be fully deleted when force=true")
+	require.Nil(t, a)
 }
 
 func TestRemoveFollowWithoutForceKeepsActorRow(t *testing.T) {
@@ -383,12 +381,11 @@ func TestRemoveFollowWithoutForceKeepsActorRow(t *testing.T) {
 
 	a, err := db.GetActor(ctx, peerActorURL)
 	require.NoError(t, err)
-	require.NotNil(t, a, "actor row should be kept when force=false")
-	require.False(t, a.TheyFollowUs, "they_follow_us should be cleared")
+	require.NotNil(t, a)
+	require.False(t, a.TheyFollowUs)
 }
 
 func TestRemoveFollowForceDeletesGhostActor(t *testing.T) {
-	// Ghost actor: exists in the actors table as a pure peer entry, no follow relationship.
 	fed := &mockFed{}
 	svc, db := testService(t, fed)
 	ctx := context.Background()
@@ -398,18 +395,73 @@ func TestRemoveFollowForceDeletesGhostActor(t *testing.T) {
 		Endpoint: "https://peer.example.com",
 	}))
 
-	// Without force this fails because there are no follow records.
 	_, err := svc.RemoveFollow(ctx, peerActorURL, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "removing follow")
 
-	// With force the actor row is deleted even though there were no follow records.
 	_, err = svc.RemoveFollow(ctx, peerActorURL, true)
 	require.NoError(t, err)
 
 	a, err := db.GetActor(ctx, peerActorURL)
 	require.NoError(t, err)
-	require.Nil(t, a, "ghost actor row should be deleted")
+	require.Nil(t, a)
+}
+
+func TestRemoveFollowForceMatchesByDomain(t *testing.T) {
+	// Resolution fails (peer offline), input is a bare domain, but the actor
+	// row has a full actor_url. FindActorByInput must match via endpoint.
+	fed := &mockFed{
+		resolveFollowTargetFn: func(_ context.Context, _ string) (string, error) {
+			return "", errors.New("resolve failed")
+		},
+	}
+	svc, db := testService(t, fed)
+	ctx := context.Background()
+
+	require.NoError(t, db.UpsertActor(ctx, &database.Actor{
+		ActorURL: peerActorURL, // https://peer.example.com/ap/actor
+		Endpoint: "https://peer.example.com",
+	}))
+
+	_, err := svc.RemoveFollow(ctx, "peer.example.com", true)
+	require.NoError(t, err)
+
+	a, err := db.GetActor(ctx, peerActorURL)
+	require.NoError(t, err)
+	require.Nil(t, a)
+}
+
+func TestRemoveFollowForceWebFingerMismatch(t *testing.T) {
+	// WebFinger succeeds but returns a different URL than what's stored locally.
+	// This can happen when the peer's WebFinger points to a different subdomain
+	// (e.g., stored: apoci.example.com, WebFinger returns: registry.example.com).
+	// With force=true, we prioritize local DB lookup by alias/name/endpoint.
+	const storedActorURL = "https://apoci.peer.com/ap/actor"
+	const webFingerActorURL = "https://registry.peer.com/ap/actor"
+	alias := "peer.com"
+
+	fed := &mockFed{
+		resolveFollowTargetFn: func(_ context.Context, _ string) (string, error) {
+			return webFingerActorURL, nil // Returns different URL than stored
+		},
+	}
+	svc, db := testService(t, fed)
+	ctx := context.Background()
+
+	// Store actor with alias matching the input
+	require.NoError(t, db.UpsertActor(ctx, &database.Actor{
+		ActorURL: storedActorURL,
+		Endpoint: "https://apoci.peer.com",
+		Alias:    &alias,
+	}))
+
+	removed, err := svc.RemoveFollow(ctx, "peer.com", true)
+	require.NoError(t, err)
+	require.Equal(t, storedActorURL, removed, "should remove the locally stored actor, not the WebFinger result")
+
+	a, err := db.GetActor(ctx, storedActorURL)
+	require.NoError(t, err)
+	require.Nil(t, a, "stored actor should be deleted")
 }
 
 func TestAcceptFollowSuccess(t *testing.T) {

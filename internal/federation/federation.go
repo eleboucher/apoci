@@ -26,6 +26,7 @@ type FederationRepository interface {
 	RemoveOutgoingFollow(ctx context.Context, actorURL string) error
 	UpsertActor(ctx context.Context, a *database.Actor) error
 	DeleteActor(ctx context.Context, actorURL string) error
+	FindActorByInput(ctx context.Context, input string) (*database.Actor, error)
 }
 
 type Federator interface {
@@ -87,15 +88,19 @@ type AddFollowResult struct {
 // outgoing follow and peer. The outgoing follow is stored before delivery so
 // that an immediate Accept from the peer can be matched.
 func (s *Service) AddFollow(ctx context.Context, input string) (*AddFollowResult, error) {
+	s.Logger.Debug("AddFollow", "input", input)
+
 	actorURL, err := s.Fed.ResolveFollowTarget(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("resolving target: %w", err)
 	}
+	s.Logger.Debug("AddFollow resolved", "actorURL", actorURL)
 
 	actor, err := s.Fed.FetchActor(ctx, actorURL)
 	if err != nil {
 		return nil, fmt.Errorf("fetching actor: %w", err)
 	}
+	s.Logger.Debug("AddFollow fetched actor", "actorID", actor.ID, "inbox", actor.Inbox)
 
 	// Store outgoing follow BEFORE delivery so that an immediate Accept from
 	// the peer can be matched by the inbox handler.
@@ -115,6 +120,7 @@ func (s *Service) AddFollow(ctx context.Context, input string) (*AddFollowResult
 		return nil, fmt.Errorf("marshaling follow: %w", err)
 	}
 
+	s.Logger.Debug("AddFollow delivering Follow activity", "inbox", actor.Inbox)
 	if err := s.Fed.DeliverActivity(ctx, actor.Inbox, activityJSON); err != nil {
 		return nil, fmt.Errorf("delivering follow: %w", err)
 	}
@@ -128,29 +134,52 @@ func (s *Service) AddFollow(ctx context.Context, input string) (*AddFollowResult
 		s.Logger.Warn("recording peer after follow", "actor", actor.ID, "error", err)
 	}
 
+	s.Logger.Debug("AddFollow done", "actorID", actor.ID)
 	return &AddFollowResult{ActorID: actor.ID}, nil
 }
 
-// RemoveFollow sends an Undo(Follow) and removes both inbound and outgoing
-// follow records. With force=true, the actor row itself is also deleted,
-// resolution/network errors are ignored, and the local records are removed
-// regardless. Returns an error only when neither table had a record.
+// RemoveFollow sends an Undo(Follow) and clears follow records for the given
+// actor. With force=true, resolution and Undo errors are tolerated, and the
+// actor row is hard-deleted.
 func (s *Service) RemoveFollow(ctx context.Context, input string, force bool) (string, error) {
-	actorURL, err := s.Fed.ResolveFollowTarget(ctx, input)
-	if err != nil {
-		if !force {
+	s.Logger.Debug("RemoveFollow", "input", input, "force", force)
+
+	var actorURL string
+	if force {
+		// Force: prioritize local DB lookup (handles WebFinger returning different URL)
+		a, err := s.DB.FindActorByInput(ctx, input)
+		if err != nil {
+			return "", fmt.Errorf("finding actor: %w", err)
+		}
+		if a != nil {
+			actorURL = a.ActorURL
+			s.Logger.Debug("RemoveFollow found locally", "actorURL", actorURL)
+		} else {
+			// Not in DB; try WebFinger as fallback
+			s.Logger.Debug("RemoveFollow not found locally, trying WebFinger", "input", input)
+			resolved, err := s.Fed.ResolveFollowTarget(ctx, input)
+			if err != nil {
+				return "", fmt.Errorf("actor %q not found locally and WebFinger failed: %w", input, err)
+			}
+			actorURL = resolved
+			s.Logger.Debug("RemoveFollow resolved via WebFinger", "actorURL", actorURL)
+		}
+	} else {
+		resolved, err := s.Fed.ResolveFollowTarget(ctx, input)
+		if err != nil {
 			return "", fmt.Errorf("resolving target: %w", err)
 		}
-		// Force mode: skip network resolution and treat input as the actor URL directly.
-		actorURL = input
+		actorURL = resolved
+		s.Logger.Debug("RemoveFollow resolved", "actorURL", actorURL)
 	}
 
-	if err := s.Fed.SendUndo(ctx, actorURL); err != nil && !force {
-		s.Logger.Warn("failed to send Undo to peer", "actor", actorURL, "error", err)
+	if err := s.Fed.SendUndo(ctx, actorURL); err != nil {
+		s.Logger.Debug("RemoveFollow Undo failed", "actor", actorURL, "error", err)
 	}
 
 	errFollow := s.DB.RemoveFollow(ctx, actorURL)
 	errOutgoing := s.DB.RemoveOutgoingFollow(ctx, actorURL)
+	s.Logger.Debug("RemoveFollow DB cleanup", "actorURL", actorURL, "followErr", errFollow, "outgoingErr", errOutgoing)
 
 	if errFollow != nil && errOutgoing != nil && !force {
 		return "", fmt.Errorf("removing follow: follow=%w, outgoing=%w", errFollow, errOutgoing)
@@ -160,6 +189,7 @@ func (s *Service) RemoveFollow(ctx context.Context, input string, force bool) (s
 		if err := s.DB.DeleteActor(ctx, actorURL); err != nil {
 			return "", fmt.Errorf("deleting actor: %w", err)
 		}
+		s.Logger.Debug("RemoveFollow deleted actor", "actorURL", actorURL)
 	}
 
 	return actorURL, nil
@@ -174,10 +204,13 @@ type AcceptFollowResult struct {
 // AcceptFollow accepts a pending follow request: promotes the DB record, delivers
 // an Accept activity, and optionally sends a mutual follow-back.
 func (s *Service) AcceptFollow(ctx context.Context, input, autoAccept string) (*AcceptFollowResult, error) {
+	s.Logger.Debug("AcceptFollow", "input", input, "autoAccept", autoAccept)
+
 	actorURL, err := s.Fed.ResolveFollowTarget(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("resolving target: %w", err)
 	}
+	s.Logger.Debug("AcceptFollow resolved", "actorURL", actorURL)
 
 	fr, err := s.DB.GetFollowRequest(ctx, actorURL)
 	if err != nil {
@@ -191,10 +224,12 @@ func (s *Service) AcceptFollow(ctx context.Context, input, autoAccept string) (*
 	if err := s.DB.AcceptFollowRequest(ctx, actorURL); err != nil {
 		return nil, fmt.Errorf("promoting follow: %w", err)
 	}
+	s.Logger.Debug("AcceptFollow promoted locally", "actorURL", actorURL)
 
 	if err := s.Fed.SendAccept(ctx, actorURL); err != nil {
 		return nil, fmt.Errorf("delivering accept (accepted locally): %w", err)
 	}
+	s.Logger.Debug("AcceptFollow delivered Accept", "actorURL", actorURL)
 
 	result := &AcceptFollowResult{ActorURL: actorURL}
 
@@ -204,6 +239,7 @@ func (s *Service) AcceptFollow(ctx context.Context, input, autoAccept string) (*
 			s.Logger.Warn("mutual follow-back failed", "actor", actorURL, "error", err)
 		} else if sent {
 			result.FollowedBack = true
+			s.Logger.Debug("AcceptFollow mutual follow-back sent", "actorURL", actorURL)
 		}
 	}
 
@@ -213,10 +249,13 @@ func (s *Service) AcceptFollow(ctx context.Context, input, autoAccept string) (*
 // RejectFollow rejects a pending follow request: marks it rejected in the DB
 // and delivers a Reject activity (best-effort).
 func (s *Service) RejectFollow(ctx context.Context, input string) (string, error) {
+	s.Logger.Debug("RejectFollow", "input", input)
+
 	actorURL, err := s.Fed.ResolveFollowTarget(ctx, input)
 	if err != nil {
 		return "", fmt.Errorf("resolving target: %w", err)
 	}
+	s.Logger.Debug("RejectFollow resolved", "actorURL", actorURL)
 
 	fr, err := s.DB.GetFollowRequest(ctx, actorURL)
 	if err != nil {
@@ -230,10 +269,13 @@ func (s *Service) RejectFollow(ctx context.Context, input string) (string, error
 	if err := s.DB.RejectFollowRequest(ctx, actorURL); err != nil {
 		return "", fmt.Errorf("rejecting follow request: %w", err)
 	}
+	s.Logger.Debug("RejectFollow rejected locally", "actorURL", actorURL)
 
 	// Best-effort delivery.
 	if err := s.Fed.SendReject(ctx, actorURL); err != nil {
 		s.Logger.Warn("reject delivery failed (rejected locally)", "actor", actorURL, "error", err)
+	} else {
+		s.Logger.Debug("RejectFollow delivered Reject", "actorURL", actorURL)
 	}
 
 	return actorURL, nil
