@@ -136,7 +136,8 @@ func TestAddFollowSuccess(t *testing.T) {
 	of, err := svc.DB.GetOutgoingFollow(ctx, peerActorURL)
 	require.NoError(t, err)
 	require.NotNil(t, of)
-	require.Equal(t, "pending", of.Status)
+	require.NotNil(t, of.WeFollowStatus)
+	require.Equal(t, "pending", *of.WeFollowStatus)
 
 	// Peer record must be created.
 	peer, err := db.GetPeer(ctx, peerActorURL)
@@ -521,9 +522,10 @@ func TestRefreshActorsUpdatesFollows(t *testing.T) {
 	fed := &mockFed{
 		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
 			return &activitypub.Actor{
-				ID:        peerActorURL,
-				Name:      "Peer Node",
-				PublicKey: activitypub.ActorPublicKey{PublicKeyPEM: "new-key"},
+				ID:           peerActorURL,
+				Name:         "Peer Node",
+				OCINamespace: "example.com", // split domain: account domain differs from registry domain
+				PublicKey:    activitypub.ActorPublicKey{PublicKeyPEM: "new-key"},
 			}, nil
 		},
 	}
@@ -534,9 +536,10 @@ func TestRefreshActorsUpdatesFollows(t *testing.T) {
 
 	f, err := db.GetFollow(ctx, peerActorURL)
 	require.NoError(t, err)
-	require.Equal(t, "new-key", f.PublicKeyPEM)
+	require.NotNil(t, f.PublicKeyPEM)
+	require.Equal(t, "new-key", *f.PublicKeyPEM)
 	require.NotNil(t, f.Alias)
-	require.Equal(t, "Peer Node", *f.Alias)
+	require.Equal(t, "example.com", *f.Alias)
 }
 
 func TestRefreshActorsUpdatesFollowRequests(t *testing.T) {
@@ -545,9 +548,10 @@ func TestRefreshActorsUpdatesFollowRequests(t *testing.T) {
 	fed := &mockFed{
 		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
 			return &activitypub.Actor{
-				ID:        peerActorURL,
-				Name:      "Peer Node",
-				PublicKey: activitypub.ActorPublicKey{PublicKeyPEM: "new-key"},
+				ID:           peerActorURL,
+				Name:         "Peer Node",
+				OCINamespace: "example.com",
+				PublicKey:    activitypub.ActorPublicKey{PublicKeyPEM: "new-key"},
 			}, nil
 		},
 	}
@@ -560,7 +564,7 @@ func TestRefreshActorsUpdatesFollowRequests(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "new-key", fr.PublicKeyPEM)
 	require.NotNil(t, fr.Alias)
-	require.Equal(t, "Peer Node", *fr.Alias)
+	require.Equal(t, "example.com", *fr.Alias)
 }
 
 func TestRefreshActorsSkipsOnFetchError(t *testing.T) {
@@ -579,10 +583,11 @@ func TestRefreshActorsSkipsOnFetchError(t *testing.T) {
 	// Original data must be untouched.
 	f, err := db.GetFollow(ctx, peerActorURL)
 	require.NoError(t, err)
-	require.Equal(t, "original-key", f.PublicKeyPEM)
+	require.NotNil(t, f.PublicKeyPEM)
+	require.Equal(t, "original-key", *f.PublicKeyPEM)
 }
 
-func TestRefreshActorsNoNameLeavesAliasNil(t *testing.T) {
+func TestRefreshActorsFallsBackToHostname(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
 	fed := &mockFed{
@@ -590,6 +595,7 @@ func TestRefreshActorsNoNameLeavesAliasNil(t *testing.T) {
 			return &activitypub.Actor{
 				ID:        peerActorURL,
 				PublicKey: activitypub.ActorPublicKey{PublicKeyPEM: "new-key"},
+				// No OCINamespace set, so alias falls back to actor URL hostname
 			}, nil
 		},
 	}
@@ -600,6 +606,8 @@ func TestRefreshActorsNoNameLeavesAliasNil(t *testing.T) {
 
 	f, err := db.GetFollow(ctx, peerActorURL)
 	require.NoError(t, err)
-	require.Equal(t, "new-key", f.PublicKeyPEM)
-	require.Nil(t, f.Alias)
+	require.NotNil(t, f.PublicKeyPEM)
+	require.Equal(t, "new-key", *f.PublicKeyPEM)
+	require.NotNil(t, f.Alias)
+	require.Equal(t, "peer.example.com", *f.Alias) // falls back to actor URL hostname
 }

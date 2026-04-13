@@ -19,14 +19,14 @@ type OutboxRepository interface {
 
 type FollowersRepository interface {
 	CountFollows(ctx context.Context) (int, error)
-	ListFollowsPage(ctx context.Context, offset, limit int) ([]database.Follow, error)
+	ListFollowsPage(ctx context.Context, offset, limit int) ([]database.Actor, error)
 }
 
 // FollowingRepository is the persistence port for the following handler.
 type FollowingRepository interface {
-	ListOutgoingFollows(ctx context.Context, status string) ([]database.OutgoingFollow, error)
+	ListOutgoingFollows(ctx context.Context, status string) ([]database.Actor, error)
 	CountOutgoingFollows(ctx context.Context, status string) (int, error)
-	ListOutgoingFollowsPage(ctx context.Context, status string, limit, offset int) ([]database.OutgoingFollow, error)
+	ListOutgoingFollowsPage(ctx context.Context, status string, limit, offset int) ([]database.Actor, error)
 }
 
 type OutboxHandler struct {

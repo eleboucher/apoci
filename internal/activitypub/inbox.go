@@ -30,9 +30,9 @@ type InboxRepository interface {
 	AcceptFollowRequest(ctx context.Context, actorURL string) error
 	RejectFollowRequest(ctx context.Context, actorURL string) error
 	GetFollowRequest(ctx context.Context, actorURL string) (*database.FollowRequest, error)
-	GetFollow(ctx context.Context, actorURL string) (*database.Follow, error)
+	GetFollow(ctx context.Context, actorURL string) (*database.Actor, error)
 	RemoveFollow(ctx context.Context, actorURL string) error
-	GetOutgoingFollow(ctx context.Context, actorURL string) (*database.OutgoingFollow, error)
+	GetOutgoingFollow(ctx context.Context, actorURL string) (*database.Actor, error)
 	AcceptOutgoingFollow(ctx context.Context, actorURL string) error
 	RejectOutgoingFollow(ctx context.Context, actorURL string) error
 	GetRepository(ctx context.Context, name string) (*database.Repository, error)
@@ -378,8 +378,10 @@ func (h *InboxHandler) dispatch(ctx context.Context, task InboxTask) error {
 
 func (h *InboxHandler) fetchActorPublicKey(ctx context.Context, actorURL string) (string, error) {
 	follow, err := h.db.GetFollow(ctx, actorURL)
-	if err == nil && follow != nil && follow.PublicKeyPEM != "" {
-		return follow.PublicKeyPEM, nil
+	if err == nil && follow != nil {
+		if pk := follow.GetPublicKeyPEM(); pk != "" {
+			return pk, nil
+		}
 	}
 
 	fr, err := h.db.GetFollowRequest(ctx, actorURL)

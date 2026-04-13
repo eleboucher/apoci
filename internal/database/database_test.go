@@ -11,6 +11,7 @@ import (
 )
 
 const testMediaType = "application/octet-stream"
+const testPeerName = "peer"
 
 func testDB(t *testing.T) *DB {
 	t.Helper()
@@ -203,13 +204,13 @@ func TestUploadSessionCRUD(t *testing.T) {
 	require.Nil(t, got3, "expected nil after delete")
 }
 
-func TestPeerCRUD(t *testing.T) {
+func TestActorCRUD(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
 
 	now := time.Now()
 	name := "bob-node"
-	peer := &Peer{
+	actor := &Actor{
 		ActorURL:          "https://bob.example.com/ap/actor",
 		Name:              &name,
 		Endpoint:          "https://registry.bob.example.com",
@@ -218,24 +219,24 @@ func TestPeerCRUD(t *testing.T) {
 		IsHealthy:         true,
 	}
 
-	require.NoError(t, db.UpsertPeer(ctx, peer))
+	require.NoError(t, db.UpsertActor(ctx, actor))
 
-	got, err := db.GetPeer(ctx, "https://bob.example.com/ap/actor")
+	got, err := db.GetActor(ctx, "https://bob.example.com/ap/actor")
 	require.NoError(t, err)
-	require.NotNil(t, got, "expected peer, got nil")
+	require.NotNil(t, got, "expected actor, got nil")
 	require.Equal(t, "https://registry.bob.example.com", got.Endpoint)
 
-	// List peers
-	peers, err := db.ListAllPeers(ctx)
+	// List actors
+	actors, err := db.ListAllPeers(ctx)
 	require.NoError(t, err)
-	require.Len(t, peers, 1)
-	require.True(t, peers[0].IsHealthy)
+	require.Len(t, actors, 1)
+	require.True(t, actors[0].IsHealthy)
 
 	// Set unhealthy
 	require.NoError(t, db.SetPeerHealth(ctx, "https://bob.example.com/ap/actor", false))
-	peers2, _ := db.ListAllPeers(ctx)
-	require.Len(t, peers2, 1)
-	require.False(t, peers2[0].IsHealthy)
+	actors2, _ := db.ListAllPeers(ctx)
+	require.Len(t, actors2, 1)
+	require.False(t, actors2[0].IsHealthy)
 }
 
 func TestPeerBlobLookup(t *testing.T) {
@@ -244,7 +245,7 @@ func TestPeerBlobLookup(t *testing.T) {
 
 	now := time.Now()
 	name := "alice"
-	require.NoError(t, db.UpsertPeer(ctx, &Peer{
+	require.NoError(t, db.UpsertActor(ctx, &Actor{
 		ActorURL:          testAliceActor,
 		Name:              &name,
 		Endpoint:          "https://alice.example.com",
@@ -366,7 +367,8 @@ func TestRefreshFollow(t *testing.T) {
 
 	f, err := db.GetFollow(ctx, testAliceActor)
 	require.NoError(t, err)
-	require.Equal(t, "new-pubkey", f.PublicKeyPEM)
+	require.NotNil(t, f.PublicKeyPEM)
+	require.Equal(t, "new-pubkey", *f.PublicKeyPEM)
 	require.Equal(t, "https://new.example.com", f.Endpoint)
 	require.NotNil(t, f.Alias)
 	require.Equal(t, "Alice", *f.Alias)
@@ -499,7 +501,7 @@ func TestCleanupStalePeerBlobsPassesTimeDirect(t *testing.T) {
 
 	now := time.Now()
 	name := "peer-for-cleanup"
-	require.NoError(t, db.UpsertPeer(ctx, &Peer{
+	require.NoError(t, db.UpsertActor(ctx, &Actor{
 		ActorURL:          "https://peer.example.com/ap/actor",
 		Name:              &name,
 		Endpoint:          "https://peer.example.com",
@@ -513,4 +515,267 @@ func TestCleanupStalePeerBlobsPassesTimeDirect(t *testing.T) {
 	n, err := db.CleanupStalePeerBlobs(ctx, -1*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), n)
+}
+
+func TestCountPeers(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	count, err := db.CountPeers(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 0, count)
+
+	now := time.Now()
+	require.NoError(t, db.UpsertActor(ctx, &Actor{
+		ActorURL:          "https://peer1.example.com/ap/actor",
+		Endpoint:          "https://peer1.example.com",
+		IsHealthy:         true,
+		ReplicationPolicy: "lazy",
+		LastSeenAt:        &now,
+	}))
+	require.NoError(t, db.UpsertActor(ctx, &Actor{
+		ActorURL:          "https://peer2.example.com/ap/actor",
+		Endpoint:          "https://peer2.example.com",
+		IsHealthy:         true,
+		ReplicationPolicy: "lazy",
+		LastSeenAt:        &now,
+	}))
+
+	count, err = db.CountPeers(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+}
+
+func TestCountFollows(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	count, err := db.CountFollows(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 0, count)
+
+	require.NoError(t, db.AddFollow(ctx, "https://follower1.example.com/ap/actor", "key1", "https://follower1.example.com", nil))
+	require.NoError(t, db.AddFollow(ctx, "https://follower2.example.com/ap/actor", "key2", "https://follower2.example.com", nil))
+
+	count, err = db.CountFollows(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+}
+
+func TestListFollowsPage(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	// Add 3 followers
+	require.NoError(t, db.AddFollow(ctx, "https://a.example.com/ap/actor", "key-a", "https://a.example.com", nil))
+	require.NoError(t, db.AddFollow(ctx, "https://b.example.com/ap/actor", "key-b", "https://b.example.com", nil))
+	require.NoError(t, db.AddFollow(ctx, "https://c.example.com/ap/actor", "key-c", "https://c.example.com", nil))
+
+	// Page 1
+	page1, err := db.ListFollowsPage(ctx, 0, 2)
+	require.NoError(t, err)
+	require.Len(t, page1, 2)
+
+	// Page 2
+	page2, err := db.ListFollowsPage(ctx, 2, 2)
+	require.NoError(t, err)
+	require.Len(t, page2, 1)
+}
+
+func TestListFollowsBatch(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, db.AddFollow(ctx, "https://batch1.example.com/ap/actor", "key1", "https://batch1.example.com", nil))
+	require.NoError(t, db.AddFollow(ctx, "https://batch2.example.com/ap/actor", "key2", "https://batch2.example.com", nil))
+	require.NoError(t, db.AddFollow(ctx, "https://batch3.example.com/ap/actor", "key3", "https://batch3.example.com", nil))
+
+	// First batch from ID 0
+	batch1, err := db.ListFollowsBatch(ctx, 0, 2)
+	require.NoError(t, err)
+	require.Len(t, batch1, 2)
+
+	// Next batch using cursor
+	batch2, err := db.ListFollowsBatch(ctx, batch1[1].ID, 2)
+	require.NoError(t, err)
+	require.Len(t, batch2, 1)
+}
+
+func TestListFollowing(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	// No following yet
+	following, err := db.ListFollowing(ctx)
+	require.NoError(t, err)
+	require.Len(t, following, 0)
+
+	// Add outgoing follow (pending)
+	require.NoError(t, db.AddOutgoingFollow(ctx, "https://target1.example.com/ap/actor"))
+
+	// Still empty - pending doesn't count
+	following, err = db.ListFollowing(ctx)
+	require.NoError(t, err)
+	require.Len(t, following, 0)
+
+	// Accept it
+	require.NoError(t, db.AcceptOutgoingFollow(ctx, "https://target1.example.com/ap/actor"))
+
+	// Now we have one
+	following, err = db.ListFollowing(ctx)
+	require.NoError(t, err)
+	require.Len(t, following, 1)
+	require.Equal(t, "https://target1.example.com/ap/actor", following[0].ActorURL)
+}
+
+func TestCountOutgoingFollows(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	count, err := db.CountOutgoingFollows(ctx, "pending")
+	require.NoError(t, err)
+	require.Equal(t, 0, count)
+
+	require.NoError(t, db.AddOutgoingFollow(ctx, "https://out1.example.com/ap/actor"))
+	require.NoError(t, db.AddOutgoingFollow(ctx, "https://out2.example.com/ap/actor"))
+
+	count, err = db.CountOutgoingFollows(ctx, "pending")
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+
+	// Accept one
+	require.NoError(t, db.AcceptOutgoingFollow(ctx, "https://out1.example.com/ap/actor"))
+
+	count, err = db.CountOutgoingFollows(ctx, "pending")
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+
+	count, err = db.CountOutgoingFollows(ctx, "accepted")
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+}
+
+func TestListOutgoingFollowsPage(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, db.AddOutgoingFollow(ctx, "https://page1.example.com/ap/actor"))
+	require.NoError(t, db.AddOutgoingFollow(ctx, "https://page2.example.com/ap/actor"))
+	require.NoError(t, db.AddOutgoingFollow(ctx, "https://page3.example.com/ap/actor"))
+
+	page1, err := db.ListOutgoingFollowsPage(ctx, "pending", 2, 0)
+	require.NoError(t, err)
+	require.Len(t, page1, 2)
+
+	page2, err := db.ListOutgoingFollowsPage(ctx, "pending", 2, 2)
+	require.NoError(t, err)
+	require.Len(t, page2, 1)
+}
+
+func TestUpsertPeer(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	name := "test-peer"
+	require.NoError(t, db.UpsertPeer(ctx, "https://peer.example.com/ap/actor", "https://peer.example.com", &name, "eager", true))
+
+	actor, err := db.GetActor(ctx, "https://peer.example.com/ap/actor")
+	require.NoError(t, err)
+	require.NotNil(t, actor)
+	require.Equal(t, "eager", actor.ReplicationPolicy)
+	require.True(t, actor.IsHealthy)
+	require.NotNil(t, actor.Name)
+	require.Equal(t, "test-peer", *actor.Name)
+
+	// Update
+	newName := "updated-peer"
+	require.NoError(t, db.UpsertPeer(ctx, "https://peer.example.com/ap/actor", "https://peer.example.com", &newName, "lazy", false))
+
+	actor, err = db.GetActor(ctx, "https://peer.example.com/ap/actor")
+	require.NoError(t, err)
+	require.Equal(t, "lazy", actor.ReplicationPolicy)
+	require.False(t, actor.IsHealthy)
+	require.Equal(t, "updated-peer", *actor.Name)
+}
+
+func TestGetPeer(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	// Not found
+	peer, err := db.GetPeer(ctx, "https://nonexistent.example.com/ap/actor")
+	require.NoError(t, err)
+	require.Nil(t, peer)
+
+	// Create and get
+	name := testPeerName
+	require.NoError(t, db.UpsertPeer(ctx, "https://peer.example.com/ap/actor", "https://peer.example.com", &name, "lazy", true))
+
+	peer, err = db.GetPeer(ctx, "https://peer.example.com/ap/actor")
+	require.NoError(t, err)
+	require.NotNil(t, peer)
+	require.Equal(t, "https://peer.example.com/ap/actor", peer.ActorURL)
+}
+
+func TestSetPeerHealthByDomain(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	name := testPeerName
+	// Test various endpoint formats
+	require.NoError(t, db.UpsertPeer(ctx, "https://healthy.example.com/ap/actor", "https://healthy.example.com/", &name, "lazy", true))
+	require.NoError(t, db.UpsertPeer(ctx, "https://healthy.example.com:8080/ap/actor2", "https://healthy.example.com:8080/", &name, "lazy", true))
+	require.NoError(t, db.UpsertPeer(ctx, "https://healthy.example.com:9000/ap/actor3", "https://healthy.example.com:9000", &name, "lazy", true)) // no trailing slash
+	require.NoError(t, db.UpsertPeer(ctx, "https://other.example.com/ap/actor", "https://other.example.com/", &name, "lazy", true))
+
+	// Mark healthy.example.com domain as unhealthy
+	require.NoError(t, db.SetPeerHealthByDomain(ctx, "healthy.example.com", false))
+
+	// Check the affected peers
+	actor1, _ := db.GetActor(ctx, "https://healthy.example.com/ap/actor")
+	require.False(t, actor1.IsHealthy)
+
+	actor2, _ := db.GetActor(ctx, "https://healthy.example.com:8080/ap/actor2")
+	require.False(t, actor2.IsHealthy)
+
+	actor3, _ := db.GetActor(ctx, "https://healthy.example.com:9000/ap/actor3")
+	require.False(t, actor3.IsHealthy)
+
+	// Other domain unaffected
+	actor4, _ := db.GetActor(ctx, "https://other.example.com/ap/actor")
+	require.True(t, actor4.IsHealthy)
+}
+
+func TestUnhealthyPeerDomains(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	name := testPeerName
+	require.NoError(t, db.UpsertPeer(ctx, "https://unhealthy1.example.com/ap/actor", "https://unhealthy1.example.com", &name, "lazy", false))
+	require.NoError(t, db.UpsertPeer(ctx, "https://unhealthy2.example.com/ap/actor", "https://unhealthy2.example.com", &name, "lazy", false))
+	require.NoError(t, db.UpsertPeer(ctx, "https://healthy.example.com/ap/actor", "https://healthy.example.com", &name, "lazy", true))
+
+	domains, err := db.UnhealthyPeerDomains(ctx)
+	require.NoError(t, err)
+	require.Len(t, domains, 2)
+	require.Contains(t, domains, "unhealthy1.example.com")
+	require.Contains(t, domains, "unhealthy2.example.com")
+}
+
+func TestListHealthyActors(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	name := testPeerName
+	require.NoError(t, db.UpsertPeer(ctx, "https://healthy1.example.com/ap/actor", "https://healthy1.example.com", &name, "lazy", true))
+	require.NoError(t, db.UpsertPeer(ctx, "https://healthy2.example.com/ap/actor", "https://healthy2.example.com", &name, "lazy", true))
+	require.NoError(t, db.UpsertPeer(ctx, "https://unhealthy.example.com/ap/actor", "https://unhealthy.example.com", &name, "lazy", false))
+
+	healthy, err := db.ListHealthyActors(ctx)
+	require.NoError(t, err)
+	require.Len(t, healthy, 2)
+
+	for _, a := range healthy {
+		require.True(t, a.IsHealthy)
+	}
 }

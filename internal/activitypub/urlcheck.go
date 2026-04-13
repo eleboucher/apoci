@@ -26,6 +26,25 @@ func EndpointFromActorURL(actorURL string) string {
 	return u.Scheme + "://" + u.Host
 }
 
+// DomainFromActorURL extracts the hostname from an actor URL.
+func DomainFromActorURL(actorURL string) string {
+	u, err := url.Parse(actorURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// ActorAlias returns the account domain for display.
+// Uses OCINamespace (account domain) when available for split-domain setups,
+// otherwise falls back to the actor URL hostname.
+func ActorAlias(actor *Actor) string {
+	if actor.OCINamespace != "" {
+		return actor.OCINamespace
+	}
+	return DomainFromActorURL(actor.ID)
+}
+
 func validateFederationURL(rawURL string) error {
 	insecure := allowInsecureHTTP.Load()
 

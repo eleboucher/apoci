@@ -23,7 +23,7 @@ const followerBatchSize = 100
 
 type PublisherRepository interface {
 	PutActivity(ctx context.Context, activityID, activityType, actorURL string, activityJSON []byte) error
-	ListFollowsBatch(ctx context.Context, afterID int64, limit int) ([]database.Follow, error)
+	ListFollowsBatch(ctx context.Context, afterID int64, limit int) ([]database.Actor, error)
 	EnqueueDelivery(ctx context.Context, activityID, inboxURL string, activityJSON []byte) error
 }
 
