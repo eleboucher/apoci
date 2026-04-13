@@ -18,6 +18,7 @@ func (s *Server) adminRouter() http.Handler {
 	r.Use(bearerAuthMiddleware(s.cfg.AdminToken))
 
 	r.Get("/identity", s.adminGetIdentity)
+	r.Get("/actors", s.adminListActors)
 	r.Get("/follows", s.adminListFollows)
 	r.Get("/follows/pending", s.adminListPending)
 	r.Get("/follows/outgoing", s.adminListOutgoingFollows)
@@ -45,6 +46,16 @@ func (s *Server) adminGetIdentity(w http.ResponseWriter, r *http.Request) {
 		"endpoint":      s.cfg.Endpoint,
 		"publicKey":     pubPEM,
 	})
+}
+
+func (s *Server) adminListActors(w http.ResponseWriter, r *http.Request) {
+	actors, err := s.db.ListActors(r.Context())
+	if err != nil {
+		s.logger.Error("listing actors", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, actors)
 }
 
 func (s *Server) adminListFollows(w http.ResponseWriter, r *http.Request) {

@@ -325,6 +325,10 @@ func TestRemoveFollowForceSkipsResolveError(t *testing.T) {
 	f, err := db.GetFollow(ctx, peerActorURL)
 	require.NoError(t, err)
 	require.Nil(t, f, "follow should be removed despite resolve failure")
+
+	a, err := db.GetActor(ctx, peerActorURL)
+	require.NoError(t, err)
+	require.Nil(t, a, "actor row should be fully deleted on force")
 }
 
 func TestRemoveFollowForceSkipsUndoError(t *testing.T) {
@@ -346,6 +350,41 @@ func TestRemoveFollowForceSkipsUndoError(t *testing.T) {
 	f, err := db.GetFollow(ctx, peerActorURL)
 	require.NoError(t, err)
 	require.Nil(t, f, "follow should be removed despite Undo failure")
+
+	a, err := db.GetActor(ctx, peerActorURL)
+	require.NoError(t, err)
+	require.Nil(t, a, "actor row should be fully deleted on force")
+}
+
+func TestRemoveFollowForceDeletesActorRow(t *testing.T) {
+	fed := &mockFed{}
+	svc, db := testService(t, fed)
+	ctx := context.Background()
+
+	require.NoError(t, db.AddFollow(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
+
+	_, err := svc.RemoveFollow(ctx, peerActorURL, true)
+	require.NoError(t, err)
+
+	a, err := db.GetActor(ctx, peerActorURL)
+	require.NoError(t, err)
+	require.Nil(t, a, "actor row should be fully deleted when force=true")
+}
+
+func TestRemoveFollowWithoutForceKeepsActorRow(t *testing.T) {
+	fed := &mockFed{}
+	svc, db := testService(t, fed)
+	ctx := context.Background()
+
+	require.NoError(t, db.AddFollow(ctx, peerActorURL, "pubkey", "https://peer.example.com", nil))
+
+	_, err := svc.RemoveFollow(ctx, peerActorURL, false)
+	require.NoError(t, err)
+
+	a, err := db.GetActor(ctx, peerActorURL)
+	require.NoError(t, err)
+	require.NotNil(t, a, "actor row should be kept when force=false")
+	require.False(t, a.TheyFollowUs, "they_follow_us should be cleared")
 }
 
 func TestAcceptFollowSuccess(t *testing.T) {

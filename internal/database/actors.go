@@ -53,6 +53,18 @@ func (db *DB) GetActor(ctx context.Context, actorURL string) (*Actor, error) {
 	return a, nil
 }
 
+// DeleteActor permanently removes the actor row for the given actorURL.
+// It returns nil if the actor did not exist.
+func (db *DB) DeleteActor(ctx context.Context, actorURL string) error {
+	_, err := db.bun.NewDelete().Model((*Actor)(nil)).
+		Where("actor_url = ?", actorURL).
+		Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("deleting actor: %w", err)
+	}
+	return nil
+}
+
 // ListActors returns all actors.
 func (db *DB) ListActors(ctx context.Context) ([]Actor, error) {
 	var actors []Actor

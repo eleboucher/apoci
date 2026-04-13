@@ -772,6 +772,10 @@ func TestAdminRemoveFollowForceRemovesDespiteUnreachablePeer(t *testing.T) {
 	f, err := s.db.GetFollow(ctx, actorURL)
 	require.NoError(t, err)
 	require.Nil(t, f, "follow should be removed even when peer is unreachable")
+
+	a, err := s.db.GetActor(ctx, actorURL)
+	require.NoError(t, err)
+	require.Nil(t, a, "actor row should be fully deleted on force")
 }
 
 func TestAdminRemoveFollowWithoutForceFailsOnUnreachablePeer(t *testing.T) {

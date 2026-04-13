@@ -52,6 +52,7 @@ func main() {
 	rootCmd.AddCommand(serveCmd(&configPath))
 	rootCmd.AddCommand(followCmd(&configPath))
 	rootCmd.AddCommand(identityCmd(&configPath))
+	rootCmd.AddCommand(actorCmd(&configPath))
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -429,6 +430,96 @@ func printOutgoingFollows(follows []database.Actor) {
 		rows[i] = []string{f.ActorURL, status, f.CreatedAt.Format("2006-01-02 15:04"), acceptedAt}
 	}
 	printTable([]string{"ACTOR", "STATUS", "CREATED", "ACCEPTED"}, rows)
+}
+
+func actorCmd(configPath *string) *cobra.Command {
+	var remote, token string
+
+	cmd := &cobra.Command{
+		Use:   "actor",
+		Short: "Inspect known actors",
+	}
+
+	cmd.PersistentFlags().StringVar(&remote, "remote", "", "remote instance URL")
+	cmd.PersistentFlags().StringVar(&token, "token", "", "registry token for remote auth")
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "list",
+		Short: "List all known actors",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if c := remoteClient(remote, token); c != nil {
+				data, err := c.ListActors(cmd.Context())
+				if err != nil {
+					return err
+				}
+				var actors []database.Actor
+				if err := json.Unmarshal(data, &actors); err != nil {
+					fmt.Println(string(data))
+					return nil
+				}
+				printActors(actors)
+				return nil
+			}
+			return runActorList(cmd.Context(), *configPath)
+		},
+	})
+
+	return cmd
+}
+
+func runActorList(ctx context.Context, configPath string) error {
+	db, _, _, err := openAll(configPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	actors, err := db.ListActors(ctx)
+	if err != nil {
+		return err
+	}
+	printActors(actors)
+	return nil
+}
+
+func printActors(actors []database.Actor) {
+	if len(actors) == 0 {
+		_, _ = lipgloss.Println(dimStyle.Render("No known actors."))
+		return
+	}
+	rows := make([][]string, len(actors))
+	for i, a := range actors {
+		healthy := "yes"
+		if !a.IsHealthy {
+			healthy = dimStyle.Render("no")
+		}
+
+		follows := ""
+		if a.TheyFollowUs {
+			follows += "follower"
+		}
+		if a.WeFollowThem {
+			status := "pending"
+			if a.WeFollowStatus != nil {
+				status = *a.WeFollowStatus
+			}
+			if follows != "" {
+				follows += ", "
+			}
+			follows += "following(" + status + ")"
+		}
+		if follows == "" {
+			follows = dimStyle.Render("—")
+		}
+
+		lastSeen := "—"
+		if a.LastSeenAt != nil {
+			lastSeen = a.LastSeenAt.Format("2006-01-02 15:04")
+		}
+
+		rows[i] = []string{followDisplayName(a.ActorURL, a.Alias), a.Endpoint, healthy, follows, lastSeen}
+	}
+	printTable([]string{"ACTOR", "ENDPOINT", "HEALTHY", "RELATIONSHIP", "LAST SEEN"}, rows)
 }
 
 func identityCmd(configPath *string) *cobra.Command {

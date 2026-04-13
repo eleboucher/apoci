@@ -25,6 +25,7 @@ type FederationRepository interface {
 	GetOutgoingFollow(ctx context.Context, actorURL string) (*database.Actor, error)
 	RemoveOutgoingFollow(ctx context.Context, actorURL string) error
 	UpsertActor(ctx context.Context, a *database.Actor) error
+	DeleteActor(ctx context.Context, actorURL string) error
 }
 
 type Federator interface {
@@ -131,7 +132,9 @@ func (s *Service) AddFollow(ctx context.Context, input string) (*AddFollowResult
 }
 
 // RemoveFollow sends an Undo(Follow) and removes both inbound and outgoing
-// follow records. Returns an error only when neither table had a record.
+// follow records. With force=true, the actor row itself is also deleted,
+// resolution/network errors are ignored, and the local records are removed
+// regardless. Returns an error only when neither table had a record.
 func (s *Service) RemoveFollow(ctx context.Context, input string, force bool) (string, error) {
 	actorURL, err := s.Fed.ResolveFollowTarget(ctx, input)
 	if err != nil {
@@ -152,6 +155,13 @@ func (s *Service) RemoveFollow(ctx context.Context, input string, force bool) (s
 	if errFollow != nil && errOutgoing != nil {
 		return "", fmt.Errorf("removing follow: follow=%w, outgoing=%w", errFollow, errOutgoing)
 	}
+
+	if force {
+		if err := s.DB.DeleteActor(ctx, actorURL); err != nil {
+			return "", fmt.Errorf("deleting actor: %w", err)
+		}
+	}
+
 	return actorURL, nil
 }
 

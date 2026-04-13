@@ -33,6 +33,11 @@ func (c *Client) GetIdentity(ctx context.Context) (map[string]string, error) {
 	return out, c.get(ctx, "/identity", &out)
 }
 
+func (c *Client) ListActors(ctx context.Context) (json.RawMessage, error) {
+	var out json.RawMessage
+	return out, c.get(ctx, "/actors", &out)
+}
+
 func (c *Client) ListFollows(ctx context.Context) (json.RawMessage, error) {
 	var out json.RawMessage
 	return out, c.get(ctx, "/follows", &out)

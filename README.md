@@ -139,7 +139,7 @@ All outbound activities (including follow Accept/Reject) go through a persistent
 ```bash
 apoci follow list
 apoci follow remove bar.com
-apoci follow remove bar.com --force   # remove local records even if the peer is unreachable
+apoci follow remove bar.com --force   # remove follow flags AND fully delete the actor record, even if the peer is unreachable
 apoci identity show
 ```
 
@@ -514,7 +514,7 @@ All admin endpoints require the admin token as a bearer token (`{dataDir}/admin.
 | `POST` | `/api/admin/follows` | Follow a peer |
 | `POST` | `/api/admin/follows/accept` | Accept a follow request |
 | `POST` | `/api/admin/follows/reject` | Reject a follow request |
-| `DELETE` | `/api/admin/follows` | Unfollow a peer. Body: `{"target": "<actor-url>"}`. Pass `"force": true` to remove local records even when the peer is unreachable (skips sending an ActivityPub `Undo Follow`). |
+| `DELETE` | `/api/admin/follows` | Unfollow a peer. Body: `{"target": "<actor-url>"}`. Pass `"force": true` to fully delete the actor record and skip sending an ActivityPub `Undo Follow`, even if the peer is unreachable. Without `force`, an unreachable peer causes a `500`. |
 
 ### Discovery & Health
 

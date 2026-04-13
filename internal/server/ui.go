@@ -117,7 +117,7 @@ func (s *Server) handleUIIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	followingCount, err := s.db.CountPeers(ctx)
+	followingCount, err := s.db.CountOutgoingFollows(ctx, "accepted")
 	if err != nil {
 		s.logger.Error("failed to count following for UI", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
