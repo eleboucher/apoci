@@ -8,7 +8,7 @@ endpoint: "https://registry.example.com"
 # keyPath: "/apoci/storage/ap.key"
 # registryToken: ""              # auto-generated to {dataDir}/registry.token if empty
 # adminToken: ""                 # auto-generated to {dataDir}/admin.token if empty (separate from registryToken)
-# accountDomain: "example.com"  # vanity domain for @registry@example.com (defaults to endpoint domain)
+# accountDomain: "example.com"  # vanity domain for WebFinger (defaults to endpoint domain)
 
 # storage:
 #   type: local        # local (default) or s3

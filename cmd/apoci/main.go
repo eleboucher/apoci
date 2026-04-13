@@ -157,7 +157,7 @@ func followCmd(configPath *string) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				var follows []database.Follow
+				var follows []database.Actor
 				if err := json.Unmarshal(data, &follows); err != nil {
 					fmt.Println(string(data))
 					return nil
@@ -234,7 +234,7 @@ func followCmd(configPath *string) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				var follows []database.OutgoingFollow
+				var follows []database.Actor
 				if err := json.Unmarshal(data, &follows); err != nil {
 					fmt.Println(string(data))
 					return nil
@@ -289,14 +289,18 @@ func followDisplayName(actorURL string, alias *string) string {
 	return actorURL
 }
 
-func printFollows(follows []database.Follow) {
+func printFollows(follows []database.Actor) {
 	if len(follows) == 0 {
-		_, _ = lipgloss.Println(dimStyle.Render("Not following anyone."))
+		_, _ = lipgloss.Println(dimStyle.Render("No followers."))
 		return
 	}
 	rows := make([][]string, len(follows))
 	for i, f := range follows {
-		rows[i] = []string{followDisplayName(f.ActorURL, f.Alias), f.Endpoint, f.ApprovedAt.Format("2006-01-02")}
+		since := ""
+		if f.TheyFollowUsAt != nil {
+			since = f.TheyFollowUsAt.Format("2006-01-02")
+		}
+		rows[i] = []string{followDisplayName(f.ActorURL, f.Alias), f.Endpoint, since}
 	}
 	printTable([]string{"ACTOR", "ENDPOINT", "SINCE"}, rows)
 }
@@ -391,7 +395,7 @@ func runFollowOutgoing(ctx context.Context, configPath, status string) error {
 	}
 	defer func() { _ = db.Close() }()
 
-	var follows []database.OutgoingFollow
+	var follows []database.Actor
 	if status != "" {
 		follows, err = db.ListOutgoingFollows(ctx, status)
 	} else {
@@ -404,18 +408,22 @@ func runFollowOutgoing(ctx context.Context, configPath, status string) error {
 	return nil
 }
 
-func printOutgoingFollows(follows []database.OutgoingFollow) {
+func printOutgoingFollows(follows []database.Actor) {
 	if len(follows) == 0 {
 		_, _ = lipgloss.Println(dimStyle.Render("No outgoing follow requests."))
 		return
 	}
 	rows := make([][]string, len(follows))
 	for i, f := range follows {
-		acceptedAt := "-"
-		if f.AcceptedAt != nil {
-			acceptedAt = f.AcceptedAt.Format("2006-01-02 15:04")
+		status := "-"
+		if f.WeFollowStatus != nil {
+			status = *f.WeFollowStatus
 		}
-		rows[i] = []string{f.ActorURL, f.Status, f.CreatedAt.Format("2006-01-02 15:04"), acceptedAt}
+		acceptedAt := "-"
+		if f.WeFollowAcceptAt != nil {
+			acceptedAt = f.WeFollowAcceptAt.Format("2006-01-02 15:04")
+		}
+		rows[i] = []string{f.ActorURL, status, f.CreatedAt.Format("2006-01-02 15:04"), acceptedAt}
 	}
 	printTable([]string{"ACTOR", "STATUS", "CREATED", "ACCEPTED"}, rows)
 }
@@ -482,7 +490,6 @@ func printIdentity(name, actorURL, keyID, domain, accountDomain, endpoint, publi
 		rows = append(rows, []string{"Account", accountDomain})
 	}
 	rows = append(rows,
-		[]string{"Handle", "@registry@" + accountDomain},
 		[]string{"Endpoint", endpoint},
 		[]string{"Public Key", publicKey},
 	)

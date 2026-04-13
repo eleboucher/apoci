@@ -6,6 +6,13 @@ import (
 	"github.com/uptrace/bun"
 )
 
+// Outgoing follow status constants.
+const (
+	FollowStatusPending  = "pending"
+	FollowStatusAccepted = "accepted"
+	FollowStatusRejected = "rejected"
+)
+
 type Repository struct {
 	bun.BaseModel `bun:"table:repositories"`
 
@@ -78,28 +85,58 @@ type PeerBlob struct {
 	LastVerifiedAt *time.Time `bun:"last_verified_at"`
 }
 
-type Peer struct {
-	bun.BaseModel `bun:"table:peers"`
+// Actor represents a remote ActivityPub actor. Consolidates peers, follows, and outgoing_follows.
+type Actor struct {
+	bun.BaseModel `bun:"table:actors"`
 
-	ID                int64      `bun:"id,pk,autoincrement"`
-	ActorURL          string     `bun:"actor_url,notnull,unique"`
-	Name              *string    `bun:"name"`
-	Endpoint          string     `bun:"endpoint,notnull"`
-	ReplicationPolicy string     `bun:"replication_policy,default:'lazy'"`
-	LastSeenAt        *time.Time `bun:"last_seen_at"`
-	IsHealthy         bool       `bun:"is_healthy,notnull,default:true"`
-	CreatedAt         time.Time  `bun:"created_at,notnull,default:current_timestamp"`
+	ID           int64   `bun:"id,pk,autoincrement" json:"id"`
+	ActorURL     string  `bun:"actor_url,notnull,unique" json:"actor_url"`
+	Name         *string `bun:"name" json:"name,omitempty"`
+	Alias        *string `bun:"alias" json:"alias,omitempty"`
+	Endpoint     string  `bun:"endpoint,notnull" json:"endpoint"`
+	PublicKeyPEM *string `bun:"public_key_pem" json:"public_key_pem,omitempty"`
+
+	// Inbound: they follow us
+	TheyFollowUs   bool       `bun:"they_follow_us,notnull,default:false" json:"they_follow_us"`
+	TheyFollowUsAt *time.Time `bun:"they_follow_us_at" json:"they_follow_us_at,omitempty"`
+
+	// Outbound: we follow them
+	WeFollowThem     bool       `bun:"we_follow_them,notnull,default:false" json:"we_follow_them"`
+	WeFollowStatus   *string    `bun:"we_follow_status" json:"we_follow_status,omitempty"` // pending, accepted, rejected
+	WeFollowAcceptAt *time.Time `bun:"we_follow_accept_at" json:"we_follow_accept_at,omitempty"`
+
+	// Health & replication (for blob fetching)
+	IsHealthy         bool       `bun:"is_healthy,notnull,default:true" json:"is_healthy"`
+	ReplicationPolicy string     `bun:"replication_policy,notnull,default:'lazy'" json:"replication_policy"`
+	LastSeenAt        *time.Time `bun:"last_seen_at" json:"last_seen_at,omitempty"`
+
+	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 }
 
-type Follow struct {
-	bun.BaseModel `bun:"table:follows"`
+func (a *Actor) HasPendingOutgoingFollow() bool {
+	return a != nil && a.WeFollowThem && a.WeFollowStatus != nil && *a.WeFollowStatus == FollowStatusPending
+}
 
-	ID           int64     `bun:"id,pk,autoincrement"`
-	ActorURL     string    `bun:"actor_url,notnull,unique"`
-	PublicKeyPEM string    `bun:"public_key_pem,notnull"`
-	Endpoint     string    `bun:"endpoint,notnull"`
-	Alias        *string   `bun:"alias"`
-	ApprovedAt   time.Time `bun:"approved_at,notnull,default:current_timestamp"`
+func (a *Actor) HasAcceptedOutgoingFollow() bool {
+	return a != nil && a.WeFollowThem && a.WeFollowStatus != nil && *a.WeFollowStatus == FollowStatusAccepted
+}
+
+func (a *Actor) HasPendingOrAcceptedOutgoingFollow() bool {
+	return a.HasPendingOutgoingFollow() || a.HasAcceptedOutgoingFollow()
+}
+
+func (a *Actor) GetPublicKeyPEM() string {
+	if a == nil || a.PublicKeyPEM == nil {
+		return ""
+	}
+	return *a.PublicKeyPEM
+}
+
+func (a *Actor) GetWeFollowStatus() string {
+	if a == nil || a.WeFollowStatus == nil {
+		return ""
+	}
+	return *a.WeFollowStatus
 }
 
 type FollowRequest struct {
@@ -149,16 +186,6 @@ type Delivery struct {
 	LastError     *string   `bun:"last_error"`
 	Status        string    `bun:"status,notnull,default:'pending'"`
 	CreatedAt     time.Time `bun:"created_at,notnull,default:current_timestamp"`
-}
-
-type OutgoingFollow struct {
-	bun.BaseModel `bun:"table:outgoing_follows"`
-
-	ID         int64      `bun:"id,pk,autoincrement"`
-	ActorURL   string     `bun:"actor_url,notnull,unique"`
-	Status     string     `bun:"status,notnull,default:'pending'"`
-	CreatedAt  time.Time  `bun:"created_at,notnull,default:current_timestamp"`
-	AcceptedAt *time.Time `bun:"accepted_at"`
 }
 
 type DeletedManifest struct {

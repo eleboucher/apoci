@@ -14,7 +14,7 @@ import (
 
 type FederationRepository interface {
 	RemoveFollow(ctx context.Context, actorURL string) error
-	ListFollows(ctx context.Context) ([]database.Follow, error)
+	ListFollows(ctx context.Context) ([]database.Actor, error)
 	RefreshFollow(ctx context.Context, actorURL, publicKeyPEM, endpoint string, alias *string) error
 	GetFollowRequest(ctx context.Context, actorURL string) (*database.FollowRequest, error)
 	AcceptFollowRequest(ctx context.Context, actorURL string) error
@@ -22,9 +22,9 @@ type FederationRepository interface {
 	ListFollowRequests(ctx context.Context) ([]database.FollowRequest, error)
 	RefreshFollowRequest(ctx context.Context, actorURL, publicKeyPEM, endpoint string, alias *string) error
 	AddOutgoingFollow(ctx context.Context, actorURL string) error
-	GetOutgoingFollow(ctx context.Context, actorURL string) (*database.OutgoingFollow, error)
+	GetOutgoingFollow(ctx context.Context, actorURL string) (*database.Actor, error)
 	RemoveOutgoingFollow(ctx context.Context, actorURL string) error
-	UpsertPeer(ctx context.Context, p *database.Peer) error
+	UpsertActor(ctx context.Context, a *database.Actor) error
 }
 
 type Federator interface {
@@ -118,7 +118,7 @@ func (s *Service) AddFollow(ctx context.Context, input string) (*AddFollowResult
 		return nil, fmt.Errorf("delivering follow: %w", err)
 	}
 
-	if err := s.DB.UpsertPeer(ctx, &database.Peer{
+	if err := s.DB.UpsertActor(ctx, &database.Actor{
 		ActorURL:          actor.ID,
 		Endpoint:          activitypub.EndpointFromActorURL(actor.ID),
 		ReplicationPolicy: "lazy",
@@ -273,17 +273,13 @@ func (s *Service) RefreshActors(ctx context.Context) {
 	}
 }
 
-// actorAlias returns the actor's display name capped at 256 runes, or nil
-// when the actor has no name set.
+// actorAlias returns the actor's account domain for display.
 func actorAlias(actor *activitypub.Actor) *string {
-	if actor.Name == "" {
+	alias := activitypub.ActorAlias(actor)
+	if alias == "" {
 		return nil
 	}
-	name := actor.Name
-	if runes := []rune(name); len(runes) > 256 {
-		name = string(runes[:256])
-	}
-	return &name
+	return &alias
 }
 
 // sendMutualFollowBack sends a Follow back to an actor we just accepted,
@@ -307,7 +303,7 @@ func (s *Service) sendMutualFollowBack(ctx context.Context, actorURL string) (bo
 		return false, fmt.Errorf("storing outgoing follow: %w", err)
 	}
 
-	if err := s.DB.UpsertPeer(ctx, &database.Peer{
+	if err := s.DB.UpsertActor(ctx, &database.Actor{
 		ActorURL:          actorID,
 		Endpoint:          activitypub.EndpointFromActorURL(actorID),
 		ReplicationPolicy: "lazy",
