@@ -164,7 +164,7 @@ func TestAdminListFollowsWithData(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var follows []struct {
-		ActorURL string `json:"ActorURL"`
+		ActorURL string `json:"actor_url"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&follows))
 	require.Len(t, follows, 2)
@@ -373,7 +373,8 @@ func TestAdminAddFollowSuccess(t *testing.T) {
 	of, err := s.db.GetOutgoingFollow(ctx, actorURL)
 	require.NoError(t, err)
 	require.NotNil(t, of, "outgoing follow should be persisted")
-	require.Equal(t, "pending", of.Status)
+	require.NotNil(t, of.WeFollowStatus)
+	require.Equal(t, "pending", *of.WeFollowStatus)
 }
 
 func TestAdminAcceptFollowMissingTarget(t *testing.T) {
@@ -908,6 +909,6 @@ func TestAdminListOutgoingFollowsFilterByStatus(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&follows))
 	require.Len(t, follows, 2)
 	for _, f := range follows {
-		require.Equal(t, "pending", f["Status"])
+		require.Equal(t, "pending", f["we_follow_status"])
 	}
 }

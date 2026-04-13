@@ -55,7 +55,7 @@ func TestHealthCheckerStartStop(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	name := "test-peer"
-	require.NoError(t, db.UpsertPeer(ctx, &database.Peer{
+	require.NoError(t, db.UpsertActor(ctx, &database.Actor{
 		ActorURL:          "https://test.example.com/ap/actor",
 		Name:              &name,
 		Endpoint:          srv.URL,

@@ -50,7 +50,7 @@ type Server struct {
 }
 
 // peerHealthAdapter bridges *database.DB to peering.HealthRepository by
-// converting between database.Peer and peering.PeerRecord.
+// converting between database.Actor and peering.PeerRecord.
 type peerHealthAdapter struct {
 	db *database.DB
 }

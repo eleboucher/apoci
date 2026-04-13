@@ -20,8 +20,8 @@ func TestOutgoingFollowLifecycle(t *testing.T) {
 	f, err := db.GetOutgoingFollow(ctx, url)
 	require.NoError(t, err)
 	require.NotNil(t, f, "expected outgoing follow, got nil")
-	require.Equal(t, "pending", f.Status)
-	require.Nil(t, f.AcceptedAt, "expected accepted_at to be nil for pending follow")
+	require.Equal(t, "pending", *f.WeFollowStatus)
+	require.Nil(t, f.WeFollowAcceptAt, "expected accepted_at to be nil for pending follow")
 
 	// Accept
 	require.NoError(t, db.AcceptOutgoingFollow(ctx, url))
@@ -30,8 +30,8 @@ func TestOutgoingFollowLifecycle(t *testing.T) {
 	f, err = db.GetOutgoingFollow(ctx, url)
 	require.NoError(t, err)
 	require.NotNil(t, f, "expected outgoing follow after accept, got nil")
-	require.Equal(t, "accepted", f.Status)
-	require.NotNil(t, f.AcceptedAt, "expected accepted_at to be set")
+	require.Equal(t, "accepted", *f.WeFollowStatus)
+	require.NotNil(t, f.WeFollowAcceptAt, "expected accepted_at to be set")
 
 	// Remove
 	require.NoError(t, db.RemoveOutgoingFollow(ctx, url))
@@ -51,7 +51,7 @@ func TestOutgoingFollowReject(t *testing.T) {
 	f, err := db.GetOutgoingFollow(ctx, url)
 	require.NoError(t, err)
 	require.NotNil(t, f, "expected outgoing follow after reject, got nil")
-	require.Equal(t, "rejected", f.Status)
+	require.Equal(t, "rejected", *f.WeFollowStatus)
 }
 
 func TestOutgoingFollowListByStatus(t *testing.T) {
@@ -113,7 +113,7 @@ func TestOutgoingFollowDuplicateAddPreservesAccepted(t *testing.T) {
 	f, err := db.GetOutgoingFollow(ctx, url)
 	require.NoError(t, err)
 	require.NotNil(t, f)
-	require.Equal(t, "accepted", f.Status,
+	require.Equal(t, "accepted", *f.WeFollowStatus,
 		"AddOutgoingFollow must not reset an already-accepted follow back to pending")
 }
 
@@ -136,14 +136,14 @@ func TestOutgoingFollowRetryAfterRejection(t *testing.T) {
 
 	f, err := db.GetOutgoingFollow(ctx, url)
 	require.NoError(t, err)
-	require.Equal(t, "rejected", f.Status)
+	require.Equal(t, "rejected", *f.WeFollowStatus)
 
 	// Retry: adding again should reset to pending
 	require.NoError(t, db.AddOutgoingFollow(ctx, url))
 
 	f, err = db.GetOutgoingFollow(ctx, url)
 	require.NoError(t, err)
-	require.Equal(t, "pending", f.Status,
+	require.Equal(t, "pending", *f.WeFollowStatus,
 		"AddOutgoingFollow should reset rejected follows back to pending")
 }
 
@@ -173,7 +173,7 @@ func TestListAllOutgoingFollows(t *testing.T) {
 	// Verify we have all three statuses
 	statuses := make(map[string]int)
 	for _, f := range all {
-		statuses[f.Status]++
+		statuses[*f.WeFollowStatus]++
 	}
 	require.Equal(t, 1, statuses["accepted"])
 	require.Equal(t, 1, statuses["rejected"])
@@ -198,7 +198,7 @@ func TestDeleteStaleOutgoingFollows(t *testing.T) {
 
 	// Backdate the created_at timestamps to simulate old records
 	_, err := db.bun.NewRaw(
-		`UPDATE outgoing_follows SET created_at = ? WHERE actor_url IN (?, ?, ?)`,
+		`UPDATE actors SET created_at = ? WHERE actor_url IN (?, ?, ?)`,
 		time.Now().Add(-48*time.Hour), pendingURL, rejectedURL, acceptedURL).Exec(ctx)
 	require.NoError(t, err)
 
@@ -233,7 +233,7 @@ func TestDeleteStaleOutgoingFollowsKeepsAccepted(t *testing.T) {
 
 	// Backdate to very old
 	_, err := db.bun.NewRaw(
-		`UPDATE outgoing_follows SET created_at = ? WHERE actor_url = ?`,
+		`UPDATE actors SET created_at = ? WHERE actor_url = ?`,
 		time.Now().Add(-365*24*time.Hour), acceptedURL).Exec(ctx)
 	require.NoError(t, err)
 
@@ -245,5 +245,5 @@ func TestDeleteStaleOutgoingFollowsKeepsAccepted(t *testing.T) {
 	f, err := db.GetOutgoingFollow(ctx, acceptedURL)
 	require.NoError(t, err)
 	require.NotNil(t, f)
-	require.Equal(t, "accepted", f.Status)
+	require.Equal(t, "accepted", *f.WeFollowStatus)
 }

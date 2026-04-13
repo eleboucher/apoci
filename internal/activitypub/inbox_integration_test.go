@@ -175,7 +175,7 @@ func TestInboxAcceptMarksOutgoingFollowAccepted(t *testing.T) {
 	of, err := db.GetOutgoingFollow(ctx, alice.ActorURL)
 	require.NoError(t, err)
 	require.NotNil(t, of)
-	require.Equal(t, "accepted", of.Status, "expected outgoing follow to be marked accepted after Accept")
+	require.Equal(t, "accepted", *of.WeFollowStatus, "expected outgoing follow to be marked accepted after Accept")
 
 	// Accept should NOT auto-promote an incoming follow request -- that requires
 	// explicit operator approval.
@@ -354,7 +354,7 @@ func TestInboxAnnounceBlobRef(t *testing.T) {
 	alicePEM, _ := alice.PublicKeyPEM()
 	require.NoError(t, db.AddFollow(ctx, alice.ActorURL, alicePEM, aliceEndpoint, nil))
 
-	require.NoError(t, db.UpsertPeer(ctx, &database.Peer{
+	require.NoError(t, db.UpsertActor(ctx, &database.Actor{
 		ActorURL:          alice.ActorURL,
 		Endpoint:          aliceEndpoint,
 		ReplicationPolicy: "lazy",
@@ -608,7 +608,7 @@ func TestInboxAcceptWithAlreadyAcceptedOutgoingFollow(t *testing.T) {
 	of, err := db.GetOutgoingFollow(ctx, alice.ActorURL)
 	require.NoError(t, err)
 	require.NotNil(t, of)
-	require.Equal(t, "accepted", of.Status)
+	require.Equal(t, "accepted", *of.WeFollowStatus)
 }
 
 func TestInboxAcceptWithStringObject(t *testing.T) {
@@ -634,7 +634,7 @@ func TestInboxAcceptWithStringObject(t *testing.T) {
 	of, err := db.GetOutgoingFollow(ctx, alice.ActorURL)
 	require.NoError(t, err)
 	require.NotNil(t, of)
-	require.Equal(t, "accepted", of.Status)
+	require.Equal(t, "accepted", *of.WeFollowStatus)
 }
 
 func TestInboxRejectMarksOutgoingFollowRejected(t *testing.T) {
@@ -662,7 +662,7 @@ func TestInboxRejectMarksOutgoingFollowRejected(t *testing.T) {
 	of, err := db.GetOutgoingFollow(ctx, alice.ActorURL)
 	require.NoError(t, err)
 	require.NotNil(t, of)
-	require.Equal(t, "rejected", of.Status)
+	require.Equal(t, "rejected", *of.WeFollowStatus)
 }
 
 func TestInboxRejectCleansBothDirections(t *testing.T) {
@@ -692,7 +692,7 @@ func TestInboxRejectCleansBothDirections(t *testing.T) {
 	of, err := db.GetOutgoingFollow(ctx, alice.ActorURL)
 	require.NoError(t, err)
 	require.NotNil(t, of)
-	require.Equal(t, "rejected", of.Status)
+	require.Equal(t, "rejected", *of.WeFollowStatus)
 
 	fr, err := db.GetFollowRequest(ctx, alice.ActorURL)
 	require.NoError(t, err)
@@ -1011,7 +1011,7 @@ func TestMutualAcceptAutoAcceptsPendingInboundFollow(t *testing.T) {
 	of, err := db.GetOutgoingFollow(ctx, alice.ActorURL)
 	require.NoError(t, err)
 	require.NotNil(t, of)
-	require.Equal(t, "accepted", of.Status)
+	require.Equal(t, "accepted", *of.WeFollowStatus)
 
 	f, err := db.GetFollow(ctx, alice.ActorURL)
 	require.NoError(t, err)

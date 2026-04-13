@@ -54,7 +54,7 @@ type RegistryRepository interface {
 	DeleteTag(ctx context.Context, repoID int64, tag string) error
 	ListTagsAfter(ctx context.Context, repoID int64, startAfter string, limit int) ([]string, error)
 
-	GetFollow(ctx context.Context, actorURL string) (*database.Follow, error)
+	GetFollow(ctx context.Context, actorURL string) (*database.Actor, error)
 
 	CreateUploadSession(ctx context.Context, uuid string, repoID int64, ttl time.Duration) (*database.UploadSession, error)
 	GetUploadSession(ctx context.Context, uuid string) (*database.UploadSession, error)

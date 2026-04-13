@@ -31,7 +31,7 @@ func testGCDeps(t *testing.T) (*database.DB, *blobstore.Store) {
 func insertTestPeer(t *testing.T, ctx context.Context, db *database.DB, actorURL, endpoint string) {
 	t.Helper()
 	name := "test-peer"
-	require.NoError(t, db.UpsertPeer(ctx, &database.Peer{
+	require.NoError(t, db.UpsertActor(ctx, &database.Actor{
 		ActorURL:          actorURL,
 		Name:              &name,
 		Endpoint:          endpoint,

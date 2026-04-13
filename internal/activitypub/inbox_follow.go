@@ -6,7 +6,6 @@ import (
 	"net/url"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
-	"git.erwanleboucher.dev/eleboucher/apoci/internal/validate"
 )
 
 // processFollow handles incoming Follow requests.
@@ -27,9 +26,10 @@ func (h *InboxHandler) processFollow(ctx context.Context, activity *RawActivity,
 	actorEndpoint := EndpointFromActorURL(activity.Actor)
 
 	var alias *string
-	if actor, err := FetchActor(ctx, activity.Actor); err == nil && actor.Name != "" {
-		name := validate.SanitizeText(actor.Name, 256)
-		alias = &name
+	if actor, err := FetchActor(ctx, activity.Actor); err == nil {
+		if a := ActorAlias(actor); a != "" {
+			alias = &a
+		}
 	}
 
 	if err := h.db.AddFollowRequest(ctx, activity.Actor, pubKeyPEM, actorEndpoint, alias); err != nil {
@@ -67,7 +67,7 @@ func (h *InboxHandler) processAccept(ctx context.Context, activity *RawActivity)
 	}
 
 	outgoing, err := h.db.GetOutgoingFollow(ctx, activity.Actor)
-	if err != nil || outgoing == nil || outgoing.Status != "pending" {
+	if err != nil || !outgoing.HasPendingOutgoingFollow() {
 		h.logger.Warn("inbox: Accept(Follow) from actor we have no pending follow to", "actor", activity.Actor)
 		return nil
 	}
@@ -151,7 +151,7 @@ func (h *InboxHandler) shouldAutoAccept(ctx context.Context, actorURL string) bo
 	// Mutual: auto-accept if we have a pending or accepted outgoing follow.
 	if h.autoAccept == AutoAcceptMutual {
 		of, err := h.db.GetOutgoingFollow(ctx, actorURL)
-		if err == nil && of != nil && (of.Status == "pending" || of.Status == "accepted") {
+		if err == nil && of.HasPendingOrAcceptedOutgoingFollow() {
 			return true
 		}
 	}

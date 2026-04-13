@@ -69,7 +69,7 @@ func (s *Server) adminListPending(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminListOutgoingFollows(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
-	var follows []database.OutgoingFollow
+	var follows []database.Actor
 	var err error
 
 	if status != "" {
