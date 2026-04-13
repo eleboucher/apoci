@@ -152,7 +152,7 @@ func (s *Service) RemoveFollow(ctx context.Context, input string, force bool) (s
 	errFollow := s.DB.RemoveFollow(ctx, actorURL)
 	errOutgoing := s.DB.RemoveOutgoingFollow(ctx, actorURL)
 
-	if errFollow != nil && errOutgoing != nil {
+	if errFollow != nil && errOutgoing != nil && !force {
 		return "", fmt.Errorf("removing follow: follow=%w, outgoing=%w", errFollow, errOutgoing)
 	}
 

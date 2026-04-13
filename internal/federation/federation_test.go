@@ -387,6 +387,31 @@ func TestRemoveFollowWithoutForceKeepsActorRow(t *testing.T) {
 	require.False(t, a.TheyFollowUs, "they_follow_us should be cleared")
 }
 
+func TestRemoveFollowForceDeletesGhostActor(t *testing.T) {
+	// Ghost actor: exists in the actors table as a pure peer entry, no follow relationship.
+	fed := &mockFed{}
+	svc, db := testService(t, fed)
+	ctx := context.Background()
+
+	require.NoError(t, db.UpsertActor(ctx, &database.Actor{
+		ActorURL: peerActorURL,
+		Endpoint: "https://peer.example.com",
+	}))
+
+	// Without force this fails because there are no follow records.
+	_, err := svc.RemoveFollow(ctx, peerActorURL, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "removing follow")
+
+	// With force the actor row is deleted even though there were no follow records.
+	_, err = svc.RemoveFollow(ctx, peerActorURL, true)
+	require.NoError(t, err)
+
+	a, err := db.GetActor(ctx, peerActorURL)
+	require.NoError(t, err)
+	require.Nil(t, a, "ghost actor row should be deleted")
+}
+
 func TestAcceptFollowSuccess(t *testing.T) {
 	var acceptedActor string
 	fed := &mockFed{
