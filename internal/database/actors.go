@@ -178,6 +178,39 @@ func (db *DB) GetFollowRequest(ctx context.Context, actorURL string) (*FollowReq
 	return fr, nil
 }
 
+// FindFollowRequestByInput looks up a pending follow request by exact actor_url,
+// alias, or endpoint domain. Used as a fallback when WebFinger returns a
+// different URL than the one originally stored, or is unreachable.
+func (db *DB) FindFollowRequestByInput(ctx context.Context, input string) (*FollowRequest, error) {
+	db.logger.Debug("FindFollowRequestByInput", "input", input)
+
+	fr := &FollowRequest{}
+	if err := db.bun.NewSelect().Model(fr).Where("actor_url = ?", input).Scan(ctx); err == nil {
+		return fr, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("querying follow request by url: %w", err)
+	}
+
+	fr = &FollowRequest{}
+	if err := db.bun.NewSelect().Model(fr).Where("alias = ?", input).Limit(1).Scan(ctx); err == nil {
+		return fr, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("querying follow request by alias: %w", err)
+	}
+
+	fr = &FollowRequest{}
+	exact, withPath, withPort := endpointDomainConds(input)
+	if err := db.bun.NewSelect().Model(fr).
+		Where("endpoint = ? OR endpoint LIKE ? OR endpoint LIKE ?", exact, withPath, withPort).
+		Limit(1).Scan(ctx); err == nil {
+		return fr, nil
+	} else if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	} else {
+		return nil, fmt.Errorf("querying follow request by endpoint: %w", err)
+	}
+}
+
 // ListFollowRequests returns all pending follow requests.
 func (db *DB) ListFollowRequests(ctx context.Context) ([]FollowRequest, error) {
 	var requests []FollowRequest
@@ -348,6 +381,25 @@ func (db *DB) RefreshFollow(ctx context.Context, actorURL, publicKeyPEM, endpoin
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("no follow found for %q", actorURL)
+	}
+	return nil
+}
+
+// RefreshOutgoingFollow updates actor-derived fields for an actor we follow.
+// Intended for the periodic refresh of outgoing-only peers (where they don't
+// follow us, so RefreshFollow's WHERE clause doesn't match).
+func (db *DB) RefreshOutgoingFollow(ctx context.Context, actorURL, publicKeyPEM, endpoint string, alias *string) error {
+	res, err := db.bun.NewUpdate().Model((*Actor)(nil)).
+		Set("public_key_pem = ?", publicKeyPEM).
+		Set("endpoint = ?", endpoint).
+		Set("alias = ?", alias).
+		Where("actor_url = ? AND we_follow_them = TRUE", actorURL).
+		Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("refreshing outgoing follow: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("no outgoing follow found for %q", actorURL)
 	}
 	return nil
 }

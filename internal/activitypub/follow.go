@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 
 	"github.com/google/uuid"
 )
@@ -95,7 +96,7 @@ func SendFollow(ctx context.Context, identity *Identity, targetActorURL string, 
 		return "", fmt.Errorf("fetching actor %s: %w", targetActorURL, err)
 	}
 
-	activityID := identity.ActorURL + "#follow-" + uuid.New().String()
+	activityID := identity.ActorURL + "#follow-" + url.QueryEscape(actor.ID)
 	follow := map[string]any{
 		"@context": "https://www.w3.org/ns/activitystreams",
 		"id":       activityID,

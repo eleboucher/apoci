@@ -20,7 +20,6 @@ const testToken = "test-token"
 type mockAPFederator struct {
 	resolveFollowTargetFn func(ctx context.Context, input string) (string, error)
 	fetchActorFn          func(ctx context.Context, actorURL string) (*activitypub.Actor, error)
-	deliverActivityFn     func(ctx context.Context, inboxURL string, activityJSON []byte) error
 	sendAcceptFn          func(ctx context.Context, followerActorURL string) error
 	sendRejectFn          func(ctx context.Context, followerActorURL string) error
 	sendFollowFn          func(ctx context.Context, targetActorURL string) (string, error)
@@ -38,13 +37,6 @@ func (m *mockAPFederator) FetchActor(ctx context.Context, actorURL string) (*act
 		return m.fetchActorFn(ctx, actorURL)
 	}
 	return nil, errors.New("fetchActor not configured")
-}
-
-func (m *mockAPFederator) DeliverActivity(ctx context.Context, inboxURL string, activityJSON []byte) error {
-	if m.deliverActivityFn != nil {
-		return m.deliverActivityFn(ctx, inboxURL, activityJSON)
-	}
-	return nil
 }
 
 func (m *mockAPFederator) SendAccept(ctx context.Context, followerActorURL string) error {
@@ -313,8 +305,8 @@ func TestAdminAddFollowDeliveryError(t *testing.T) {
 		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
 			return adminActor(actorURL, inboxURL), nil
 		},
-		deliverActivityFn: func(_ context.Context, _ string, _ []byte) error {
-			return errors.New("delivery failed")
+		sendFollowFn: func(_ context.Context, _ string) (string, error) {
+			return "", errors.New("delivery failed")
 		},
 	}
 	s := testServerWithMock(t, fed)
@@ -338,14 +330,14 @@ func TestAdminAddFollowSuccess(t *testing.T) {
 	const actorURL = "https://peer.example.com/ap/actor"
 	const inboxURL = "https://peer.example.com/ap/inbox"
 
-	var deliveredInbox string
+	var sendFollowTarget string
 	fed := &mockAPFederator{
 		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
 			return adminActor(actorURL, inboxURL), nil
 		},
-		deliverActivityFn: func(_ context.Context, inbox string, _ []byte) error {
-			deliveredInbox = inbox
-			return nil
+		sendFollowFn: func(_ context.Context, target string) (string, error) {
+			sendFollowTarget = target
+			return target, nil
 		},
 	}
 	s := testServerWithMock(t, fed)
@@ -367,7 +359,7 @@ func TestAdminAddFollowSuccess(t *testing.T) {
 	var result map[string]string
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	require.Equal(t, actorURL, result["followed"])
-	require.Equal(t, inboxURL, deliveredInbox)
+	require.Equal(t, actorURL, sendFollowTarget, "SendFollow should be called with the canonical actor ID")
 
 	ctx := context.Background()
 	of, err := s.db.GetOutgoingFollow(ctx, actorURL)
@@ -394,13 +386,9 @@ func TestAdminAcceptFollowMissingTarget(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
-func TestAdminAcceptFollowSendAcceptError(t *testing.T) {
+func TestAdminAcceptFollowNoPendingRequest(t *testing.T) {
 	const actorURL = "https://peer.example.com/ap/actor"
-	fed := &mockAPFederator{
-		sendAcceptFn: func(_ context.Context, _ string) error {
-			return errors.New("no pending request")
-		},
-	}
+	fed := &mockAPFederator{}
 	s := testServerWithMock(t, fed)
 	s.cfg.RegistryToken = testToken
 	s.cfg.AdminToken = testToken
@@ -416,6 +404,44 @@ func TestAdminAcceptFollowSendAcceptError(t *testing.T) {
 	_ = resp.Body.Close()
 
 	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+}
+
+func TestAdminAcceptFollowSendAcceptBestEffort(t *testing.T) {
+	const actorURL = "https://peer.example.com/ap/actor"
+	const inboxURL = "https://peer.example.com/ap/inbox"
+
+	ctx := context.Background()
+
+	fed := &mockAPFederator{
+		sendAcceptFn: func(_ context.Context, _ string) error {
+			return errors.New("peer unreachable")
+		},
+	}
+	s := testServerWithMock(t, fed)
+	s.cfg.RegistryToken = testToken
+	s.cfg.AdminToken = testToken
+	require.NoError(t, s.db.AddFollowRequest(ctx, actorURL, "pubkey-peer", inboxURL, nil))
+
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	body := `{"target":"` + actorURL + `"}`
+	req, _ := http.NewRequest("POST", srv.URL+"/api/admin/follows/accept", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.Equal(t, actorURL, result["accepted"])
+
+	f, err := s.db.GetFollow(ctx, actorURL)
+	require.NoError(t, err)
+	require.NotNil(t, f)
 }
 
 func TestAdminAcceptFollowSuccess(t *testing.T) {
@@ -813,8 +839,8 @@ func TestAdminAddFollowCreatesOutgoingNotInbound(t *testing.T) {
 		fetchActorFn: func(_ context.Context, _ string) (*activitypub.Actor, error) {
 			return adminActor(actorURL, inboxURL), nil
 		},
-		deliverActivityFn: func(_ context.Context, _ string, _ []byte) error {
-			return nil
+		sendFollowFn: func(_ context.Context, target string) (string, error) {
+			return target, nil
 		},
 	}
 	s := testServerWithMock(t, fed)

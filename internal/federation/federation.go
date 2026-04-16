@@ -3,10 +3,8 @@ package federation
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/url"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/activitypub"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
@@ -17,6 +15,7 @@ type FederationRepository interface {
 	ListFollows(ctx context.Context) ([]database.Actor, error)
 	RefreshFollow(ctx context.Context, actorURL, publicKeyPEM, endpoint string, alias *string) error
 	GetFollowRequest(ctx context.Context, actorURL string) (*database.FollowRequest, error)
+	FindFollowRequestByInput(ctx context.Context, input string) (*database.FollowRequest, error)
 	AcceptFollowRequest(ctx context.Context, actorURL string) error
 	RejectFollowRequest(ctx context.Context, actorURL string) error
 	ListFollowRequests(ctx context.Context) ([]database.FollowRequest, error)
@@ -24,6 +23,8 @@ type FederationRepository interface {
 	AddOutgoingFollow(ctx context.Context, actorURL string) error
 	GetOutgoingFollow(ctx context.Context, actorURL string) (*database.Actor, error)
 	RemoveOutgoingFollow(ctx context.Context, actorURL string) error
+	ListAllOutgoingFollows(ctx context.Context) ([]database.Actor, error)
+	RefreshOutgoingFollow(ctx context.Context, actorURL, publicKeyPEM, endpoint string, alias *string) error
 	UpsertActor(ctx context.Context, a *database.Actor) error
 	DeleteActor(ctx context.Context, actorURL string) error
 	FindActorByInput(ctx context.Context, input string) (*database.Actor, error)
@@ -32,7 +33,6 @@ type FederationRepository interface {
 type Federator interface {
 	ResolveFollowTarget(ctx context.Context, input string) (string, error)
 	FetchActor(ctx context.Context, actorURL string) (*activitypub.Actor, error)
-	DeliverActivity(ctx context.Context, inboxURL string, activityJSON []byte) error
 	SendAccept(ctx context.Context, followerActorURL string) error
 	SendReject(ctx context.Context, followerActorURL string) error
 	SendUndo(ctx context.Context, peerActorURL string) error
@@ -50,10 +50,6 @@ func (f *RealFederator) ResolveFollowTarget(ctx context.Context, input string) (
 
 func (f *RealFederator) FetchActor(ctx context.Context, actorURL string) (*activitypub.Actor, error) {
 	return activitypub.FetchActor(ctx, actorURL)
-}
-
-func (f *RealFederator) DeliverActivity(ctx context.Context, inboxURL string, activityJSON []byte) error {
-	return activitypub.DeliverActivity(ctx, inboxURL, activityJSON, f.Identity)
 }
 
 func (f *RealFederator) SendAccept(ctx context.Context, followerActorURL string) error {
@@ -96,11 +92,19 @@ func (s *Service) AddFollow(ctx context.Context, input string) (*AddFollowResult
 	}
 	s.Logger.Debug("AddFollow resolved", "actorURL", actorURL)
 
+	if actorURL == s.ActorURL {
+		return nil, fmt.Errorf("cannot follow yourself")
+	}
+
 	actor, err := s.Fed.FetchActor(ctx, actorURL)
 	if err != nil {
 		return nil, fmt.Errorf("fetching actor: %w", err)
 	}
 	s.Logger.Debug("AddFollow fetched actor", "actorID", actor.ID, "inbox", actor.Inbox)
+
+	if actor.ID == s.ActorURL {
+		return nil, fmt.Errorf("cannot follow yourself")
+	}
 
 	// Store outgoing follow BEFORE delivery so that an immediate Accept from
 	// the peer can be matched by the inbox handler.
@@ -108,20 +112,8 @@ func (s *Service) AddFollow(ctx context.Context, input string) (*AddFollowResult
 		return nil, fmt.Errorf("storing outgoing follow: %w", err)
 	}
 
-	followActivity := map[string]any{
-		"@context": "https://www.w3.org/ns/activitystreams",
-		"id":       s.ActorURL + "#follow-" + url.QueryEscape(actor.ID),
-		"type":     "Follow",
-		"actor":    s.ActorURL,
-		"object":   actor.ID,
-	}
-	activityJSON, err := json.Marshal(followActivity)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling follow: %w", err)
-	}
-
-	s.Logger.Debug("AddFollow delivering Follow activity", "inbox", actor.Inbox)
-	if err := s.Fed.DeliverActivity(ctx, actor.Inbox, activityJSON); err != nil {
+	s.Logger.Debug("AddFollow delivering Follow activity", "actorID", actor.ID)
+	if _, err := s.Fed.SendFollow(ctx, actor.ID); err != nil {
 		return nil, fmt.Errorf("delivering follow: %w", err)
 	}
 
@@ -202,23 +194,18 @@ type AcceptFollowResult struct {
 }
 
 // AcceptFollow accepts a pending follow request: promotes the DB record, delivers
-// an Accept activity, and optionally sends a mutual follow-back.
+// an Accept activity (best-effort), and optionally sends a mutual follow-back.
 func (s *Service) AcceptFollow(ctx context.Context, input, autoAccept string) (*AcceptFollowResult, error) {
 	s.Logger.Debug("AcceptFollow", "input", input, "autoAccept", autoAccept)
 
-	actorURL, err := s.Fed.ResolveFollowTarget(ctx, input)
+	actorURL, fr, err := s.locateFollowRequest(ctx, input)
 	if err != nil {
-		return nil, fmt.Errorf("resolving target: %w", err)
-	}
-	s.Logger.Debug("AcceptFollow resolved", "actorURL", actorURL)
-
-	fr, err := s.DB.GetFollowRequest(ctx, actorURL)
-	if err != nil {
-		return nil, fmt.Errorf("looking up follow request: %w", err)
+		return nil, err
 	}
 	if fr == nil {
-		return nil, fmt.Errorf("no pending follow request from %s", actorURL)
+		return nil, fmt.Errorf("no pending follow request for %q", input)
 	}
+	s.Logger.Debug("AcceptFollow located", "actorURL", actorURL)
 
 	// Promote locally first — this is the source of truth.
 	if err := s.DB.AcceptFollowRequest(ctx, actorURL); err != nil {
@@ -226,20 +213,24 @@ func (s *Service) AcceptFollow(ctx context.Context, input, autoAccept string) (*
 	}
 	s.Logger.Debug("AcceptFollow promoted locally", "actorURL", actorURL)
 
+	// Best-effort delivery. The delivery queue retries; a transient failure
+	// must not leave the pending request irrecoverably consumed.
 	if err := s.Fed.SendAccept(ctx, actorURL); err != nil {
-		return nil, fmt.Errorf("delivering accept (accepted locally): %w", err)
+		s.Logger.Warn("accept delivery failed (accepted locally)", "actor", actorURL, "error", err)
+	} else {
+		s.Logger.Debug("AcceptFollow delivered Accept", "actorURL", actorURL)
 	}
-	s.Logger.Debug("AcceptFollow delivered Accept", "actorURL", actorURL)
 
 	result := &AcceptFollowResult{ActorURL: actorURL}
 
 	if autoAccept == activitypub.AutoAcceptMutual {
 		sent, err := s.sendMutualFollowBack(ctx, actorURL)
-		if err != nil {
-			s.Logger.Warn("mutual follow-back failed", "actor", actorURL, "error", err)
-		} else if sent {
+		if sent {
 			result.FollowedBack = true
 			s.Logger.Debug("AcceptFollow mutual follow-back sent", "actorURL", actorURL)
+		}
+		if err != nil {
+			s.Logger.Warn("mutual follow-back failed", "actor", actorURL, "error", err)
 		}
 	}
 
@@ -251,19 +242,14 @@ func (s *Service) AcceptFollow(ctx context.Context, input, autoAccept string) (*
 func (s *Service) RejectFollow(ctx context.Context, input string) (string, error) {
 	s.Logger.Debug("RejectFollow", "input", input)
 
-	actorURL, err := s.Fed.ResolveFollowTarget(ctx, input)
+	actorURL, fr, err := s.locateFollowRequest(ctx, input)
 	if err != nil {
-		return "", fmt.Errorf("resolving target: %w", err)
-	}
-	s.Logger.Debug("RejectFollow resolved", "actorURL", actorURL)
-
-	fr, err := s.DB.GetFollowRequest(ctx, actorURL)
-	if err != nil {
-		return "", fmt.Errorf("looking up follow request: %w", err)
+		return "", err
 	}
 	if fr == nil {
-		return "", fmt.Errorf("no pending follow request from %s", actorURL)
+		return "", fmt.Errorf("no pending follow request for %q", input)
 	}
+	s.Logger.Debug("RejectFollow located", "actorURL", actorURL)
 
 	// Reject locally first — this is the source of truth.
 	if err := s.DB.RejectFollowRequest(ctx, actorURL); err != nil {
@@ -281,16 +267,37 @@ func (s *Service) RejectFollow(ctx context.Context, input string) (string, error
 	return actorURL, nil
 }
 
-// RefreshActors re-fetches all known follower and follow-request actor documents
-// and updates their public key, endpoint, and alias. It is intended to be called
-// periodically so that key rotations, renames, and endpoint changes are picked up.
-// Failures for individual actors are logged and skipped.
+func (s *Service) locateFollowRequest(ctx context.Context, input string) (string, *database.FollowRequest, error) {
+	if actorURL, err := s.Fed.ResolveFollowTarget(ctx, input); err == nil {
+		fr, dbErr := s.DB.GetFollowRequest(ctx, actorURL)
+		if dbErr != nil {
+			return "", nil, fmt.Errorf("looking up follow request: %w", dbErr)
+		}
+		if fr != nil {
+			return actorURL, fr, nil
+		}
+		s.Logger.Debug("locateFollowRequest WebFinger found no request, falling back", "webfingerURL", actorURL, "input", input)
+	} else {
+		s.Logger.Debug("locateFollowRequest WebFinger failed, falling back", "input", input, "error", err)
+	}
+
+	fr, err := s.DB.FindFollowRequestByInput(ctx, input)
+	if err != nil {
+		return "", nil, fmt.Errorf("finding follow request: %w", err)
+	}
+	if fr == nil {
+		return "", nil, nil
+	}
+	return fr.ActorURL, fr, nil
+}
+
 func (s *Service) RefreshActors(ctx context.Context) {
 	follows, err := s.DB.ListFollows(ctx)
 	if err != nil {
 		s.Logger.Warn("actor refresh: failed to list follows", "error", err)
 		return
 	}
+	refreshed := make(map[string]struct{}, len(follows))
 	for _, f := range follows {
 		if ctx.Err() != nil {
 			return
@@ -304,7 +311,9 @@ func (s *Service) RefreshActors(ctx context.Context) {
 		endpoint := activitypub.EndpointFromActorURL(f.ActorURL)
 		if err := s.DB.RefreshFollow(ctx, f.ActorURL, actor.PublicKey.PublicKeyPEM, endpoint, alias); err != nil {
 			s.Logger.Warn("actor refresh: failed to update follow", "actor", f.ActorURL, "error", err)
+			continue
 		}
+		refreshed[f.ActorURL] = struct{}{}
 	}
 
 	requests, err := s.DB.ListFollowRequests(ctx)
@@ -325,6 +334,30 @@ func (s *Service) RefreshActors(ctx context.Context) {
 		endpoint := activitypub.EndpointFromActorURL(fr.ActorURL)
 		if err := s.DB.RefreshFollowRequest(ctx, fr.ActorURL, actor.PublicKey.PublicKeyPEM, endpoint, alias); err != nil {
 			s.Logger.Warn("actor refresh: failed to update follow request", "actor", fr.ActorURL, "error", err)
+		}
+	}
+
+	outgoing, err := s.DB.ListAllOutgoingFollows(ctx)
+	if err != nil {
+		s.Logger.Warn("actor refresh: failed to list outgoing follows", "error", err)
+		return
+	}
+	for _, o := range outgoing {
+		if ctx.Err() != nil {
+			return
+		}
+		if _, ok := refreshed[o.ActorURL]; ok {
+			continue
+		}
+		actor, err := s.Fed.FetchActor(ctx, o.ActorURL)
+		if err != nil {
+			s.Logger.Warn("actor refresh: failed to fetch actor", "actor", o.ActorURL, "error", err)
+			continue
+		}
+		alias := actorAlias(actor)
+		endpoint := activitypub.EndpointFromActorURL(o.ActorURL)
+		if err := s.DB.RefreshOutgoingFollow(ctx, o.ActorURL, actor.PublicKey.PublicKeyPEM, endpoint, alias); err != nil {
+			s.Logger.Warn("actor refresh: failed to update outgoing follow", "actor", o.ActorURL, "error", err)
 		}
 	}
 }
@@ -350,18 +383,17 @@ func (s *Service) sendMutualFollowBack(ctx context.Context, actorURL string) (bo
 		return false, nil
 	}
 
-	actorID, err := s.Fed.SendFollow(ctx, actorURL)
-	if err != nil {
-		return false, fmt.Errorf("sending follow-back: %w", err)
-	}
-
-	if err := s.DB.AddOutgoingFollow(ctx, actorID); err != nil {
+	if err := s.DB.AddOutgoingFollow(ctx, actorURL); err != nil {
 		return false, fmt.Errorf("storing outgoing follow: %w", err)
 	}
 
+	if _, err := s.Fed.SendFollow(ctx, actorURL); err != nil {
+		return false, fmt.Errorf("sending follow-back: %w", err)
+	}
+
 	if err := s.DB.UpsertActor(ctx, &database.Actor{
-		ActorURL:          actorID,
-		Endpoint:          activitypub.EndpointFromActorURL(actorID),
+		ActorURL:          actorURL,
+		Endpoint:          activitypub.EndpointFromActorURL(actorURL),
 		ReplicationPolicy: "lazy",
 		IsHealthy:         true,
 	}); err != nil {
