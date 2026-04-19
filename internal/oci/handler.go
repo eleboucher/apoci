@@ -147,6 +147,7 @@ func NewRegistry(db *database.DB, blobs blobstore.BlobStore, localID, namespace,
 		PushBlob_:              r.pushBlob,
 		PushBlobChunked_:       r.pushBlobChunked,
 		PushBlobChunkedResume_: r.pushBlobChunkedResume,
+		MountBlob_:             r.mountBlob,
 		PushManifest_:          r.pushManifest,
 		DeleteBlob_:            r.deleteBlob,
 		DeleteManifest_:        r.deleteManifest,
@@ -895,6 +896,45 @@ func (r *Registry) pushBlob(ctx context.Context, repo string, desc ociregistry.D
 		MediaType: desc.MediaType,
 		Digest:    ociregistry.Digest(digest),
 		Size:      size,
+	}, nil
+}
+
+func (r *Registry) mountBlob(ctx context.Context, fromRepo, toRepo string, digest ociregistry.Digest) (ociregistry.Descriptor, error) {
+	fromRepo = r.normalizeRepo(fromRepo)
+	toRepo = r.normalizeRepo(toRepo)
+	r.logger.Debug("oci: mountBlob", "fromRepo", fromRepo, "toRepo", toRepo, "digest", string(digest))
+
+	if err := r.checkNamespace(toRepo); err != nil {
+		return ociregistry.Descriptor{}, err
+	}
+	if _, err := r.db.GetOrCreateRepository(ctx, toRepo, r.localID); err != nil {
+		return ociregistry.Descriptor{}, fmt.Errorf("getting repository: %w", err)
+	}
+
+	blob, err := r.db.GetBlob(ctx, string(digest))
+	if err != nil {
+		return ociregistry.Descriptor{}, fmt.Errorf("looking up blob: %w", err)
+	}
+	if blob == nil || !blob.StoredLocally {
+		return ociregistry.Descriptor{}, ociregistry.ErrBlobUnknown
+	}
+
+	mediaType := defaultMediaType
+	if blob.MediaType != nil {
+		mediaType = *blob.MediaType
+	}
+
+	metrics.RegistryBlobMounts.Add(1)
+	r.logger.Info("blob mounted",
+		"fromRepo", fromRepo,
+		"toRepo", toRepo,
+		"digest", string(digest),
+		"size", blob.SizeBytes)
+
+	return ociregistry.Descriptor{
+		MediaType: mediaType,
+		Digest:    digest,
+		Size:      blob.SizeBytes,
 	}, nil
 }
 

@@ -152,6 +152,12 @@ var (
 		Name:      "blob_pull_throughs_total",
 		Help:      "Total blob pull-throughs from peers.",
 	})
+	RegistryBlobMounts = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "apoci",
+		Subsystem: "registry",
+		Name:      "blob_mounts_total",
+		Help:      "Total cross-repository blob mounts.",
+	})
 	RegistryManifestPullThru = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: "apoci",
 		Subsystem: "registry",
@@ -257,6 +263,7 @@ func init() {
 		RegistryBlobPushes,
 		RegistryBlobPulls,
 		RegistryBlobPullThru,
+		RegistryBlobMounts,
 		RegistryManifestPullThru,
 		RegistryPushRateLimited,
 		UpstreamBlobPullThru,

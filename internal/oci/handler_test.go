@@ -662,6 +662,75 @@ func TestUploadSessionDBWiring(t *testing.T) {
 	_ = writer.Close()
 }
 
+func TestMountBlobExistingBlob(t *testing.T) {
+	reg, _ := testRegistry(t)
+	ctx := context.Background()
+
+	blobData := []byte("shared blob content")
+	srcRepo := "test.example.com/test/src"
+	dstRepo := "test.example.com/test/dst"
+
+	srcDesc := pushBlobWithManifest(t, reg, srcRepo, blobData)
+
+	desc, err := reg.MountBlob(ctx, srcRepo, dstRepo, srcDesc.Digest)
+	require.NoError(t, err)
+	require.Equal(t, srcDesc.Digest, desc.Digest)
+	require.Equal(t, srcDesc.Size, desc.Size)
+
+	manifest := fmt.Sprintf(
+		`{"schemaVersion":2,"mediaType":"%s","config":{"digest":"%s","size":%d,"mediaType":"application/vnd.oci.image.config.v1+json"},"layers":[]}`,
+		testManifestMediaType, desc.Digest, desc.Size,
+	)
+	_, err = reg.PushManifest(ctx, dstRepo, "latest", []byte(manifest), testManifestMediaType)
+	require.NoError(t, err)
+
+	reader, err := reg.GetBlob(ctx, dstRepo, desc.Digest)
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+	got, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.Equal(t, blobData, got)
+}
+
+func TestMountBlobUnknownReturnsBlobUnknown(t *testing.T) {
+	reg, _ := testRegistry(t)
+	ctx := context.Background()
+
+	unknown := ociregistry.Digest("sha256:" + strings.Repeat("0", 64))
+	_, err := reg.MountBlob(ctx, "test.example.com/test/src", "test.example.com/test/dst", unknown)
+	require.ErrorIs(t, err, ociregistry.ErrBlobUnknown)
+}
+
+func TestMountBlobHTTPFlow(t *testing.T) {
+	reg, srv := testRegistry(t)
+
+	blobData := []byte("http-mounted blob")
+	srcRepo := "test.example.com/test/httpsrc"
+	dstRepo := "test.example.com/test/httpdst"
+
+	srcDesc := pushBlobWithManifest(t, reg, srcRepo, blobData)
+
+	mountURL := fmt.Sprintf("%s/v2/%s/blobs/uploads/?mount=%s&from=%s",
+		srv.URL, dstRepo, srcDesc.Digest, srcRepo)
+	req, _ := http.NewRequest("POST", mountURL, nil)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	require.Contains(t, resp.Header.Get("Location"), "/blobs/"+string(srcDesc.Digest))
+
+	unknown := "sha256:" + strings.Repeat("0", 64)
+	mountURL = fmt.Sprintf("%s/v2/%s/blobs/uploads/?mount=%s&from=%s",
+		srv.URL, dstRepo, unknown, srcRepo)
+	req, _ = http.NewRequest("POST", mountURL, nil)
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
 func descriptorFor(data []byte) ociregistry.Descriptor {
 	return ociregistry.Descriptor{
 		MediaType: "application/octet-stream",
