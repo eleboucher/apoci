@@ -364,6 +364,76 @@ func TestNamespaceNormalization(t *testing.T) {
 	require.Error(t, err, "push to foreign domain must be rejected")
 }
 
+func TestLooksLikeNamespaceTypo(t *testing.T) {
+	cases := []struct {
+		name      string
+		repo      string
+		namespace string
+		want      bool
+	}{
+		{"empty namespace", "foo/bar", "", false},
+		{"empty repo", "", "mortebrume.eu", false},
+		{"single-label namespace never matches", "alice/x", "alice", false},
+		{"first segment is dns prefix label", "mortebrume/homelab", "mortebrume.eu", true},
+		{"first segment is bare label only", "mortebrume", "mortebrume.eu", true},
+		{"non-matching first segment", "myteam/x", "mortebrume.eu", false},
+		{"first segment already domain-scoped", "mortebrume.eu/x", "mortebrume.eu", false},
+		{"foreign domain-scoped path", "other.dev/x", "mortebrume.eu", false},
+		{"middle label does not match first label", "eu/x", "mortebrume.eu", false},
+		{"first label of multi-level namespace", "registry/x", "registry.example.com", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, looksLikeNamespaceTypo(tc.repo, tc.namespace))
+		})
+	}
+}
+
+func TestNamespaceTypoRejected(t *testing.T) {
+	dir := t.TempDir()
+	db, err := database.OpenSQLite(dir, 0, 0, nopLog())
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	blobs, err := blobstore.New(dir, nopLog())
+	require.NoError(t, err)
+
+	reg, err := NewRegistry(db, blobs, "https://registry.mortebrume.eu", "mortebrume.eu", "", config.DefaultMaxManifestSize, config.DefaultMaxBlobSize, nopLog())
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	manifest := []byte(`{"schemaVersion":2}`)
+	mediaType := testManifestMediaType
+	blobData := []byte("typo-test-blob")
+
+	_, err = reg.PushManifest(ctx, "mortebrume/homelab", "v1", manifest, mediaType)
+	require.ErrorIs(t, err, ociregistry.ErrDenied)
+	require.Contains(t, err.Error(), "mortebrume.eu/homelab", "error should suggest canonical path")
+
+	_, err = reg.PushBlob(ctx, "mortebrume/homelab", descriptorFor(blobData), strings.NewReader(string(blobData)))
+	require.ErrorIs(t, err, ociregistry.ErrDenied)
+
+	_, err = reg.PushBlobChunked(ctx, "mortebrume/homelab", 0)
+	require.ErrorIs(t, err, ociregistry.ErrDenied)
+
+	_, err = reg.MountBlob(ctx, "anywhere", "mortebrume/homelab", "sha256:0000000000000000000000000000000000000000000000000000000000000000")
+	require.ErrorIs(t, err, ociregistry.ErrDenied)
+
+	require.ErrorIs(t, reg.DeleteManifest(ctx, "mortebrume/homelab", "sha256:0000000000000000000000000000000000000000000000000000000000000000"), ociregistry.ErrDenied)
+	require.ErrorIs(t, reg.DeleteTag(ctx, "mortebrume/homelab", "v1"), ociregistry.ErrDenied)
+
+	_, err = reg.PushManifest(ctx, "mortebrume.eu/homelab", "v1", manifest, mediaType)
+	require.NoError(t, err)
+
+	_, err = reg.PushManifest(ctx, "homelab", "v1", manifest, mediaType)
+	require.NoError(t, err)
+
+	_, err = reg.PushManifest(ctx, "myteam/homelab", "v1", manifest, mediaType)
+	require.NoError(t, err)
+
+	_, err = reg.PushManifest(ctx, "mortebrume", "v1", manifest, mediaType)
+	require.ErrorIs(t, err, ociregistry.ErrDenied)
+}
+
 func TestBlobRangeRequest(t *testing.T) {
 	reg, _ := testRegistry(t)
 	ctx := context.Background()

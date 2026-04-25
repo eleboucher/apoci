@@ -313,6 +313,8 @@ docker pull registry.example.com/other.dev/user/repo:latest
 
 Writes to a foreign namespace (`other.dev/...`) are rejected; reads work for any repo in the database.
 
+Pushes whose first segment is a partial match of `accountDomain` (e.g. `example/foo` when the namespace is `example.com`) are rejected with a suggestion to use the canonical path. This avoids silently nesting under `example.com/example/foo`.
+
 You need to proxy `/.well-known/webfinger` from the vanity domain to the service:
 
 ```
