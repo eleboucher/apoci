@@ -126,8 +126,7 @@ func registryAuthMiddleware(token, endpoint string, isPrivateRead func(context.C
 			}
 
 			if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
-				realm := fmt.Sprintf("%s/v2/auth", endpoint)
-				w.Header().Set("WWW-Authenticate", `Bearer realm="`+realm+`",service="registry"`)
+				setBearerChallenge(w, endpoint)
 				http.Error(w, "authentication required", http.StatusUnauthorized)
 				return
 			}
@@ -135,6 +134,14 @@ func registryAuthMiddleware(token, endpoint string, isPrivateRead func(context.C
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// setBearerChallenge advertises the registry's bearer-token endpoint via the
+// WWW-Authenticate header so OCI clients (skopeo/oras/crane) arm their
+// token-exchange flow. It is the single source of the challenge format, shared
+// by registryAuthMiddleware and the GET /v2/ ping handler.
+func setBearerChallenge(w http.ResponseWriter, endpoint string) {
+	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm="%s/v2/auth",service="registry"`, endpoint))
 }
 
 // ipRateLimiter provides per-IP rate limiting using x/time/rate with automatic

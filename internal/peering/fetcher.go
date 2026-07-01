@@ -205,7 +205,16 @@ func (f *Fetcher) CheckHealth(ctx context.Context, peerEndpoint string) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
+	// Two responses mean the peer's registry is alive:
+	//   - 200: a peer not yet on the bearer-challenge build (unconditional /v2/ ping).
+	//   - 401 + WWW-Authenticate: Bearer: a peer on this build, which challenges an
+	//     anonymous /v2/ ping to arm OCI clients' token flow — exactly how Docker
+	//     Hub/ghcr.io answer an anonymous ping. The registry is up and speaking the
+	//     OCI token protocol, so it is healthy.
+	// Anything else (including a bare 401 with no bearer challenge) is a failure.
+	healthy := resp.StatusCode == http.StatusOK ||
+		(resp.StatusCode == http.StatusUnauthorized && strings.Contains(resp.Header.Get("WWW-Authenticate"), "Bearer"))
+	if !healthy {
 		return fmt.Errorf("health check returned %d for %s", resp.StatusCode, peerEndpoint)
 	}
 	return nil

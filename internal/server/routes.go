@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -36,6 +37,17 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("/v2/auth", registryPushRateLimitMiddleware(s.registryPushLimiter)(http.HandlerFunc(s.handleRegistryAuth)))
 	mux.HandleFunc("/v2/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v2/" || r.URL.Path == "/v2" {
+			// Standard OCI clients (skopeo/oras/crane) read an unconditional 200
+			// ping as "no auth needed" and never arm their bearer-token flow, so
+			// they can't push. Challenge when no credentials are presented. Once a
+			// client re-pings WITH the token after the exchange, presence of the
+			// header yields 200 — which also keeps anonymous pulls working, since
+			// reads are anon-allowed regardless of the token's value.
+			if r.Header.Get("Authorization") == "" {
+				setBearerChallenge(w, s.cfg.Endpoint)
+				http.Error(w, "authentication required", http.StatusUnauthorized)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{}`))
 			return
@@ -163,7 +175,17 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRegistryAuth(w http.ResponseWriter, r *http.Request) {
 	_, pass, ok := r.BasicAuth()
-	if !ok || subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.RegistryToken)) != 1 {
+	if !ok {
+		// No credentials presented: issue an anonymous, read-only token. It is
+		// random (crypto/rand) so it can never satisfy the write compare in
+		// registryAuthMiddleware, and non-empty so containers/image arms its
+		// bearer flow. Standard OCI clients need this token to exist for pulls.
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"token": rand.Text()})
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.RegistryToken)) != 1 {
+		// Credentials were presented but wrong: keep the "bad password" signal.
 		w.Header().Set("WWW-Authenticate", `Basic realm="apoci"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return

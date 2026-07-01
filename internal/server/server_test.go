@@ -17,6 +17,7 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/config"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/peering"
 )
 
 const (
@@ -559,7 +560,7 @@ func TestRegistryAuthEndpointRejectsWrongPassword(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
-func TestRegistryAuthEndpointRejectsNoCredentials(t *testing.T) {
+func TestRegistryAuthEndpointIssuesAnonTokenWithoutCredentials(t *testing.T) {
 	s := testServer(t)
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
@@ -568,7 +569,85 @@ func TestRegistryAuthEndpointRejectsNoCredentials(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	require.NotEmpty(t, body["token"], "anonymous token must be non-empty")
+	require.NotEqual(t, testRegistryToken, body["token"], "anonymous token must not equal the write token")
+}
+
+func TestRegistryPingRequiresAuthChallenge(t *testing.T) {
+	s := testServer(t)
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/v2/")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	require.Equal(t,
+		`Bearer realm="https://test.example.com/v2/auth",service="registry"`,
+		resp.Header.Get("WWW-Authenticate"),
+	)
+}
+
+// TestPeerHealthCheckAcceptsRealPing pins the cross-package contract that the
+// mock-only peering suite masked: this build answers an anonymous GET /v2/ with
+// 401 + WWW-Authenticate: Bearer, and peering.Fetcher.CheckHealth — apoci's own
+// peer health check — is the consumer of that response. It must read the real
+// handler's ping as HEALTHY, otherwise every upgraded peer marks its neighbours
+// unhealthy and drops them from federated blob resolution. Exercises the real
+// server routes against a real Fetcher, not a mock, so the two stay in lockstep.
+func TestPeerHealthCheckAcceptsRealPing(t *testing.T) {
+	s := testServer(t)
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	fetcher := peering.NewFetcher(10*time.Second, config.DefaultMaxBlobSize, config.DefaultMaxManifestSize, nopLog())
+	require.NoError(t, fetcher.CheckHealth(t.Context(), srv.URL),
+		"CheckHealth must treat this build's 401+Bearer /v2/ ping as healthy")
+}
+
+func TestRegistryPingWithAuthReturnsOK(t *testing.T) {
+	s := testServer(t)
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v2/", nil)
+	req.Header.Set("Authorization", "Bearer any-token-value")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.JSONEq(t, `{}`, string(b))
+}
+
+func TestRegistryAnonTokenCannotWrite(t *testing.T) {
+	s := testServer(t)
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	tokenResp, err := http.Get(srv.URL + "/v2/auth")
+	require.NoError(t, err)
+	var tokenBody map[string]string
+	require.NoError(t, json.NewDecoder(tokenResp.Body).Decode(&tokenBody))
+	_ = tokenResp.Body.Close()
+	anon := tokenBody["token"]
+	require.NotEmpty(t, anon)
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v2/test/blobs/uploads/", nil)
+	req.Header.Set("Authorization", "Bearer "+anon)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode, "anonymous token must never authorize a write")
 }
 
 func TestRegistryAuthFullFlow(t *testing.T) {
