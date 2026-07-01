@@ -25,7 +25,7 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - apoci-data:/var/lib/apoci
+      - apoci-data:/apoci/storage
       - ./configs/apoci.postgres.yaml:/apoci/config/apoci.yaml:ro
 
 volumes:

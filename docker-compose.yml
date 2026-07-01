@@ -5,7 +5,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - apoci-data:/var/lib/apoci
+      - apoci-data:/apoci/storage
       - ./configs/apoci.example.yaml:/apoci/config/apoci.yaml:ro
 
 volumes:
