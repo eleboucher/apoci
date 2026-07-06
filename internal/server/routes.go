@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -184,21 +183,29 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRegistryAuth(w http.ResponseWriter, r *http.Request) {
 	_, pass, ok := r.BasicAuth()
-	if !ok {
-		// No credentials: issue a random, non-empty anonymous token. It arms the
-		// client's bearer flow but can never equal RegistryToken, so it cannot
-		// authorize a write. OCI clients need it to exist for anonymous pulls.
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"token": rand.Text()})
+	switch {
+	case !ok:
+		// Anonymous token exchange must challenge, not silently issue a token.
+		// The previous random-token behavior made buildx/Crane accept an
+		// unusable bearer and 401 later in the write path with no signal that
+		// this endpoint was meant to refuse.
+		setBearerChallenge(w, s.cfg.Endpoint)
+		http.Error(w, "registry write access requires a token", http.StatusUnauthorized)
 		return
-	}
-	if subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.RegistryToken)) != 1 {
+	case subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.RegistryToken)) != 1:
 		w.Header().Set("WWW-Authenticate", `Basic realm="apoci"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
+	case s.cfg.RegistryToken == "":
+		// Empty token would otherwise be encoded as {"token":""}, which
+		// moby's parseTokenResponse surfaces to buildx as the confusing
+		// "authorization server did not include a token in the response".
+		// Surface the real state so operators get an actionable signal.
+		s.logger.Error("apoci registryToken is empty; refusing /v2/auth",
+			"request_id", w.Header().Get("X-Request-ID"))
+		http.Error(w, "registry is not properly configured", http.StatusServiceUnavailable)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"token": s.cfg.RegistryToken,
-	})
+	_ = json.NewEncoder(w).Encode(map[string]string{"token": s.cfg.RegistryToken})
 }

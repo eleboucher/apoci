@@ -561,7 +561,7 @@ func TestRegistryAuthEndpointRejectsWrongPassword(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
-func TestRegistryAuthEndpointIssuesAnonTokenWithoutCredentials(t *testing.T) {
+func TestRegistryAuthEndpointRejectsAnonymous(t *testing.T) {
 	s := testServer(t)
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
@@ -570,12 +570,10 @@ func TestRegistryAuthEndpointIssuesAnonTokenWithoutCredentials(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var body map[string]string
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	require.NotEmpty(t, body["token"], "anonymous token must be non-empty")
-	require.NotEqual(t, testRegistryToken, body["token"], "anonymous token must not equal the write token")
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+		"anonymous /v2/auth must challenge, not issue a token")
+	require.Contains(t, resp.Header.Get("WWW-Authenticate"), `Bearer realm="`,
+		"anonymous /v2/auth must advertise the bearer realm")
 }
 
 func TestRegistryPingRequiresAuthChallenge(t *testing.T) {
@@ -626,25 +624,23 @@ func TestRegistryPingWithAuthReturnsOK(t *testing.T) {
 	require.JSONEq(t, `{}`, string(b))
 }
 
-func TestRegistryAnonTokenCannotWrite(t *testing.T) {
+func TestRegistryAuthEndpointReturns503OnEmptyToken(t *testing.T) {
 	s := testServer(t)
+	s.cfg.RegistryToken = "" // emulates a container restart with a wiped token file
+
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
-	tokenResp, err := http.Get(srv.URL + "/v2/auth")
-	require.NoError(t, err)
-	var tokenBody map[string]string
-	require.NoError(t, json.NewDecoder(tokenResp.Body).Decode(&tokenBody))
-	_ = tokenResp.Body.Close()
-	anon := tokenBody["token"]
-	require.NotEmpty(t, anon)
-
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v2/test/blobs/uploads/", nil)
-	req.Header.Set("Authorization", "Bearer "+anon)
+	// Empty Basic auth passes constantTimeCompare against an empty token,
+	// which is the path that would otherwise emit {"token":""}.
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v2/auth", nil)
+	req.SetBasicAuth("", "")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	_ = resp.Body.Close()
-	require.Equal(t, http.StatusUnauthorized, resp.StatusCode, "anonymous token must never authorize a write")
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
+		"empty RegistryToken must surface 503, not the {token:''} shape that buildx reports as 'did not include a token'")
 }
 
 func TestRegistryAuthFullFlow(t *testing.T) {
