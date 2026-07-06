@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -132,6 +133,12 @@ func (s *Server) isPrivateRead(ctx context.Context, path string) bool {
 	if !ok {
 		return false
 	}
+	return s.isPrivateReadRepo(ctx, repoName)
+}
+
+// isPrivateReadRepo reports whether anonymous reads of the named OCI repository
+// require authentication. Fails closed on DB errors.
+func (s *Server) isPrivateReadRepo(ctx context.Context, repoName string) bool {
 	firstSeg, _, _ := strings.Cut(repoName, "/")
 	if !strings.Contains(firstSeg, ".") {
 		return false // local repo, not an upstream
@@ -185,10 +192,14 @@ func (s *Server) handleRegistryAuth(w http.ResponseWriter, r *http.Request) {
 	_, pass, ok := r.BasicAuth()
 	switch {
 	case !ok:
-		// Anonymous token exchange must challenge, not silently issue a token.
-		// The previous random-token behavior made buildx/Crane accept an
-		// unusable bearer and 401 later in the write path with no signal that
-		// this endpoint was meant to refuse.
+		// Strict clients (Flux, go-containerregistry) fetch a token here before
+		// an anonymous pull. Hand pull-only scopes a random token that reads
+		// don't validate and pushes can't use; refuse everything else.
+		if s.anonymousPullAllowed(r.Context(), r.URL.Query().Get("scope")) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": rand.Text()})
+			return
+		}
 		setBearerChallenge(w, s.cfg.Endpoint)
 		http.Error(w, "registry write access requires a token", http.StatusUnauthorized)
 		return
@@ -208,4 +219,42 @@ func (s *Server) handleRegistryAuth(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"token": s.cfg.RegistryToken})
+}
+
+// anonymousPullAllowed reports whether an unauthenticated /v2/auth request may be
+// granted a token: every scope must be pull-only on an anonymously readable repo.
+func (s *Server) anonymousPullAllowed(ctx context.Context, scope string) bool {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return false
+	}
+	for sc := range strings.FieldsSeq(scope) {
+		repo, actions, ok := parseRepositoryScope(sc)
+		if !ok {
+			return false
+		}
+		for _, a := range actions {
+			if a != "pull" {
+				return false // push or unknown action needs real credentials
+			}
+		}
+		if s.isPrivateReadRepo(ctx, repo) {
+			return false
+		}
+	}
+	return true
+}
+
+// parseRepositoryScope splits an OCI "repository:<name>:<actions>" scope, using
+// the final colon so repo names containing colons are preserved.
+func parseRepositoryScope(scope string) (repo string, actions []string, ok bool) {
+	rest, found := strings.CutPrefix(scope, "repository:")
+	if !found {
+		return "", nil, false
+	}
+	i := strings.LastIndex(rest, ":")
+	if i <= 0 || i == len(rest)-1 {
+		return "", nil, false
+	}
+	return rest[:i], strings.Split(rest[i+1:], ","), true
 }

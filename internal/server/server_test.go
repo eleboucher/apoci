@@ -576,6 +576,57 @@ func TestRegistryAuthEndpointRejectsAnonymous(t *testing.T) {
 		"anonymous /v2/auth must advertise the bearer realm")
 }
 
+// Strict clients (Flux, go-containerregistry) follow the /v2/ challenge into
+// /v2/auth before pulling a public repo, so a pull-only scope must yield a token.
+func TestRegistryAuthEndpointIssuesAnonymousPullToken(t *testing.T) {
+	s := testServer(t)
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/v2/auth?scope=repository:eleboucher/homelab:pull&service=registry")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode,
+		"anonymous pull-only scope on a public repo must issue a token")
+
+	var body map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	require.NotEmpty(t, body["token"], "anonymous pull token must be non-empty")
+	require.NotEqual(t, testRegistryToken, body["token"],
+		"anonymous token must not be the real RegistryToken, or it would grant writes")
+}
+
+// An anonymous scope that requests push must be refused, not handed a token.
+func TestRegistryAuthEndpointRejectsAnonymousPush(t *testing.T) {
+	s := testServer(t)
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/v2/auth?scope=repository:eleboucher/homelab:pull,push&service=registry")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+		"anonymous push scope must challenge, not issue a token")
+	require.Contains(t, resp.Header.Get("WWW-Authenticate"), `Bearer realm="`)
+}
+
+// A private upstream repo must not be pullable anonymously via the token exchange.
+func TestRegistryAuthEndpointRejectsAnonymousPrivatePull(t *testing.T) {
+	s := testServer(t)
+	s.cfg.Upstreams.Registries = []config.Upstream{{Name: "ghcr.io", Private: true}}
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/v2/auth?scope=repository:ghcr.io/owner/repo:pull&service=registry")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+		"anonymous pull of a private upstream repo must be refused")
+}
+
 func TestRegistryPingRequiresAuthChallenge(t *testing.T) {
 	s := testServer(t)
 	srv := httptest.NewServer(s.routes())
