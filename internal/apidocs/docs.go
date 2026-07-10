@@ -801,6 +801,82 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/uploads": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uploads"
+                ],
+                "summary": "List in-progress upload sessions",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/git_erwanleboucher_dev_eleboucher_apoci_internal_admin.UploadSessionEntry"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uploads"
+                ],
+                "summary": "Force-clear upload sessions to recover a wedged repository",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "only clear sessions for this repository; omit to clear all",
+                        "name": "repo",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid repository name",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -846,6 +922,26 @@ const docTemplate = `{
                     }
                 },
                 "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "git_erwanleboucher_dev_eleboucher_apoci_internal_admin.UploadSessionEntry": {
+            "type": "object",
+            "properties": {
+                "bytes_received": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "repository_id": {
+                    "type": "integer"
+                },
+                "uuid": {
                     "type": "string"
                 }
             }

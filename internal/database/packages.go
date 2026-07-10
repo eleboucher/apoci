@@ -680,6 +680,12 @@ func (db *DB) DeletePackage(ctx context.Context, packageID int64) error {
 	).Exec(ctx); err != nil {
 		return fmt.Errorf("deleting package: %w", err)
 	}
+	// Uploads are keyed by repository_id, so nothing else reaps them.
+	if _, err := tx.NewRaw(
+		"DELETE FROM upload_sessions WHERE repository_id = ?", packageID,
+	).Exec(ctx); err != nil {
+		return fmt.Errorf("deleting upload sessions: %w", err)
+	}
 	return tx.Commit()
 }
 
@@ -764,6 +770,12 @@ func deletePackageRowsTx(ctx context.Context, tx bun.Tx, packageID int64) ([]str
 		"DELETE FROM package_versions WHERE package_id = ?", packageID,
 	).Exec(ctx); err != nil {
 		return nil, fmt.Errorf("deleting package versions: %w", err)
+	}
+	// Uploads are keyed by repository_id, so nothing else reaps them.
+	if _, err := tx.NewRaw(
+		"DELETE FROM upload_sessions WHERE repository_id = ?", packageID,
+	).Exec(ctx); err != nil {
+		return nil, fmt.Errorf("deleting upload sessions: %w", err)
 	}
 	if _, err := tx.NewRaw(
 		"DELETE FROM packages WHERE id = ?", packageID,

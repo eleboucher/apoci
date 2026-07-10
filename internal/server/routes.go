@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"time"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/server/ui"
 )
@@ -62,6 +63,15 @@ func (s *Server) routes() http.Handler {
 		// uncapped here (they are bounded elsewhere by MaxBlobSize).
 		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/manifests/") {
 			r.Body = http.MaxBytesReader(w, r.Body, s.cfg.Limits.MaxManifestSize)
+		}
+		// Blob transfers stream unbounded data, so the server's ReadTimeout/
+		// WriteTimeout would abort a large or slow push/pull mid-transfer.
+		// Clear the deadlines for blob routes; ReadHeaderTimeout still guards
+		// against slowloris and MaxBlobSize bounds the payload.
+		if strings.Contains(r.URL.Path, "/blobs/") {
+			rc := http.NewResponseController(w)
+			_ = rc.SetReadDeadline(time.Time{})
+			_ = rc.SetWriteDeadline(time.Time{})
 		}
 		registryPushRateLimitMiddleware(s.registryPushLimiter)(
 			registryAuthMiddleware(s.cfg.RegistryToken, s.cfg.Endpoint, s.isPrivateRead)(s.ociHandler),

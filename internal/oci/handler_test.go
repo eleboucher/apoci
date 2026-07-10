@@ -757,6 +757,49 @@ func TestSweepStaleStagingFiles(t *testing.T) {
 	require.FileExists(t, active, "in-flight upload's file must be protected")
 }
 
+func TestPurgeUploadSessions(t *testing.T) {
+	reg, _ := testRegistry(t)
+	require.NoError(t, reg.SetUploadDir(t.TempDir()))
+	ctx := context.Background()
+
+	const repoA = "test.example.com/test/wedged"
+	const repoB = "test.example.com/test/healthy"
+
+	start := func(repo string) (id, path string) {
+		w, err := reg.PushBlobChunked(ctx, repo, 0)
+		require.NoError(t, err)
+		dw := w.(*diskBlobWriter)
+		return dw.ID(), dw.Path()
+	}
+
+	idA1, pathA1 := start(repoA)
+	idA2, pathA2 := start(repoA)
+	idB, pathB := start(repoB)
+
+	// A repo-scoped purge clears only the wedged repo's sessions and files.
+	n, err := reg.PurgeUploadSessions(ctx, repoA)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	for _, id := range []string{idA1, idA2} {
+		s, err := reg.Repo().GetUploadSession(ctx, id)
+		require.NoError(t, err)
+		require.Nil(t, s, "purged session should be gone")
+	}
+	require.NoFileExists(t, pathA1)
+	require.NoFileExists(t, pathA2)
+
+	sB, err := reg.Repo().GetUploadSession(ctx, idB)
+	require.NoError(t, err)
+	require.NotNil(t, sB, "unrelated repo's session must survive a scoped purge")
+	require.FileExists(t, pathB)
+
+	// Purge-all clears whatever remains.
+	n, err = reg.PurgeUploadSessions(ctx, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	require.NoFileExists(t, pathB)
+}
+
 func TestMountBlobExistingBlob(t *testing.T) {
 	reg, _ := testRegistry(t)
 	ctx := context.Background()

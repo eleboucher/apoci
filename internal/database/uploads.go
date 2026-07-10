@@ -48,6 +48,40 @@ func (db *DB) DeleteUploadSession(ctx context.Context, uuid string) error {
 	return nil
 }
 
+// ListUploadSessions returns every current upload session, newest first.
+func (db *DB) ListUploadSessions(ctx context.Context) ([]UploadSession, error) {
+	var sessions []UploadSession
+	err := db.bun.NewSelect().Model(&sessions).
+		Order("created_at DESC").
+		Scan(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing upload sessions: %w", err)
+	}
+	return sessions, nil
+}
+
+// UploadSessionUUIDsByRepo returns every session UUID for a repository,
+// regardless of expiry (the recovery path must clear stale rows too).
+func (db *DB) UploadSessionUUIDsByRepo(ctx context.Context, repoID int64) ([]string, error) {
+	var uuids []string
+	err := db.bun.NewRaw(
+		"SELECT uuid FROM upload_sessions WHERE repository_id = ?", repoID).Scan(ctx, &uuids)
+	if err != nil {
+		return nil, fmt.Errorf("listing upload sessions for repo: %w", err)
+	}
+	return uuids, nil
+}
+
+// AllUploadSessionUUIDs returns every session UUID, regardless of expiry.
+func (db *DB) AllUploadSessionUUIDs(ctx context.Context) ([]string, error) {
+	var uuids []string
+	err := db.bun.NewRaw("SELECT uuid FROM upload_sessions").Scan(ctx, &uuids)
+	if err != nil {
+		return nil, fmt.Errorf("listing all upload sessions: %w", err)
+	}
+	return uuids, nil
+}
+
 // ListExpiredUploadSessions returns UUIDs of upload sessions that have passed their expiry time.
 func (db *DB) ListExpiredUploadSessions(ctx context.Context, limit int) ([]string, error) {
 	var uuids []string

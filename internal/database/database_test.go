@@ -431,6 +431,20 @@ func TestUploadSessionCRUD(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got, "expected session, got nil")
 
+	// List helpers used by the recovery path see the session regardless of expiry.
+	byRepo, err := db.UploadSessionUUIDsByRepo(ctx, repo.ID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"uuid-123"}, byRepo)
+
+	all, err := db.AllUploadSessionUUIDs(ctx)
+	require.NoError(t, err)
+	require.Contains(t, all, "uuid-123")
+
+	listed, err := db.ListUploadSessions(ctx)
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	require.Equal(t, "uuid-123", listed[0].UUID)
+
 	// Delete
 	require.NoError(t, db.DeleteUploadSession(ctx, "uuid-123"))
 	got3, _ := db.GetUploadSession(ctx, "uuid-123")

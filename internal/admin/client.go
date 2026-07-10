@@ -20,6 +20,16 @@ type ImageEntry struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// UploadSessionEntry is an in-progress chunked upload, as returned by
+// GET /api/admin/uploads.
+type UploadSessionEntry struct {
+	UUID          string    `json:"uuid"`
+	RepositoryID  int64     `json:"repository_id"`
+	BytesReceived int64     `json:"bytes_received"`
+	CreatedAt     time.Time `json:"created_at"`
+	ExpiresAt     time.Time `json:"expires_at"`
+}
+
 // IdentityResponse is the payload returned by GET /api/admin/identity.
 type IdentityResponse struct {
 	Name          string `json:"name"`
@@ -116,6 +126,20 @@ func (c *Client) RemoveFollow(ctx context.Context, target string, force bool) (m
 func (c *Client) RunGC(ctx context.Context) (map[string]string, error) {
 	var out map[string]string
 	return out, c.post(ctx, "/gc", nil, &out)
+}
+
+func (c *Client) ListUploads(ctx context.Context) ([]UploadSessionEntry, error) {
+	var out []UploadSessionEntry
+	return out, c.get(ctx, "/uploads", &out)
+}
+
+func (c *Client) PurgeUploads(ctx context.Context, repo string) (map[string]any, error) {
+	path := "/uploads"
+	if repo != "" {
+		path += "?repo=" + url.QueryEscape(repo)
+	}
+	var out map[string]any
+	return out, c.do(ctx, http.MethodDelete, path, nil, &out)
 }
 
 func (c *Client) EvictMirror(ctx context.Context, repo, digest string) (map[string]string, error) {

@@ -30,6 +30,19 @@ definitions:
       updated_at:
         type: string
     type: object
+  git_erwanleboucher_dev_eleboucher_apoci_internal_admin.UploadSessionEntry:
+    properties:
+      bytes_received:
+        type: integer
+      created_at:
+        type: string
+      expires_at:
+        type: string
+      repository_id:
+        type: integer
+      uuid:
+        type: string
+    type: object
   git_erwanleboucher_dev_eleboucher_apoci_internal_database.Actor:
     properties:
       actor_url:
@@ -624,6 +637,53 @@ paths:
       summary: Delete a locally-owned repository
       tags:
       - repos
+  /uploads:
+    delete:
+      parameters:
+      - description: only clear sessions for this repository; omit to clear all
+        in: query
+        name: repo
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid repository name
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - Bearer: []
+      summary: Force-clear upload sessions to recover a wedged repository
+      tags:
+      - uploads
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/git_erwanleboucher_dev_eleboucher_apoci_internal_admin.UploadSessionEntry'
+            type: array
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - Bearer: []
+      summary: List in-progress upload sessions
+      tags:
+      - uploads
 securityDefinitions:
   Bearer:
     description: Admin token as "Bearer <token>".

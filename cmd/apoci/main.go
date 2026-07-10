@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -24,6 +25,7 @@ import (
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/federation"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/notify"
+	"git.erwanleboucher.dev/eleboucher/apoci/internal/oci"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/peering"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/server"
 )
@@ -77,6 +79,7 @@ func main() {
 	rootCmd.AddCommand(actorCmd(&configPath))
 	rootCmd.AddCommand(imagesCmd(&configPath))
 	rootCmd.AddCommand(mirrorCmd(&configPath))
+	rootCmd.AddCommand(uploadsCmd(&configPath))
 	rootCmd.AddCommand(gcCmd(&configPath))
 
 	if err := rootCmd.Execute(); err != nil {
@@ -666,6 +669,149 @@ func mirrorCmd(configPath *string) *cobra.Command {
 	cmd.AddCommand(evictCmd)
 
 	return cmd
+}
+
+func uploadsCmd(configPath *string) *cobra.Command {
+	var remote, token string
+
+	cmd := &cobra.Command{
+		Use:   "uploads",
+		Short: "Manage in-progress chunked upload sessions",
+	}
+
+	cmd.PersistentFlags().StringVar(&remote, "remote", "", "remote instance URL")
+	cmd.PersistentFlags().StringVar(&token, "token", "", "registry token for remote auth")
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   cmdList,
+		Short: "List in-progress upload sessions",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if c := remoteClient(remote, token); c != nil {
+				uploads, err := c.ListUploads(cmd.Context())
+				if err != nil {
+					return err
+				}
+				printUploads(uploads)
+				return nil
+			}
+			return runUploadsList(cmd.Context(), *configPath)
+		},
+	})
+
+	pruneCmd := &cobra.Command{
+		Use:   "prune [repo]",
+		Short: "Force-clear upload sessions to recover a repository wedged by a partial push",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			all, _ := cmd.Flags().GetBool("all")
+			var repo string
+			if len(args) == 1 {
+				repo = args[0]
+			}
+			if repo == "" && !all {
+				return errors.New("specify a repository, or pass --all to clear every upload session")
+			}
+			if repo != "" && all {
+				return errors.New("pass either a repository or --all, not both")
+			}
+
+			if c := remoteClient(remote, token); c != nil {
+				res, err := c.PurgeUploads(cmd.Context(), repo)
+				if err != nil {
+					return err
+				}
+				_, _ = lipgloss.Println(successStyle.Render(fmt.Sprintf("Purged %v upload session(s)", res["purged"])))
+				return nil
+			}
+			n, err := runUploadsPrune(cmd.Context(), *configPath, repo)
+			if err != nil {
+				return err
+			}
+			_, _ = lipgloss.Println(successStyle.Render(fmt.Sprintf("Purged %d upload session(s)", n)))
+			return nil
+		},
+	}
+	pruneCmd.Flags().Bool("all", false, "clear every upload session across all repositories")
+	cmd.AddCommand(pruneCmd)
+
+	return cmd
+}
+
+func runUploadsList(ctx context.Context, configPath string) error {
+	logger := cliLogger()
+	db, _, _, err := openAll(configPath, logger)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	sessions, err := db.ListUploadSessions(ctx)
+	if err != nil {
+		return err
+	}
+	entries := make([]admin.UploadSessionEntry, len(sessions))
+	for i, s := range sessions {
+		entries[i] = admin.UploadSessionEntry{
+			UUID:          s.UUID,
+			RepositoryID:  s.RepositoryID,
+			BytesReceived: s.BytesReceived,
+			CreatedAt:     s.CreatedAt,
+			ExpiresAt:     s.ExpiresAt,
+		}
+	}
+	printUploads(entries)
+	return nil
+}
+
+func runUploadsPrune(ctx context.Context, configPath, repo string) (int, error) {
+	logger := cliLogger()
+	db, identity, cfg, err := openAll(configPath, logger)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = db.Close() }()
+	blobs, err := openBlobStore(cfg, logger)
+	if err != nil {
+		return 0, fmt.Errorf("opening blobstore: %w", err)
+	}
+	reg, err := oci.NewRegistry(
+		db, blobs, identity.ActorURL, cfg.AccountDomain,
+		cfg.Limits.MaxManifestSize, cfg.Limits.MaxBlobSize, logger,
+	)
+	if err != nil {
+		return 0, err
+	}
+	// Mirror server.go's staging-dir choice so we sweep the same files.
+	uploadDir := os.TempDir()
+	switch {
+	case cfg.BlobDiskPath() != "":
+		uploadDir = filepath.Join(cfg.DataDir, "uploads")
+	case cfg.Storage.S3.TempDir != "":
+		uploadDir = cfg.Storage.S3.TempDir
+	}
+	if err := reg.SetUploadDir(uploadDir); err != nil {
+		return 0, err
+	}
+	return reg.PurgeUploadSessions(ctx, repo)
+}
+
+func printUploads(uploads []admin.UploadSessionEntry) {
+	if len(uploads) == 0 {
+		_, _ = lipgloss.Println(dimStyle.Render("No in-progress upload sessions"))
+		return
+	}
+	t := table.New().
+		Border(lipgloss.NormalBorder()).
+		Headers("UUID", "REPO ID", "BYTES", "EXPIRES")
+	for _, u := range uploads {
+		t.Row(
+			u.UUID,
+			fmt.Sprintf("%d", u.RepositoryID),
+			fmt.Sprintf("%d", u.BytesReceived),
+			u.ExpiresAt.Format("2006-01-02 15:04:05"),
+		)
+	}
+	_, _ = lipgloss.Println(t)
 }
 
 func gcCmd(configPath *string) *cobra.Command {

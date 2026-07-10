@@ -204,7 +204,15 @@ func TestDeletePackageCascade(t *testing.T) {
 	require.NoError(t, db.PutPackageTag(ctx, pkg.ID, "v1", dgstA))
 	require.NoError(t, db.PutPackageTag(ctx, pkg.ID, "latest", dgstB))
 
+	// Upload sessions are keyed by repository_id, so the delete must clear them too.
+	_, err = db.CreateUploadSession(ctx, "cascade-upload", pkg.ID, 1*time.Hour)
+	require.NoError(t, err)
+
 	require.NoError(t, db.DeletePackage(ctx, pkg.ID))
+
+	uploads, err := db.UploadSessionUUIDsByRepo(ctx, pkg.ID)
+	require.NoError(t, err)
+	require.Empty(t, uploads, "upload sessions should be cascaded on package delete")
 
 	gone, err := db.GetPackage(ctx, "oci", "ghcr.io/user/repo")
 	require.NoError(t, err)

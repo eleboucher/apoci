@@ -64,6 +64,8 @@ type RegistryRepository interface {
 	GetUploadSession(ctx context.Context, uuid string) (*database.UploadSession, error)
 	DeleteUploadSession(ctx context.Context, uuid string) error
 	ListExpiredUploadSessions(ctx context.Context, limit int) ([]string, error)
+	UploadSessionUUIDsByRepo(ctx context.Context, repoID int64) ([]string, error)
+	AllUploadSessionUUIDs(ctx context.Context) ([]string, error)
 }
 
 type Publisher interface {
@@ -247,6 +249,56 @@ func (r *Registry) CleanExpiredUploads(ctx context.Context) (int, error) {
 	r.sweepStaleStagingFiles(uploadSessionTTL)
 
 	return len(expired), nil
+}
+
+// PurgeUploadSessions force-clears upload sessions regardless of expiry to
+// recover a repository wedged by a partial push, removing the in-memory writer,
+// staging file, and DB row for each. With repo == "" it clears every session.
+// Unlike CleanExpiredUploads it ignores the TTL, so it is a manual recovery action.
+func (r *Registry) PurgeUploadSessions(ctx context.Context, repo string) (int, error) {
+	var uuids []string
+	var err error
+	if repo == "" {
+		uuids, err = r.db.AllUploadSessionUUIDs(ctx)
+	} else {
+		repoObj, gerr := r.db.GetRepository(ctx, repo)
+		if gerr != nil {
+			return 0, fmt.Errorf("looking up repository: %w", gerr)
+		}
+		if repoObj == nil {
+			return 0, nil
+		}
+		uuids, err = r.db.UploadSessionUUIDsByRepo(ctx, repoObj.ID)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("listing upload sessions to purge: %w", err)
+	}
+
+	for _, uuid := range uuids {
+		r.uploadsMu.Lock()
+		w := r.uploads[uuid]
+		delete(r.uploads, uuid)
+		r.uploadsMu.Unlock()
+
+		if w != nil {
+			w.cleanup()
+		}
+
+		if err := r.db.DeleteUploadSession(ctx, uuid); err != nil {
+			r.logger.Warn("failed to delete purged upload session", "uuid", uuid, "error", err)
+		}
+	}
+
+	// Staging files are named by upload ID, not repo, so only a purge-all can
+	// safely sweep orphans; a scoped purge relies on the per-session cleanup above.
+	if repo == "" {
+		r.sweepStaleStagingFiles(0)
+	}
+
+	if len(uuids) > 0 {
+		r.logger.Info("purged upload sessions", "count", len(uuids), "repo", repo)
+	}
+	return len(uuids), nil
 }
 
 // sweepStaleStagingFiles removes "upload-*" files older than maxAge that no

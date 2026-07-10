@@ -36,6 +36,8 @@ func (s *Server) adminRouter() http.Handler {
 	r.Patch("/follows", s.adminUpdateFollowFilter)
 	r.Delete("/mirrors/*", s.adminEvictMirror)
 	r.Delete("/repos/*", s.adminDeleteRepo)
+	r.Get("/uploads", s.adminListUploads)
+	r.Delete("/uploads", s.adminPurgeUploads)
 	r.Get("/gc", s.adminGCStatus)
 	r.Post("/gc", s.adminRunGC)
 	r.Get("/peers/blocked", s.adminListBlocked)
@@ -658,6 +660,64 @@ func (s *Server) adminRunGC(w http.ResponseWriter, r *http.Request) {
 	s.logger.Debug("admin: POST /gc")
 	s.gc.RunOnce(r.Context())
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// adminListUploads godoc
+// @Summary  List in-progress upload sessions
+// @Tags     uploads
+// @Produce  json
+// @Success  200  {array}   admin.UploadSessionEntry
+// @Failure  500  {string}  string  "internal error"
+// @Security Bearer
+// @Router   /uploads [get]
+func (s *Server) adminListUploads(w http.ResponseWriter, r *http.Request) {
+	s.logger.Debug("admin: GET /uploads")
+	sessions, err := s.db.ListUploadSessions(r.Context())
+	if err != nil {
+		s.logger.Error("listing upload sessions", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	out := make([]admin.UploadSessionEntry, len(sessions))
+	for i, sess := range sessions {
+		out[i] = admin.UploadSessionEntry{
+			UUID:          sess.UUID,
+			RepositoryID:  sess.RepositoryID,
+			BytesReceived: sess.BytesReceived,
+			CreatedAt:     sess.CreatedAt,
+			ExpiresAt:     sess.ExpiresAt,
+		}
+	}
+	writeJSON(w, out)
+}
+
+// adminPurgeUploads godoc
+// @Summary  Force-clear upload sessions to recover a wedged repository
+// @Tags     uploads
+// @Produce  json
+// @Param    repo  query     string  false  "only clear sessions for this repository; omit to clear all"
+// @Success  200   {object}  map[string]any
+// @Failure  400   {string}  string  "invalid repository name"
+// @Failure  500   {string}  string  "internal error"
+// @Security Bearer
+// @Router   /uploads [delete]
+func (s *Server) adminPurgeUploads(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	if repo != "" {
+		if err := validate.RepoName(repo); err != nil {
+			http.Error(w, "invalid repository name", http.StatusBadRequest)
+			return
+		}
+	}
+	s.logger.Debug("admin: DELETE /uploads", "repo", repo)
+
+	purged, err := s.registry.PurgeUploadSessions(r.Context(), repo)
+	if err != nil {
+		s.logger.Error("purging upload sessions", "repo", repo, "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"purged": purged, "repo": repo})
 }
 
 // classifyError maps service errors to HTTP status codes.
