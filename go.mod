@@ -4,7 +4,7 @@ go 1.26.3
 
 require (
 	charm.land/lipgloss/v2 v2.0.5
-	code.gitea.io/gitea v1.26.4
+	code.gitea.io/gitea v1.27.2
 	code.superseriousbusiness.org/httpsig v1.5.0
 	codeberg.org/gruf/go-runners v1.7.0
 	cuelabs.dev/go/oci/ociregistry v0.0.0-20260716110300-fe29f8bb3524
