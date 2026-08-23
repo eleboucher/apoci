@@ -12,7 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	gtcargo "code.gitea.io/gitea/modules/packages/cargo"
+	gtcargo "gitea.dev/modules/packages/cargo"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"

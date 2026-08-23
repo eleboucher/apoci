@@ -58,7 +58,7 @@ func New(name string, urls []string, events []string, logger *slog.Logger) *Noti
 		return n
 	}
 
-	sender, err := shoutrrr.CreateSender(urls...)
+	sender, err := shoutrrr.CreateSenderWithOptions(types.SenderOptions{}, urls...)
 	if err != nil {
 		logger.Error("failed to create notification sender, notifications disabled", "error", err)
 		return n

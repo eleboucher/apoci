@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/mod/semver"
 
-	gtnuget "code.gitea.io/gitea/modules/packages/nuget"
+	gtnuget "gitea.dev/modules/packages/nuget"
 	"github.com/go-chi/chi/v5"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"

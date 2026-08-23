@@ -18,7 +18,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	gtnpm "code.gitea.io/gitea/modules/packages/npm"
+	gtnpm "gitea.dev/modules/packages/npm"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"

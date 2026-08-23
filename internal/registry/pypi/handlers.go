@@ -17,7 +17,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	gtpypi "code.gitea.io/gitea/modules/packages/pypi"
+	gtpypi "gitea.dev/modules/packages/pypi"
 
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/blobstore"
 	"git.erwanleboucher.dev/eleboucher/apoci/internal/database"

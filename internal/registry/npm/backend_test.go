@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	gtnpm "code.gitea.io/gitea/modules/packages/npm"
+	gtnpm "gitea.dev/modules/packages/npm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
