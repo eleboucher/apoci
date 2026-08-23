@@ -6,8 +6,8 @@ code.superseriousbusiness.org/httpsig v1.5.0 h1:jw/qc//yYWSoOYytTZXHvW7yh8kceCip
 code.superseriousbusiness.org/httpsig v1.5.0/go.mod h1:i2AKpj/WbA/o/UTvia9TAREzt0jP1AH3T1Uxjyhdzlw=
 codeberg.org/gruf/go-runners v1.7.0 h1:Z+8Qne4H9nAdZZbA4cij0PWhhJxtigUGA4Mp7griYes=
 codeberg.org/gruf/go-runners v1.7.0/go.mod h1:1xBodiyuPfosJga+NYTfeepQYUrlBGCAa4NuQTbtiBw=
-cuelabs.dev/go/oci/ociregistry v0.0.0-20260716110300-fe29f8bb3524 h1:p37pq2iy3Ba+GCHNcXoUNqCXljjYwGehNcJp+xYEgvU=
-cuelabs.dev/go/oci/ociregistry v0.0.0-20260716110300-fe29f8bb3524/go.mod h1:WjmQxb+W6nVNCgj8nXrF24lIz95AHwnSl36tpjDZSU8=
+cuelabs.dev/go/oci/ociregistry v0.0.0-20260717083115-5eb5795f322a h1:xR7A97ML6U+DHDgXjs1qv0fkss7N/EC2kbFzrH4mg/A=
+cuelabs.dev/go/oci/ociregistry v0.0.0-20260717083115-5eb5795f322a/go.mod h1:WjmQxb+W6nVNCgj8nXrF24lIz95AHwnSl36tpjDZSU8=
 dario.cat/mergo v1.0.2 h1:85+piFYR1tMbRrLcDwR18y4UKJ3aH1Tbzi24VRW1TK8=
 dario.cat/mergo v1.0.2/go.mod h1:E/hbnu0NxMFBjpMIE34DRGLWqDy0g5FuKDhCb31ngxA=
 gitea.com/go-chi/binding v0.0.0-20260414111559-654cea7ac60a h1:JHoBrfuTSF9Ke9aNfSYj1XRPBHjKPgCApVprnt2Am0M=
