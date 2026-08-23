@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.26-bookworm AS builder
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.27-bookworm AS builder
 
 # Native gcc plus cross C compilers: the Go toolchain runs on $BUILDPLATFORM and
 # cross-compiles cgo to $TARGETARCH, avoiding QEMU emulation of the whole build.
