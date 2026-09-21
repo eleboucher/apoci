@@ -16,7 +16,7 @@ require (
 	github.com/caarlos0/env/v11 v11.4.1
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/jellydator/ttlcache/v3 v3.4.1
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/nicholas-fedor/shoutrrr v0.20.0
