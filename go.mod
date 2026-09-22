@@ -11,7 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.47.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.5
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.5
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.113.1
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.113.2
 	github.com/aws/smithy-go v1.28.2
 	github.com/caarlos0/env/v11 v11.4.1
 	github.com/go-chi/chi/v5 v5.3.2
@@ -19,7 +19,7 @@ require (
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/jellydator/ttlcache/v3 v3.4.1
 	github.com/mattn/go-sqlite3 v1.14.52
-	github.com/nicholas-fedor/shoutrrr v0.21.0
+	github.com/nicholas-fedor/shoutrrr v0.21.1
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/prometheus/client_golang v1.24.1
