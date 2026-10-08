@@ -6,7 +6,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	code.superseriousbusiness.org/httpsig v1.5.0
 	codeberg.org/gruf/go-runners v1.7.0
-	cuelabs.dev/go/oci/ociregistry v0.0.0-20260911133901-a89591e98079
+	cuelabs.dev/go/oci/ociregistry v0.0.0-20261008151123-94f4aa6e0087
 	gitea.dev v1.27.3
 	github.com/aws/aws-sdk-go-v2 v1.47.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.5
